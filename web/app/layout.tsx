@@ -19,10 +19,25 @@ const plex = IBM_Plex_Mono({
   display: "swap",
 });
 
+const DESCRIPCION =
+  "Describe tu proceso una vez. Un equipo de agentes lo convierte en una automatización lista para usar desde tu portafolio.";
+
 export const metadata: Metadata = {
+  metadataBase: new URL("https://automata.mx"),
   title: `${MARCA} — ${ESLOGAN}`,
-  description:
-    "Describe tu proceso una vez. Un equipo de agentes lo convierte en una automatización lista para usar desde tu portafolio.",
+  description: DESCRIPCION,
+  openGraph: {
+    title: `${MARCA} — ${ESLOGAN}`,
+    description: DESCRIPCION,
+    siteName: MARCA,
+    locale: "es_MX",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: `${MARCA} — ${ESLOGAN}`,
+    description: DESCRIPCION,
+  },
 };
 
 export default function RootLayout({

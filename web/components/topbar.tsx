@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { motion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
+import { Menu, X } from "lucide-react";
 import { MARCA } from "@/lib/marca";
 import { Boton } from "@/components/ui/boton";
 import { Avatar } from "@/components/ui/avatar";
@@ -31,6 +32,9 @@ const RUTAS_LIMPIAS = ["/entrar"]; // sin topbar (login)
 
 export function Topbar() {
   const ruta = usePathname();
+  const [flotante, setFlotante] = useState<string | null>(null);
+  const [menuMovil, setMenuMovil] = useState(false);
+
   if (RUTAS_LIMPIAS.includes(ruta)) return null;
 
   const esApp = RUTAS_APP.some((r) => ruta === r || ruta.startsWith(r + "/"));
@@ -40,7 +44,6 @@ export function Topbar() {
     enlaces.find((e) =>
       e.href === "/" ? ruta === "/" : ruta.startsWith(e.href),
     )?.href ?? null;
-  const [flotante, setFlotante] = useState<string | null>(null);
   const resaltado = flotante ?? activo;
 
   return (
@@ -54,6 +57,7 @@ export function Topbar() {
           <span className="text-acento">.</span>
         </Link>
 
+        {/* Nav central — solo escritorio */}
         <nav
           onMouseLeave={() => setFlotante(null)}
           className="pointer-events-auto absolute left-1/2 hidden -translate-x-1/2 items-center gap-1 rounded-full bg-noche p-1.5 shadow-lg shadow-noche/25 md:flex"
@@ -83,7 +87,8 @@ export function Topbar() {
           ))}
         </nav>
 
-        <div className="pointer-events-auto flex items-center gap-3">
+        {/* Acciones — solo escritorio */}
+        <div className="pointer-events-auto hidden items-center gap-3 md:flex">
           {esApp ? (
             <>
               <Boton href="/nueva" variante="acento" tamano="sm" icono="flecha">
@@ -108,7 +113,90 @@ export function Topbar() {
             </>
           )}
         </div>
+
+        {/* Botón hamburguesa — solo móvil */}
+        <button
+          onClick={() => setMenuMovil((v) => !v)}
+          aria-label={menuMovil ? "Cerrar menú" : "Abrir menú"}
+          className="pointer-events-auto flex size-10 items-center justify-center rounded-full bg-noche text-crema md:hidden"
+        >
+          {menuMovil ? <X className="size-5" /> : <Menu className="size-5" />}
+        </button>
       </div>
+
+      {/* Panel del menú móvil */}
+      <AnimatePresence>
+        {menuMovil && (
+          <motion.div
+            initial={{ opacity: 0, y: -12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            className="pointer-events-auto mx-4 overflow-hidden rounded-2xl bg-noche p-4 shadow-xl shadow-noche/30 md:hidden"
+          >
+            <nav className="flex flex-col">
+              {enlaces.map((e) => (
+                <Link
+                  key={e.href}
+                  href={e.href}
+                  onClick={() => setMenuMovil(false)}
+                  className={`rounded-xl px-4 py-3 text-base font-medium transition-colors ${
+                    activo === e.href
+                      ? "bg-hueso text-noche"
+                      : "text-crema/80 hover:text-crema"
+                  }`}
+                >
+                  {e.etiqueta}
+                </Link>
+              ))}
+            </nav>
+
+            <div className="mt-4 flex flex-col gap-2.5 border-t border-crema/15 pt-4">
+              {esApp ? (
+                <>
+                  <Boton
+                    href="/nueva"
+                    variante="acento"
+                    icono="flecha"
+                    onClick={() => setMenuMovil(false)}
+                    className="w-full"
+                  >
+                    Nueva automatización
+                  </Boton>
+                  <Link
+                    href="/cuenta"
+                    onClick={() => setMenuMovil(false)}
+                    className="flex items-center gap-3 rounded-xl px-2 py-2 text-crema/80 transition-colors hover:text-crema"
+                  >
+                    <Avatar nombre={usuarioActual().nombre} tamano="sm" />
+                    <span className="text-sm font-medium">Tu cuenta</span>
+                  </Link>
+                </>
+              ) : (
+                <>
+                  <Boton
+                    href="/entrar"
+                    variante="fantasma"
+                    onClick={() => setMenuMovil(false)}
+                    className="w-full !border-crema/25 !text-crema"
+                  >
+                    Entrar
+                  </Boton>
+                  <Boton
+                    href="/nueva"
+                    variante="acento"
+                    icono="flecha"
+                    onClick={() => setMenuMovil(false)}
+                    className="w-full"
+                  >
+                    Empezar
+                  </Boton>
+                </>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </header>
   );
 }
