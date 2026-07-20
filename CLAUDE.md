@@ -60,7 +60,7 @@ spike/             prueba técnica — Node + npm (raíz)
 | 06 | Pricing | **MXN provisional** ($499/$999/$1,999); tensión costos-USD |
 | 07 | Entornos y despliegue | prompts = despliegue de producción; evals |
 | 08 | Ciclo de vida | 3 ajustes por automatización; cambio ≠ reparación |
-| 09 | Sistema de componentes | el agente declara vistas, no escribe HTML |
+| 09 | Sistema de componentes | el agente declara vistas, no escribe HTML; **catálogo v1 construido** en el prototipo |
 | 10 | Intake | el agente entrevistador (opción múltiple → spec validado) |
 | 11 | Threat model | ejecutar código de IA es el producto; escape de contenedor = riesgo #1 |
 | 13 | Auth y webhooks | stub: MFA, 2 roles, firma de webhooks (pendiente de diseñar) |

@@ -1,5 +1,11 @@
 # 09 — Sistema de componentes y consistencia visual
 
+> **Estado (2026-07-20):** el catálogo v1 ya está **construido** en el prototipo
+> (`web/lib/datos.ts` → tipo `Bloque`; componentes en `web/components/ui/`). Este
+> doc refleja lo construido: los ✅ marcan lo que ya existe, el resto sigue en
+> plan. El prototipo *hardcodea* los datos dentro de cada bloque (es demo); en el
+> producto real esos datos vienen de `@resultado.*` (ver §2).
+
 ---
 
 ## 1. El principio
@@ -56,28 +62,28 @@ artefacto/
   "version_vista": 1,
   "titulo": "Reporte de ventas por vendedor",
   "bloques": [
+    { "tipo": "resumen", "texto": "@resultado.resumen" },
     {
-      "tipo": "fila_metricas",
-      "metricas": [
-        { "etiqueta": "Total vendido", "valor": "@resultado.total",   "formato": "moneda" },
-        { "etiqueta": "Vendedores",    "valor": "@resultado.n_vendedores" },
-        { "etiqueta": "Mejor mes",     "valor": "@resultado.mejor_mes" }
+      "tipo": "metricas",
+      "items": [
+        { "etiqueta": "Total vendido",         "valor": "@resultado.total",        "formato": "moneda", "tendencia": "@resultado.var_mes" },
+        { "etiqueta": "Cumplimiento de meta",  "valor": "@resultado.cumplimiento", "sufijo": "%",       "nota": "@resultado.meta" }
       ]
     },
+    { "tipo": "linea",   "titulo": "Total vendido por mes", "formato": "moneda", "datos": "@resultado.por_mes" },
+    { "tipo": "ranking", "titulo": "Vendedores por total",  "formato": "moneda", "datos": "@resultado.top_vendedores" },
     {
-      "tipo": "grafica",
-      "variante": "barras",
-      "titulo": "Ventas por vendedor",
-      "fuente": "@resultado.por_vendedor",
-      "eje_x": "vendedor",
-      "eje_y": "total"
+      "tipo": "callout", "tono": "alerta",
+      "titulo": "@resultado.a_revisar.titulo",
+      "texto":  "@resultado.a_revisar.texto"
     },
     {
       "tipo": "tabla",
       "fuente": "@resultado.detalle",
       "columnas": [
         { "campo": "vendedor", "etiqueta": "Vendedor" },
-        { "campo": "total",    "etiqueta": "Total", "formato": "moneda", "alinear": "derecha" }
+        { "campo": "total",    "etiqueta": "Total",   "formato": "moneda", "alinear": "derecha" },
+        { "campo": "estatus",  "etiqueta": "Estado",  "formato": "estado" }
       ],
       "ordenable": true,
       "buscable": true
@@ -98,40 +104,47 @@ los presenta.** Ninguno sabe del otro más que ese archivo.
 Empieza pequeño. Quince componentes cubren casi todo, y cada uno que añades es
 uno que hay que construir, documentar, validar y enseñarle al agente.
 
-**Estructura**
+(✅ = construido en el prototipo.)
 
-| Componente | Para |
-|---|---|
-| `seccion` | Agrupar con título |
-| `columnas` | Dividir en 2–3 |
-| `pestanas` | Separar vistas del mismo resultado |
+**Datos** — el corazón, todo construido
 
-**Datos**
-
-| Componente | Para | Variantes |
+| Componente | Para | Notas |
 |---|---|---|
-| `fila_metricas` | 2–4 números destacados | — |
-| `tabla` | Datos tabulares | ordenable, buscable, paginada |
-| `grafica` | Visualización | barras, líneas, pastel, área |
-| `lista` | Elementos no tabulares | simple, con acciones |
-| `texto` | Explicación o resumen | párrafo, aviso, destacado |
+| `resumen` ✅ | El hallazgo en lenguaje llano, arriba del resultado | narrativa; le da contexto a las cifras |
+| `metricas` ✅ | 2–4 números destacados | soporta `nota`, `tendencia` (tono por signo) y `sufijo` (`%`…) |
+| `tabla` ✅ | Datos tabulares | columnas tipadas: moneda / entero / porcentaje / texto / **`estado`** (insignia); ordenable, buscable, paginada |
+| `barras` ✅ | Comparar categorías | **una sola serie** (`tinta`) |
+| `linea` ✅ | Tendencia en el tiempo | una sola serie |
+| `ranking` ✅ | Top-N con barra proporcional | una serie |
+| `comparacion` ✅ | Antes/después (flujo de pasos) | tonos ok / alerta / neutro — p. ej. limpieza, conciliación |
+| `lista` | Elementos no tabulares (simple, con acciones) | plan |
+
+> Nota vs. el plan viejo: `grafica` se separó en `barras` y `linea`; **pastel y
+> área NO se construyeron** a propósito — la regla del sistema de diseño es una
+> sola serie (la paleta no está validada como categórica). `fila_metricas` se
+> llama `metricas`; `texto` se concretó en `resumen` (narrativa) + `callout`.
+
+**Atención / estado** — el bucket "a revisar", construido
+
+| Componente | Para | Notas |
+|---|---|---|
+| `callout` ✅ | Aviso: `info` / `ok` / `alerta` | usa oliva/ladrillo/sepia, **nunca el acento**; es el hogar del bucket "a revisar" |
+| `insignia` ✅ | Pill de estado dentro de una tabla (columna `estado`) | tono inferido del texto (ok/alerta/neutro) |
 
 **Interacción**
 
-| Componente | Para |
-|---|---|
-| `formulario` | Entradas — se genera solo desde `manifiesto.json` |
-| `boton` | Acción: ejecutar, descargar, ir a |
-| `filtro` | Acotar los datos mostrados |
-| `descarga` | Bajar un archivo de salida |
+| Componente | Para | |
+|---|---|---|
+| `formulario` | Entradas — se genera solo desde `manifiesto.json` | parcial ✅ (archivo múltiple, PDF/imagen/XML, texto, selección) |
+| `descarga` / `boton` ✅ | Bajar un archivo de salida / acción | |
+| `filtro` | Acotar los datos mostrados | plan |
 
-**Estados**
+**Estructura y estados** (los maneja la pantalla, no el agente)
 
-| Componente | Para |
-|---|---|
-| `vacio` | Sin datos todavía |
-| `cargando` | Ejecutándose |
-| `error` | Falló, con mensaje humano |
+| Componente | Para | |
+|---|---|---|
+| `seccion` · `columnas` · `pestanas` | Agrupar / dividir / separar vistas | plan |
+| `vacio` · `cargando` · `error` ✅ | Sin datos / ejecutándose / falló con mensaje humano | |
 
 Fíjate en lo que **no** está: nada de color, tipografía, espaciado, ancho ni
 posición. **El agente no toma decisiones estéticas. Ni una.** Esa es la
@@ -174,11 +187,17 @@ Aquí encaja lo que planteaste: no plantillas de proyectos completos, sino
 
 ```
 plantillas/
-  reporte-resumen.json      métricas + gráfica + tabla + descarga
-  panel-seguimiento.json    filtros + métricas + tabla ordenable
-  lista-revision.json       tabla con acciones + estado vacío
-  comparativo.json          dos gráficas lado a lado + tabla
+  reporte-resumen.json   resumen + metricas + gráfica + tabla + descarga        (ventas, dashboard)
+  consolidado.json       resumen + metricas + callout + barras + tabla          (facturas, nómina)
+  lista-revision.json    resumen + comparacion + callout + tabla "a revisar"    (conciliación, comisiones, limpieza)
+  extraccion.json        resumen + comparacion (leídos/a revisar) + callout + tabla   (fotos, PDF, XML)
 ```
+
+**El patrón canónico** (validado en `docs/automatizaciones-fichas.md`): las cuatro
+comparten la misma columna vertebral — **`resumen` arriba + tablas por estatus +
+SIEMPRE un bucket "a revisar"** (`callout` + tabla de excepciones). Ese bucket es
+lo que hace vendible el "sin modelo": el código hace el 90% determinista y
+devuelve el 10% dudoso, en vez de fingir que lo resolvió.
 
 Una plantilla es una **vista.json con huecos**. El agente elige la que encaja y
 rellena campos, títulos y formatos según el spec.
@@ -240,9 +259,12 @@ estado no convencen a los clientes, un CRM generado tampoco lo hará.
 
 ## 7. Decisiones abiertas
 
-1. **¿Vistas desde el MVP o después?** Recomiendo un `vista.json` mínimo desde
-   el principio —métricas + tabla + descarga— porque «descarga un Excel» se
-   siente pobre al lado de «mira tu resultado y descárgalo si quieres».
+1. ~~**¿Vistas desde el MVP o después?**~~ **RESUELTO: vistas desde el MVP.** El
+   catálogo v1 ya está construido en el prototipo, más rico que el mínimo
+   (resumen, métricas, barras, línea, ranking, tabla con estado, comparación,
+   callout). Lo que queda pendiente del contrato real: (a) ejercer el binding
+   `@resultado.*` (hoy los datos van hardcodeados en la demo), y (b) el selector
+   de formato de descarga (Excel/PDF/CSV).
 2. **¿El cliente puede reordenar la vista?** Recomiendo que no al principio.
    Cada opción de personalización es una decisión que le pasas al cliente, y él
    quiere su resultado, no un editor.
