@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "preflight": "node spike/preflight.js",
     "spike": "node spike/run.js",
     "datos": "node spike/generar-datos.js && node spike/generar-gastos.js",
     "datos:vitrales": "node spike/generar-gastos.js"
