@@ -32,7 +32,9 @@ serie de agentes piensa, planea, programa, ejecuta".
    consola.
 2. **Cero clientes consultados.** Nadie ha confirmado que pagarían ni cuál es el
    dominio. Enseñar el prototipo a 5 personas con el problema. **Ahora es el
-   riesgo #1 abierto.**
+   riesgo #1 abierto.** Evidencia *indirecta* de mercado en
+   `docs/mercado-microsaas.md` (el producto es negocio probado; el ICP PyME-MX
+   sigue sin validar).
 
 Más planeación de arquitectura es, a estas alturas, procrastinar el #2.
 
