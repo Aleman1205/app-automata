@@ -5,16 +5,27 @@ import Link from "next/link";
 import { motion } from "motion/react";
 import { Plus } from "lucide-react";
 import { Etiqueta } from "@/components/ui/etiqueta";
+import { GrupoAvatares } from "@/components/ui/avatar";
 import { useAviso } from "@/components/ui/aviso";
 import { Reveal } from "@/components/motion/reveal";
 import { TextoRevelado } from "@/components/motion/texto-revelado";
-import { automatizaciones } from "@/lib/datos";
+import { automatizaciones, creadoPor, equipo, obtenerMiembro } from "@/lib/datos";
 import {
   TarjetaAutomatizacion,
   type DatosTarjeta,
 } from "./_componentes/tarjeta-automatizacion";
 
-const ESPACIOS_TOTALES = 6;
+const ESPACIOS_TOTALES = 10; // plan Equipo
+
+// Datos de creador para una automatización, listos para la tarjeta.
+function creador(automationId: string) {
+  const m = obtenerMiembro(creadoPor[automationId]);
+  if (!m) return {};
+  return {
+    creadaPor: m.nombre,
+    creadaPorIndice: equipo.findIndex((x) => x.id === m.id),
+  };
+}
 
 // Estado de la "demo viva": una automatización recién pedida en /nueva que
 // aparece generándose y, a los 8 segundos, queda lista frente al usuario.
@@ -96,23 +107,34 @@ export default function PaginaPortafolio() {
             className="text-5xl font-black leading-[0.95] tracking-tight md:text-7xl"
           />
         </div>
-        <Reveal retraso={0.2} y={16} className="flex flex-col items-start gap-2.5 md:items-end">
-          <Etiqueta>
-            {espaciosUsados} de {ESPACIOS_TOTALES} espacios usados
-          </Etiqueta>
-          <div className="h-1 w-28 overflow-hidden rounded-full bg-linea">
-            <motion.div
-              className="h-full rounded-full bg-tinta"
-              initial={{ width: 0 }}
-              animate={{
-                width: `${(espaciosUsados / ESPACIOS_TOTALES) * 100}%`,
-              }}
-              transition={{
-                duration: 0.9,
-                delay: 0.4,
-                ease: [0.22, 1, 0.36, 1],
-              }}
-            />
+        <Reveal retraso={0.2} y={16} className="flex flex-col items-start gap-4 md:items-end">
+          <Link
+            href="/equipo"
+            className="flex items-center gap-2.5 rounded-full border border-linea bg-papel py-1.5 pl-2 pr-4 transition-colors hover:border-tinta"
+          >
+            <GrupoAvatares nombres={equipo.map((m) => m.nombre)} max={4} />
+            <span className="text-xs text-sepia">
+              Equipo de {equipo.length}
+            </span>
+          </Link>
+          <div className="flex flex-col items-start gap-2.5 md:items-end">
+            <Etiqueta>
+              {espaciosUsados} de {ESPACIOS_TOTALES} espacios usados
+            </Etiqueta>
+            <div className="h-1 w-28 overflow-hidden rounded-full bg-linea">
+              <motion.div
+                className="h-full rounded-full bg-tinta"
+                initial={{ width: 0 }}
+                animate={{
+                  width: `${(espaciosUsados / ESPACIOS_TOTALES) * 100}%`,
+                }}
+                transition={{
+                  duration: 0.9,
+                  delay: 0.4,
+                  ease: [0.22, 1, 0.36, 1],
+                }}
+              />
+            </div>
           </div>
         </Reveal>
       </div>
@@ -137,7 +159,7 @@ export default function PaginaPortafolio() {
             className="h-full"
           >
             <TarjetaAutomatizacion
-              datos={a}
+              datos={{ ...a, ...creador(a.id) }}
               alAvisar={avisar}
             />
           </Reveal>

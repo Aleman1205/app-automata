@@ -568,3 +568,46 @@ export const pasosMarquesina = [
   "Ejecútala cuando quieras",
   "Reparaciones gratis",
 ];
+
+// ── Equipo (multi-usuario) ──────────────────────────────────────────────────
+// La cuenta es del NEGOCIO; el portafolio es compartido por todo el equipo.
+// Dos roles: admin (crea, ajusta, invita, factura) y operador (solo ejecuta).
+
+export type RolMiembro = "admin" | "operador";
+export type EstadoMiembro = "activo" | "pendiente";
+
+export interface Miembro {
+  id: string;
+  nombre: string;
+  correo: string;
+  rol: RolMiembro;
+  estado: EstadoMiembro;
+}
+
+export const organizacion = {
+  nombre: "Hotel Vitrales",
+  plan: "Equipo",
+  lugaresTotal: 10,
+};
+
+export const usuarioActualId = "ana";
+
+export const equipo: Miembro[] = [
+  { id: "ana", nombre: "Ana Rivera", correo: "ana@hotelvitrales.mx", rol: "admin", estado: "activo" },
+  { id: "luis", nombre: "Luis Mendoza", correo: "luis@hotelvitrales.mx", rol: "operador", estado: "activo" },
+  { id: "carmen", nombre: "Carmen Solís", correo: "carmen@hotelvitrales.mx", rol: "operador", estado: "activo" },
+  { id: "jorge", nombre: "Jorge Peña", correo: "jorge@hotelvitrales.mx", rol: "operador", estado: "activo" },
+  { id: "roberto", nombre: "Roberto Lara", correo: "roberto@hotelvitrales.mx", rol: "operador", estado: "pendiente" },
+];
+
+export const obtenerMiembro = (id: string) => equipo.find((m) => m.id === id);
+export const usuarioActual = () => obtenerMiembro(usuarioActualId)!;
+
+// Quién creó cada automatización (solo los admin crean).
+export const creadoPor: Record<string, string> = {
+  "reporte-ventas": "ana",
+  "consolidado-facturas": "ana",
+  "limpieza-contactos": "ana",
+  "conciliacion-pagos": "ana",
+  "inventario-semanal": "ana",
+};

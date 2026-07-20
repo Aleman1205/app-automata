@@ -102,16 +102,19 @@ users           id, email, nombre
 memberships     user_id, org_id, rol            ← un usuario en varias orgs
 ```
 
-Tres roles bastan. Más es burocracia que nadie usa:
+**Dos roles** (decisión de producto — antes propuse tres; se simplificó a dos
+por ser lo que un negocio pequeño realmente usa):
 
 | Rol | Puede |
 |---|---|
-| `owner` | Todo, incluido facturación y borrar la organización |
-| `member` | Crear y ejecutar automatizaciones |
-| `viewer` | Solo ejecutar las que ya existen |
+| `admin` (Administrador) | Todo: crear, ajustar, ejecutar, invitar y quitar gente, facturación |
+| `operador` (Operador) | Solo ejecutar las automatizaciones del portafolio y descargar resultados |
 
-`viewer` es más útil de lo que parece: es el rol del empleado que corre el
-proceso cada mes pero no debe crear ni modificar nada.
+En un negocio: el dueño o gerente es `admin`; el equipo del día a día es
+`operador` — corre los procesos cada día pero no los modifica ni crea. **Todos
+comparten el mismo portafolio**: no hay permisos por automatización, todos ven y
+ejecutan todas. (Si más adelante hace falta granularidad —"la de nómina solo la
+ve el gerente"— se añade como capa opcional; el MVP no la lleva.)
 
 ---
 

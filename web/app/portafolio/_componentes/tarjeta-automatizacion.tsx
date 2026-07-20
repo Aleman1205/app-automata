@@ -8,6 +8,7 @@ import { Etiqueta } from "@/components/ui/etiqueta";
 import { Estado } from "@/components/ui/estado";
 import { PuntosAjustes } from "@/components/ui/puntos-ajustes";
 import { Boton } from "@/components/ui/boton";
+import { Avatar } from "@/components/ui/avatar";
 import type { EstadoAuto } from "@/lib/datos";
 
 // Datos mínimos que necesita la tarjeta — así también sirve para la
@@ -21,6 +22,8 @@ export interface DatosTarjeta {
   ejecuciones: number;
   ajustesUsados: number;
   motivoFallo?: string;
+  creadaPor?: string; // nombre de quien la creó
+  creadaPorIndice?: number;
 }
 
 export function TarjetaAutomatizacion({
@@ -104,17 +107,31 @@ export function TarjetaAutomatizacion({
         )}
 
         {navegable && (
-          <div className="mt-auto flex items-center justify-between border-t border-linea pt-4">
-            <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-sepia">
-              {datos.ejecuciones} ejecuciones
-            </span>
-            <span className="flex items-center gap-3">
-              <PuntosAjustes usados={datos.ajustesUsados} conTexto={false} />
-              <ArrowRight
-                className="size-4 text-sepia transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:translate-x-1 group-hover:text-tinta"
-                strokeWidth={2.5}
-              />
-            </span>
+          <div className="mt-auto flex flex-col gap-3 border-t border-linea pt-4">
+            {datos.creadaPor && (
+              <span className="flex items-center gap-2">
+                <Avatar
+                  nombre={datos.creadaPor}
+                  indice={datos.creadaPorIndice ?? 0}
+                  tamano="sm"
+                />
+                <span className="text-xs text-sepia">
+                  Creada por {datos.creadaPor}
+                </span>
+              </span>
+            )}
+            <div className="flex items-center justify-between">
+              <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-sepia">
+                {datos.ejecuciones} ejecuciones
+              </span>
+              <span className="flex items-center gap-3">
+                <PuntosAjustes usados={datos.ajustesUsados} conTexto={false} />
+                <ArrowRight
+                  className="size-4 text-sepia transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:translate-x-1 group-hover:text-tinta"
+                  strokeWidth={2.5}
+                />
+              </span>
+            </div>
           </div>
         )}
       </Tarjeta>

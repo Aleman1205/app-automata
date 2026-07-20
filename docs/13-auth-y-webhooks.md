@@ -25,17 +25,17 @@ sesiones vivas cuando se expulsa a un usuario de una org.
 
 ## 2. Autorización intra-organización (elevación)
 
-Roles `owner` / `member` / `viewer` definidos en
-[docs/04](04-multitenancy.md) §3. **RLS filtra por `org_id`, no por rol** — la
-comprobación de rol vive en la capa de aplicación y hay que hacerla en **cada
-acción con efecto**, no solo al pintar la UI:
+Dos roles `admin` / `operador` definidos en [docs/04](04-multitenancy.md) §3.
+**RLS filtra por `org_id`, no por rol** — la comprobación de rol vive en la capa
+de aplicación y hay que hacerla en **cada acción con efecto**, no solo al pintar
+la UI (ocultar un botón no es seguridad):
 
-| Acción | owner | member | viewer |
-|---|:---:|:---:|:---:|
-| Ejecutar una automatización | ✅ | ✅ | ✅ |
-| Crear / ajustar / disparar build | ✅ | ✅ | ❌ |
-| Facturación, plan | ✅ | ❌ | ❌ |
-| Invitar / expulsar, borrar org | ✅ | ❌ | ❌ |
+| Acción | admin | operador |
+|---|:---:|:---:|
+| Ejecutar una automatización, descargar resultado | ✅ | ✅ |
+| Crear / ajustar / disparar build | ✅ | ❌ |
+| Invitar / quitar gente | ✅ | ❌ |
+| Facturación, plan, borrar org | ✅ | ❌ |
 
 - **Revocación de membresía**: expulsar a un ex-empleado corta su acceso de
   inmediato (invalida sus sesiones en esa org).

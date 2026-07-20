@@ -6,6 +6,8 @@ import { useState } from "react";
 import { motion } from "motion/react";
 import { MARCA } from "@/lib/marca";
 import { Boton } from "@/components/ui/boton";
+import { Avatar } from "@/components/ui/avatar";
+import { usuarioActual } from "@/lib/datos";
 
 // Topbar de píldora (ref. imagen 3): la píldora clara SE DESLIZA entre
 // opciones al pasar el mouse — sin hacer clic. Al salir, vuelve a la ruta
@@ -66,10 +68,17 @@ export function Topbar() {
           ))}
         </nav>
 
-        <div className="pointer-events-auto">
+        <div className="pointer-events-auto flex items-center gap-3">
           <Boton href="/nueva" variante="acento" tamano="sm" icono="flecha">
             Nueva automatización
           </Boton>
+          <Link
+            href="/equipo"
+            aria-label="Equipo y cuenta"
+            className="transition-transform duration-200 hover:scale-105"
+          >
+            <Avatar nombre={usuarioActual().nombre} anillo />
+          </Link>
         </div>
       </div>
     </header>
