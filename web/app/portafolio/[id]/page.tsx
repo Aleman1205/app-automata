@@ -7,9 +7,7 @@ import { Tarjeta } from "@/components/ui/tarjeta";
 import { Etiqueta } from "@/components/ui/etiqueta";
 import { Estado } from "@/components/ui/estado";
 import { PuntosAjustes } from "@/components/ui/puntos-ajustes";
-import { Metrica } from "@/components/ui/metrica";
-import { GraficaBarras } from "@/components/ui/grafica-barras";
-import { Tabla } from "@/components/ui/tabla";
+import { Resultado } from "@/components/ui/resultado";
 import { Boton } from "@/components/ui/boton";
 import { useAviso } from "@/components/ui/aviso";
 import { Reveal } from "@/components/motion/reveal";
@@ -387,48 +385,25 @@ export default function PaginaDetalle({
 
       {/* ── Resultado ── */}
       {mostrarResultado && a.resultado && (
-        <section ref={refResultado} className="mt-16">
-          <Reveal className="flex flex-col gap-10">
+        <section ref={refResultado} className="mt-16 flex flex-col gap-10">
+          <Reveal desenfoque={false}>
             <Etiqueta>
               {fase === "hecha"
                 ? "Resultado — ahora mismo"
                 : `Último resultado — ${a.ultimaEjecucion}`}
             </Etiqueta>
+          </Reveal>
 
-            <div className="grid grid-cols-2 gap-x-6 gap-y-10 md:grid-cols-4">
-              {a.resultado.metricas.map((m) => (
-                <Metrica
-                  key={m.etiqueta}
-                  etiqueta={m.etiqueta}
-                  valor={m.valor}
-                  formato={m.formato}
-                  nota={m.nota}
-                />
-              ))}
-            </div>
+          <Resultado bloques={a.resultado.bloques} />
 
-            <div className="flex flex-col gap-5 border-t border-linea pt-10">
-              <Etiqueta>{a.resultado.grafica.titulo}</Etiqueta>
-              <GraficaBarras
-                datos={a.resultado.grafica.datos}
-                formato={a.resultado.grafica.formato}
-              />
-            </div>
-
-            <Tabla
-              columnas={a.resultado.tabla.columnas}
-              filas={a.resultado.tabla.filas}
-            />
-
-            <div>
-              <Boton
-                variante="oscuro"
-                icono="descarga"
-                onClick={() => avisar("Descargado (demo)")}
-              >
-                {`Descargar ${a.resultado.archivoSalida}`}
-              </Boton>
-            </div>
+          <Reveal>
+            <Boton
+              variante="oscuro"
+              icono="descarga"
+              onClick={() => avisar("Descargado (demo)")}
+            >
+              {`Descargar ${a.resultado.archivoSalida}`}
+            </Boton>
           </Reveal>
         </section>
       )}

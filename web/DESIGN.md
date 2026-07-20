@@ -25,9 +25,16 @@ elegantes, nunca circo.
 | `oliva` | #6B7C3F | Estado "lista" / éxito. Siempre con texto o icono. |
 | `ladrillo` | #A8432B | Estado "no se pudo". Siempre con texto o icono. |
 
-**Gráficas: SIEMPRE de una sola serie** (barras `tinta`). Prohibido inventar
-gráficas multi-serie: la paleta de estados NO está validada como paleta
-categórica. Usa el componente `GraficaBarras`, nunca recharts directo.
+**Gráficas: SIEMPRE de una sola serie** (`tinta`). Prohibido inventar gráficas
+multi-serie: la paleta de estados NO está validada como paleta categórica. Usa
+`GraficaBarras` (categorías) o `GraficaLinea` (tendencia en el tiempo), nunca
+recharts directo.
+
+**Resultados componibles:** el resultado de una automatización es una lista de
+BLOQUES (`Bloque[]` en `lib/datos.ts`), no cajones fijos. El agente elige qué
+bloques y en qué orden; `<Resultado bloques={…} />` los pinta. Tipos: `resumen`,
+`metricas`, `callout`, `barras`, `linea`, `ranking`, `tabla`, `comparacion`.
+Los mismos bloques cubren ventas, RH, administrativo, limpieza (ver docs/09).
 
 ## 2. Tipografía
 
@@ -64,9 +71,16 @@ import { Tarjeta } from "@/components/ui/tarjeta";
 import { Etiqueta } from "@/components/ui/etiqueta";      // <Etiqueta punto?>TEXTO</Etiqueta>
 import { Estado } from "@/components/ui/estado";          // <Estado estado={a.estado} />
 import { PuntosAjustes } from "@/components/ui/puntos-ajustes"; // usados, total?, conTexto?, tamano?
-import { Metrica } from "@/components/ui/metrica";        // etiqueta, valor, formato, nota?
+import { Metrica } from "@/components/ui/metrica";        // etiqueta, valor, formato, sufijo?, nota?, tendencia?
 import { GraficaBarras } from "@/components/ui/grafica-barras"; // datos, formato, alto?
-import { Tabla } from "@/components/ui/tabla";            // columnas, filas
+import { GraficaLinea } from "@/components/ui/grafica-linea";   // tendencia en el tiempo — datos, formato, alto? (una sola serie)
+import { Tabla } from "@/components/ui/tabla";            // columnas (formato: moneda|entero|texto|porcentaje|estado), filas
+import { Ranking } from "@/components/ui/ranking";        // Top-N con barra — datos, formato
+import { Callout } from "@/components/ui/callout";        // tono: info|ok|alerta, titulo, texto? (usa oliva/ladrillo/sepia, NUNCA acento)
+import { Insignia } from "@/components/ui/insignia";      // texto, tono? (oliva=ok, ladrillo=alerta, neutro)
+import { Comparacion } from "@/components/ui/comparacion"; // pasos: {etiqueta, valor, tono?}[] — antes/después
+import { ResumenResultado } from "@/components/ui/resumen-resultado"; // texto (hallazgo en lenguaje llano)
+import { Resultado } from "@/components/ui/resultado";    // bloques: Bloque[] — arma un resultado componible (ver lib/datos.ts)
 import { Acordeon } from "@/components/ui/acordeon";      // items: {pregunta, respuesta}[]
 import { useAviso } from "@/components/ui/aviso";         // const { avisar, elemento } = useAviso()
 

@@ -18,25 +18,44 @@ export interface MetricaDemo {
   etiqueta: string;
   valor: number;
   formato: "moneda" | "entero";
+  sufijo?: string; // p. ej. "%" para márgenes o rotación
   nota?: string;
+  tendencia?: string; // p. ej. "+12% vs. mes pasado"
 }
 
+export interface PuntoDato {
+  etiqueta: string;
+  valor: number;
+}
+
+export interface ColumnaDemo {
+  campo: string;
+  etiqueta: string;
+  alinear?: "izquierda" | "derecha";
+  formato?: "moneda" | "entero" | "texto" | "porcentaje" | "estado";
+}
+
+export type FilaDemo = Record<string, string | number>;
+
+// Un resultado ya no es "3 cajones fijos": es una lista ordenada de BLOQUES que
+// el agente compone según el proceso. Los mismos bloques cubren ventas, RH,
+// administrativo, limpieza… sin una pantalla por dominio (ver docs/09).
+export type Bloque =
+  | { tipo: "resumen"; texto: string }
+  | { tipo: "metricas"; items: MetricaDemo[] }
+  | { tipo: "callout"; tono: "info" | "ok" | "alerta"; titulo: string; texto?: string }
+  | { tipo: "barras"; titulo: string; formato: "moneda" | "entero"; datos: PuntoDato[] }
+  | { tipo: "linea"; titulo: string; formato: "moneda" | "entero"; datos: PuntoDato[] }
+  | { tipo: "ranking"; titulo: string; formato: "moneda" | "entero"; datos: PuntoDato[] }
+  | { tipo: "tabla"; titulo?: string; columnas: ColumnaDemo[]; filas: FilaDemo[] }
+  | {
+      tipo: "comparacion";
+      titulo: string;
+      pasos: { etiqueta: string; valor: number; tono?: "ok" | "alerta" | "neutro" }[];
+    };
+
 export interface ResultadoDemo {
-  metricas: MetricaDemo[];
-  grafica: {
-    titulo: string;
-    formato: "moneda" | "entero";
-    datos: { etiqueta: string; valor: number }[];
-  };
-  tabla: {
-    columnas: {
-      campo: string;
-      etiqueta: string;
-      alinear?: "izquierda" | "derecha";
-      formato?: "moneda" | "entero" | "texto";
-    }[];
-    filas: Record<string, string | number>[];
-  };
+  bloques: Bloque[];
   archivoSalida: string;
 }
 
@@ -103,41 +122,73 @@ export const automatizaciones: Automatizacion[] = [
       },
     ],
     resultado: {
-      metricas: [
+      bloques: [
         {
-          etiqueta: "Total vendido",
-          valor: 438250,
-          formato: "moneda",
-          nota: "12 canceladas excluidas",
+          tipo: "resumen",
+          texto:
+            "En marzo vendiste $438,250 en 214 ventas, 12% más que el mes pasado. Ana Ruiz volvió a encabezar y el ticket promedio subió a $2,048. Las 12 ventas canceladas ya quedaron fuera.",
         },
-        { etiqueta: "Ventas procesadas", valor: 214, formato: "entero" },
-        { etiqueta: "Vendedores", valor: 4, formato: "entero" },
-        { etiqueta: "Ticket promedio", valor: 2048, formato: "moneda" },
+        {
+          tipo: "metricas",
+          items: [
+            {
+              etiqueta: "Total vendido",
+              valor: 438250,
+              formato: "moneda",
+              tendencia: "+12% vs. mes pasado",
+              nota: "12 canceladas excluidas",
+            },
+            { etiqueta: "Ventas procesadas", valor: 214, formato: "entero" },
+            { etiqueta: "Vendedores", valor: 4, formato: "entero" },
+            {
+              etiqueta: "Ticket promedio",
+              valor: 2048,
+              formato: "moneda",
+              tendencia: "+4% vs. mes pasado",
+            },
+          ],
+        },
+        {
+          tipo: "linea",
+          titulo: "Total vendido por mes",
+          formato: "moneda",
+          datos: [
+            { etiqueta: "Oct", valor: 312400 },
+            { etiqueta: "Nov", valor: 358900 },
+            { etiqueta: "Dic", valor: 405200 },
+            { etiqueta: "Ene", valor: 372600 },
+            { etiqueta: "Feb", valor: 391300 },
+            { etiqueta: "Mar", valor: 438250 },
+          ],
+        },
+        {
+          tipo: "ranking",
+          titulo: "Vendedores por total",
+          formato: "moneda",
+          datos: [
+            { etiqueta: "Ana Ruiz", valor: 128450 },
+            { etiqueta: "Luis Mora", valor: 117300 },
+            { etiqueta: "Carmen Díaz", valor: 104980 },
+            { etiqueta: "Jorge Peña", valor: 87520 },
+          ],
+        },
+        {
+          tipo: "tabla",
+          titulo: "Detalle por vendedor",
+          columnas: [
+            { campo: "vendedor", etiqueta: "Vendedor" },
+            { campo: "ventas", etiqueta: "Ventas", alinear: "derecha", formato: "entero" },
+            { campo: "total", etiqueta: "Total", alinear: "derecha", formato: "moneda" },
+            { campo: "promedio", etiqueta: "Promedio", alinear: "derecha", formato: "moneda" },
+          ],
+          filas: [
+            { vendedor: "Ana Ruiz", ventas: 58, total: 128450, promedio: 2215 },
+            { vendedor: "Luis Mora", ventas: 55, total: 117300, promedio: 2133 },
+            { vendedor: "Carmen Díaz", ventas: 52, total: 104980, promedio: 2019 },
+            { vendedor: "Jorge Peña", ventas: 49, total: 87520, promedio: 1786 },
+          ],
+        },
       ],
-      grafica: {
-        titulo: "Total vendido por vendedor",
-        formato: "moneda",
-        datos: [
-          { etiqueta: "Ana Ruiz", valor: 128450 },
-          { etiqueta: "Luis Mora", valor: 117300 },
-          { etiqueta: "Carmen Díaz", valor: 104980 },
-          { etiqueta: "Jorge Peña", valor: 87520 },
-        ],
-      },
-      tabla: {
-        columnas: [
-          { campo: "vendedor", etiqueta: "Vendedor" },
-          { campo: "ventas", etiqueta: "Ventas", alinear: "derecha", formato: "entero" },
-          { campo: "total", etiqueta: "Total", alinear: "derecha", formato: "moneda" },
-          { campo: "promedio", etiqueta: "Promedio", alinear: "derecha", formato: "moneda" },
-        ],
-        filas: [
-          { vendedor: "Ana Ruiz", ventas: 58, total: 128450, promedio: 2215 },
-          { vendedor: "Luis Mora", ventas: 55, total: 117300, promedio: 2133 },
-          { vendedor: "Carmen Díaz", ventas: 52, total: 104980, promedio: 2019 },
-          { vendedor: "Jorge Peña", ventas: 49, total: 87520, promedio: 1786 },
-        ],
-      },
       archivoSalida: "reporte-ventas-marzo.xlsx",
     },
     historial: [
@@ -186,43 +237,63 @@ export const automatizaciones: Automatizacion[] = [
       },
     ],
     resultado: {
-      metricas: [
+      bloques: [
         {
-          etiqueta: "Total facturado",
-          valor: 1284600,
-          formato: "moneda",
-          nota: "Con IVA incluido",
+          tipo: "resumen",
+          texto:
+            "Consolidamos 186 facturas en 5 proveedores por $1,284,600 con IVA. Distribuidora del Norte concentra un tercio del gasto. Agrupamos por RFC, así que los proveedores con el nombre escrito distinto quedaron en una sola fila.",
         },
-        { etiqueta: "Facturas procesadas", valor: 186, formato: "entero" },
-        { etiqueta: "Proveedores", valor: 5, formato: "entero" },
-        { etiqueta: "Canceladas excluidas", valor: 9, formato: "entero" },
+        {
+          tipo: "metricas",
+          items: [
+            {
+              etiqueta: "Total facturado",
+              valor: 1284600,
+              formato: "moneda",
+              nota: "Con IVA incluido",
+            },
+            { etiqueta: "Facturas procesadas", valor: 186, formato: "entero" },
+            { etiqueta: "Proveedores", valor: 5, formato: "entero" },
+            { etiqueta: "Canceladas excluidas", valor: 9, formato: "entero" },
+          ],
+        },
+        {
+          tipo: "callout",
+          tono: "info",
+          titulo: "3 facturas venían con el proveedor escrito de dos formas",
+          texto:
+            "Las agrupamos por RFC, no por nombre, así que quedaron consolidadas correctamente. También excluimos 9 canceladas del total.",
+        },
+        {
+          tipo: "barras",
+          titulo: "Total por proveedor",
+          formato: "moneda",
+          datos: [
+            { etiqueta: "Dist. Norte", valor: 412800 },
+            { etiqueta: "Papelera C.", valor: 296400 },
+            { etiqueta: "Servicios GZ", valor: 214350 },
+            { etiqueta: "Emp. Rivera", valor: 186700 },
+            { etiqueta: "Grupo Lara", valor: 174350 },
+          ],
+        },
+        {
+          tipo: "tabla",
+          titulo: "Detalle por proveedor",
+          columnas: [
+            { campo: "proveedor", etiqueta: "Proveedor" },
+            { campo: "rfc", etiqueta: "RFC" },
+            { campo: "facturas", etiqueta: "Facturas", alinear: "derecha", formato: "entero" },
+            { campo: "total", etiqueta: "Total con IVA", alinear: "derecha", formato: "moneda" },
+          ],
+          filas: [
+            { proveedor: "Distribuidora del Norte", rfc: "DNO950101AB1", facturas: 52, total: 412800 },
+            { proveedor: "Papelera Central", rfc: "PCE010203XY2", facturas: 41, total: 296400 },
+            { proveedor: "Servicios Integrales GZ", rfc: "SIG880404ZZ9", facturas: 38, total: 214350 },
+            { proveedor: "Empaques Rivera", rfc: "ERI920707QW3", facturas: 30, total: 186700 },
+            { proveedor: "Grupo Lara", rfc: "GLA850505MN8", facturas: 25, total: 174350 },
+          ],
+        },
       ],
-      grafica: {
-        titulo: "Total por proveedor",
-        formato: "moneda",
-        datos: [
-          { etiqueta: "Dist. Norte", valor: 412800 },
-          { etiqueta: "Papelera C.", valor: 296400 },
-          { etiqueta: "Servicios GZ", valor: 214350 },
-          { etiqueta: "Emp. Rivera", valor: 186700 },
-          { etiqueta: "Grupo Lara", valor: 174350 },
-        ],
-      },
-      tabla: {
-        columnas: [
-          { campo: "proveedor", etiqueta: "Proveedor" },
-          { campo: "rfc", etiqueta: "RFC" },
-          { campo: "facturas", etiqueta: "Facturas", alinear: "derecha", formato: "entero" },
-          { campo: "total", etiqueta: "Total con IVA", alinear: "derecha", formato: "moneda" },
-        ],
-        filas: [
-          { proveedor: "Distribuidora del Norte", rfc: "DNO950101AB1", facturas: 52, total: 412800 },
-          { proveedor: "Papelera Central", rfc: "PCE010203XY2", facturas: 41, total: 296400 },
-          { proveedor: "Servicios Integrales GZ", rfc: "SIG880404ZZ9", facturas: 38, total: 214350 },
-          { proveedor: "Empaques Rivera", rfc: "ERI920707QW3", facturas: 30, total: 186700 },
-          { proveedor: "Grupo Lara", rfc: "GLA850505MN8", facturas: 25, total: 174350 },
-        ],
-      },
       archivoSalida: "consolidado-proveedores.xlsx",
     },
     historial: [
@@ -232,6 +303,176 @@ export const automatizaciones: Automatizacion[] = [
     ],
     cambios: [
       { version: 1, titulo: "Construcción original", fecha: "28 feb 2026", tipo: "construccion" },
+    ],
+  },
+  {
+    id: "nomina-quincenal",
+    nombre: "Resumen de nómina quincenal",
+    descripcion:
+      "Toma tu archivo de asistencias y sueldos y arma el resumen de la quincena: neto a pagar por persona, por área, y quién trae algo raro.",
+    estado: "lista",
+    creada: "5 mar 2026",
+    ejecuciones: 6,
+    ultimaEjecucion: "hace 1 día",
+    ajustesUsados: 1,
+    entradas: [
+      {
+        id: "asistencias",
+        tipo: "archivo",
+        etiqueta: "Tu archivo de asistencias y sueldos",
+        ayuda: "El export de tu reloj checador o tu hoja de cálculo",
+        formatos: ["csv", "xlsx"],
+      },
+      {
+        id: "quincena",
+        tipo: "seleccion",
+        etiqueta: "¿Qué quincena?",
+        opciones: [
+          { valor: "actual", etiqueta: "La quincena en curso" },
+          { valor: "anterior", etiqueta: "La quincena pasada" },
+        ],
+      },
+    ],
+    resultado: {
+      bloques: [
+        {
+          tipo: "resumen",
+          texto:
+            "Esta quincena la nómina neta suma $284,600 para 32 personas. Cocina y Recepción concentran la mayor parte. Hay 3 casos que conviene revisar antes de pagar.",
+        },
+        {
+          tipo: "metricas",
+          items: [
+            { etiqueta: "Nómina neta", valor: 284600, formato: "moneda", nota: "Después de deducciones" },
+            { etiqueta: "Personas", valor: 32, formato: "entero" },
+            { etiqueta: "Horas extra", valor: 148, formato: "entero", nota: "En toda la quincena" },
+            { etiqueta: "Rotación", valor: 6, formato: "entero", sufijo: "%", tendencia: "-2% vs. quincena pasada" },
+          ],
+        },
+        {
+          tipo: "callout",
+          tono: "alerta",
+          titulo: "3 personas necesitan revisión antes de pagar",
+          texto:
+            "Dos sin RFC registrado y una con más horas extra que su jornada. Las separamos para que las revises.",
+        },
+        {
+          tipo: "barras",
+          titulo: "Nómina neta por área",
+          formato: "moneda",
+          datos: [
+            { etiqueta: "Cocina", valor: 92400 },
+            { etiqueta: "Recepción", valor: 68200 },
+            { etiqueta: "Limpieza", valor: 54800 },
+            { etiqueta: "Mantto.", valor: 38600 },
+            { etiqueta: "Admin", valor: 30600 },
+          ],
+        },
+        {
+          tipo: "tabla",
+          titulo: "Detalle por persona",
+          columnas: [
+            { campo: "empleado", etiqueta: "Empleado" },
+            { campo: "area", etiqueta: "Área" },
+            { campo: "extra", etiqueta: "Horas extra", alinear: "derecha", formato: "entero" },
+            { campo: "neto", etiqueta: "Neto", alinear: "derecha", formato: "moneda" },
+            { campo: "estatus", etiqueta: "Estatus", formato: "estado" },
+          ],
+          filas: [
+            { empleado: "María Fuentes", area: "Cocina", extra: 12, neto: 11250, estatus: "Al día" },
+            { empleado: "Jorge Lomelí", area: "Recepción", extra: 8, neto: 9800, estatus: "Al día" },
+            { empleado: "Sofía Ramos", area: "Limpieza", extra: 6, neto: 7600, estatus: "Al día" },
+            { empleado: "Diego Nava", area: "Mantto.", extra: 22, neto: 10400, estatus: "Revisar" },
+            { empleado: "Paola Cruz", area: "Cocina", extra: 0, neto: 8900, estatus: "Sin RFC" },
+          ],
+        },
+      ],
+      archivoSalida: "nomina-quincena.xlsx",
+    },
+    historial: [
+      { fecha: "16 mar 2026", archivo: "asistencias-q1-marzo.xlsx", duracion: "29 s", estado: "Correcta", por: "ana" },
+      { fecha: "1 mar 2026", archivo: "asistencias-q2-feb.xlsx", duracion: "27 s", estado: "Correcta", por: "ana" },
+    ],
+    cambios: [
+      { version: 1, titulo: "Construcción original", fecha: "5 mar 2026", tipo: "construccion" },
+      { version: 2, titulo: "Separar a quien le falta RFC en su propia lista", fecha: "9 mar 2026", tipo: "ajuste" },
+    ],
+  },
+  {
+    id: "depuracion-clientes",
+    nombre: "Depuración de la base de clientes",
+    descripcion:
+      "Junta tus listas de clientes, quita duplicados, corrige formatos y aparta los registros con datos inválidos para que los revises.",
+    estado: "lista",
+    creada: "3 mar 2026",
+    ejecuciones: 4,
+    ultimaEjecucion: "hace 6 días",
+    ajustesUsados: 0,
+    entradas: [
+      {
+        id: "clientes",
+        tipo: "archivo",
+        etiqueta: "Tu lista de clientes",
+        ayuda: "Una o varias listas exportadas de tu sistema o tu correo",
+        formatos: ["csv", "xlsx"],
+      },
+    ],
+    resultado: {
+      bloques: [
+        {
+          tipo: "resumen",
+          texto:
+            "De 1,240 registros quedaron 1,180 limpios y sin duplicados. Apartamos 60 con correo o teléfono inválido para que los revises — no los borramos.",
+        },
+        {
+          tipo: "comparacion",
+          titulo: "Qué pasó con tus registros",
+          pasos: [
+            { etiqueta: "Recibidos", valor: 1240, tono: "neutro" },
+            { etiqueta: "Limpios", valor: 1180, tono: "ok" },
+            { etiqueta: "A revisar", valor: 60, tono: "alerta" },
+          ],
+        },
+        {
+          tipo: "metricas",
+          items: [
+            { etiqueta: "Duplicados unidos", valor: 47, formato: "entero" },
+            { etiqueta: "Correos corregidos", valor: 112, formato: "entero", nota: "Mayúsculas y espacios" },
+            { etiqueta: "Teléfonos con formato", valor: 389, formato: "entero" },
+            { etiqueta: "A revisar", valor: 60, formato: "entero", nota: "Datos inválidos" },
+          ],
+        },
+        {
+          tipo: "callout",
+          tono: "info",
+          titulo: "Nada se borró",
+          texto:
+            'Los 60 registros con datos inválidos están en la hoja "A revisar" del archivo, listos para que decidas qué hacer con ellos.',
+        },
+        {
+          tipo: "tabla",
+          titulo: "Muestra de los que hay que revisar",
+          columnas: [
+            { campo: "nombre", etiqueta: "Nombre" },
+            { campo: "correo", etiqueta: "Correo" },
+            { campo: "motivo", etiqueta: "Motivo", formato: "estado" },
+          ],
+          filas: [
+            { nombre: "Comercial Vega", correo: "ventas@vega", motivo: "Correo inválido" },
+            { nombre: "(sin nombre)", correo: "j.perez@mail.com", motivo: "Falta nombre" },
+            { nombre: "Abarrotes El Sol", correo: "—", motivo: "Sin correo" },
+            { nombre: "Tienda Lupita", correo: "lupita@@gmail.com", motivo: "Correo inválido" },
+          ],
+        },
+      ],
+      archivoSalida: "clientes-depurados.xlsx",
+    },
+    historial: [
+      { fecha: "14 mar 2026", archivo: "clientes-crm+correo.xlsx", duracion: "33 s", estado: "Correcta", por: "carmen" },
+      { fecha: "3 mar 2026", archivo: "clientes-export.csv", duracion: "30 s", estado: "Correcta", por: "ana" },
+    ],
+    cambios: [
+      { version: 1, titulo: "Construcción original", fecha: "3 mar 2026", tipo: "construccion" },
     ],
   },
   {
@@ -287,43 +528,64 @@ export const automatizaciones: Automatizacion[] = [
       },
     ],
     resultado: {
-      metricas: [
-        { etiqueta: "Productos revisados", valor: 1240, formato: "entero" },
-        { etiqueta: "Por agotarse", valor: 18, formato: "entero" },
-        { etiqueta: "Con sobre-stock", valor: 34, formato: "entero" },
+      bloques: [
         {
-          etiqueta: "Valor en riesgo",
-          valor: 96400,
-          formato: "moneda",
-          nota: "Ventas que se perderían",
+          tipo: "resumen",
+          texto:
+            "De 1,240 productos, 18 se agotan esta semana y ponen en riesgo $96,400 en ventas. Bebidas y lácteos son los más apretados. Otros 34 traen sobre-stock que puedes frenar.",
+        },
+        {
+          tipo: "metricas",
+          items: [
+            { etiqueta: "Productos revisados", valor: 1240, formato: "entero" },
+            { etiqueta: "Por agotarse", valor: 18, formato: "entero" },
+            { etiqueta: "Con sobre-stock", valor: 34, formato: "entero" },
+            {
+              etiqueta: "Valor en riesgo",
+              valor: 96400,
+              formato: "moneda",
+              nota: "Ventas que se perderían",
+            },
+          ],
+        },
+        {
+          tipo: "callout",
+          tono: "alerta",
+          titulo: "4 productos se agotan en 3 días o menos",
+          texto:
+            "Agua 1 L, leche entera, refresco cola y detergente. Conviene resurtir antes del fin de semana.",
+        },
+        {
+          tipo: "barras",
+          titulo: "Por agotarse, por categoría",
+          formato: "entero",
+          datos: [
+            { etiqueta: "Bebidas", valor: 6 },
+            { etiqueta: "Lácteos", valor: 4 },
+            { etiqueta: "Abarrotes", valor: 4 },
+            { etiqueta: "Limpieza", valor: 2 },
+            { etiqueta: "Botanas", valor: 2 },
+          ],
+        },
+        {
+          tipo: "tabla",
+          titulo: "Los más urgentes",
+          columnas: [
+            { campo: "producto", etiqueta: "Producto" },
+            { campo: "categoria", etiqueta: "Categoría" },
+            { campo: "existencia", etiqueta: "Existencia", alinear: "derecha", formato: "entero" },
+            { campo: "dias", etiqueta: "Días restantes", alinear: "derecha", formato: "entero" },
+            { campo: "urgencia", etiqueta: "Urgencia", formato: "estado" },
+          ],
+          filas: [
+            { producto: "Agua 1 L (caja)", categoria: "Bebidas", existencia: 14, dias: 2, urgencia: "Urgente" },
+            { producto: "Leche entera 1 L", categoria: "Lácteos", existencia: 22, dias: 3, urgencia: "Urgente" },
+            { producto: "Refresco cola 600 ml", categoria: "Bebidas", existencia: 31, dias: 3, urgencia: "Pronto" },
+            { producto: "Detergente 1 kg", categoria: "Limpieza", existencia: 9, dias: 4, urgencia: "Pronto" },
+            { producto: "Arroz 1 kg", categoria: "Abarrotes", existencia: 18, dias: 5, urgencia: "Al día" },
+          ],
         },
       ],
-      grafica: {
-        titulo: "Por agotarse, por categoría",
-        formato: "entero",
-        datos: [
-          { etiqueta: "Bebidas", valor: 6 },
-          { etiqueta: "Lácteos", valor: 4 },
-          { etiqueta: "Abarrotes", valor: 4 },
-          { etiqueta: "Limpieza", valor: 2 },
-          { etiqueta: "Botanas", valor: 2 },
-        ],
-      },
-      tabla: {
-        columnas: [
-          { campo: "producto", etiqueta: "Producto" },
-          { campo: "categoria", etiqueta: "Categoría" },
-          { campo: "existencia", etiqueta: "Existencia", alinear: "derecha", formato: "entero" },
-          { campo: "dias", etiqueta: "Días restantes", alinear: "derecha", formato: "entero" },
-        ],
-        filas: [
-          { producto: "Agua 1 L (caja)", categoria: "Bebidas", existencia: 14, dias: 2 },
-          { producto: "Leche entera 1 L", categoria: "Lácteos", existencia: 22, dias: 3 },
-          { producto: "Refresco cola 600 ml", categoria: "Bebidas", existencia: 31, dias: 3 },
-          { producto: "Detergente 1 kg", categoria: "Limpieza", existencia: 9, dias: 4 },
-          { producto: "Arroz 1 kg", categoria: "Abarrotes", existencia: 18, dias: 5 },
-        ],
-      },
       archivoSalida: "alerta-inventario.xlsx",
     },
     historial: [

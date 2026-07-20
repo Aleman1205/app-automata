@@ -1,12 +1,13 @@
 "use client";
 
 import { motion } from "motion/react";
+import { Insignia } from "@/components/ui/insignia";
 
 export interface Columna {
   campo: string;
   etiqueta: string;
   alinear?: "izquierda" | "derecha";
-  formato?: "moneda" | "entero" | "texto";
+  formato?: "moneda" | "entero" | "texto" | "porcentaje" | "estado";
 }
 
 // Tabla del sistema: encabezado mono, filas que entran en cascada al hacer
@@ -19,6 +20,7 @@ export function Tabla({
   filas: Record<string, string | number>[];
 }) {
   const fmt = (v: string | number, formato?: string) => {
+    if (formato === "estado") return <Insignia texto={String(v)} />;
     if (typeof v !== "number") return v;
     if (formato === "moneda")
       return new Intl.NumberFormat("es-MX", {
@@ -26,6 +28,8 @@ export function Tabla({
         currency: "MXN",
         maximumFractionDigits: 0,
       }).format(v);
+    if (formato === "porcentaje")
+      return `${new Intl.NumberFormat("es-MX", { maximumFractionDigits: 1 }).format(v)}%`;
     return new Intl.NumberFormat("es-MX").format(v);
   };
 

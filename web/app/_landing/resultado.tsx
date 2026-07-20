@@ -4,22 +4,24 @@ import { Boton } from "@/components/ui/boton";
 import { Etiqueta } from "@/components/ui/etiqueta";
 import { Tarjeta } from "@/components/ui/tarjeta";
 import { Metrica } from "@/components/ui/metrica";
-import { GraficaBarras } from "@/components/ui/grafica-barras";
+import { GraficaLinea } from "@/components/ui/grafica-linea";
 import { Reveal } from "@/components/motion/reveal";
 import { TextoRevelado } from "@/components/motion/texto-revelado";
 import { obtenerAutomatizacion } from "@/lib/datos";
 
-// Adelanto real del producto: las mismas métricas y gráfica que se ven en
-// /portafolio/reporte-ventas, con los mismos componentes del sistema.
+// Adelanto real del producto: los mismos bloques (métricas + tendencia) que se
+// ven en /portafolio/reporte-ventas, con los mismos componentes del sistema.
 export function Resultado() {
   const resultado = obtenerAutomatizacion("reporte-ventas")?.resultado;
-  if (!resultado) return null;
+  const bloqueMetricas = resultado?.bloques.find((b) => b.tipo === "metricas");
+  const bloqueLinea = resultado?.bloques.find((b) => b.tipo === "linea");
+  if (!bloqueMetricas || bloqueMetricas.tipo !== "metricas") return null;
 
   // Total vendido, Ventas procesadas y Ticket promedio.
   const metricas = [
-    resultado.metricas[0],
-    resultado.metricas[1],
-    resultado.metricas[3],
+    bloqueMetricas.items[0],
+    bloqueMetricas.items[1],
+    bloqueMetricas.items[3],
   ];
 
   return (
@@ -44,21 +46,25 @@ export function Resultado() {
                   etiqueta={m.etiqueta}
                   valor={m.valor}
                   formato={m.formato}
+                  sufijo={m.sufijo}
                   nota={m.nota}
+                  tendencia={m.tendencia}
                 />
               ))}
             </div>
 
-            <div className="mt-10 border-t border-linea pt-10">
-              <Etiqueta>{resultado.grafica.titulo}</Etiqueta>
-              <div className="mt-6">
-                <GraficaBarras
-                  datos={resultado.grafica.datos}
-                  formato={resultado.grafica.formato}
-                  alto={280}
-                />
+            {bloqueLinea && bloqueLinea.tipo === "linea" && (
+              <div className="mt-10 border-t border-linea pt-10">
+                <Etiqueta>{bloqueLinea.titulo}</Etiqueta>
+                <div className="mt-6">
+                  <GraficaLinea
+                    datos={bloqueLinea.datos}
+                    formato={bloqueLinea.formato}
+                    alto={280}
+                  />
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="mt-10">
               <Boton
