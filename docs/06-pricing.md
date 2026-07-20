@@ -192,14 +192,20 @@ la mesa con $30. Si dicen "$10", el problema no es el precio, es el segmento.
 | Precio | $30 | $50 | $100 |
 | Automatizaciones activas | 3 | 6 | 10 |
 | Generaciones al mes | 6 | 12 | 20 |
-| Ejecuciones | Sin límite* | Sin límite* | Sin límite* |
+| Ejecuciones | 500/mes* | 2,000/mes* | 10,000/mes* |
 | Ajustes primeros 30 días | Gratis | Gratis | Gratis |
 | Usuarios | 1 | 3 | 10 |
 | Exportar código | — | — | Sí |
 
-\* Sin límite publicado, con uso justo interno (aviso al superar 1000/mes). Con
-el runner propio el costo es despreciable, y "ejecuciones ilimitadas" es un
-argumento de venta fuerte que no te cuesta nada.
+\* **Con corte duro, no solo alarma** — corrección de seguridad
+([docs/11](11-threat-model.md) §8). Mientras el Run viva en CMA (~$0.30/
+ejecución), "ejecuciones ilimitadas" es una puerta abierta: una cuenta de $15
+podría ejecutar miles de veces y costarte cientos de dólares. El tope se
+comunica como generoso ("hasta 500 al mes en Base") y al tocarlo ofrece subir
+de plan. Cuando el Run migre al runner propio (Fase 2, ~$0.001/ejecución), el
+tope puede subir mucho o volverse "uso justo" real — pero el corte se queda,
+porque quitarlo del código es más difícil que relajar el número. Los límites
+exactos se afinan con datos de uso reales.
 
 **Primera automatización: $15, pago único.**
 

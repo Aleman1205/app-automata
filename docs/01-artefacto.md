@@ -179,15 +179,22 @@ pandas>=2.0        ✗  cambia solo, rompe en marzo lo que funcionaba en enero
 pandas             ✗  peor todavía
 ```
 
-**Lista blanca de paquetes.** El Builder solo puede pedir de un catálogo
-aprobado. Un agente que instala paquetes arbitrarios desde PyPI es un vector de
-ataque por confusión de nombres — un paquete con nombre parecido a uno real,
-subido por cualquiera. Si un build necesita algo fuera de la lista, se marca
-para revisión tuya y se añade a mano.
+**Lista blanca de paquetes, servida por un mirror privado.** El Builder solo
+puede pedir de un catálogo aprobado. Un agente que instala paquetes arbitrarios
+desde PyPI es un vector de ataque por confusión de nombres — un paquete con
+nombre parecido a uno real, subido por cualquiera — y peor: el `setup.py` de un
+paquete malicioso ejecuta código con red **durante el build**. Por eso la lista
+blanca no se aplica solo revisando el `requirements.txt` final: **el sandbox de
+build resuelve paquetes contra un mirror privado que solo sirve lo aprobado,
+con DNS fijado** ([docs/11](11-threat-model.md) §5). Si un build necesita algo
+fuera de la lista, se marca para revisión tuya y se añade a mano.
 
 **Capa de dependencias cacheada por hash de `requirements.txt`.** Cien
 automatizaciones que usan `pandas==2.2.3` comparten la misma capa. Sin esto
-pagas 40 segundos de `pip install` en cada ejecución.
+pagas 40 segundos de `pip install` en cada ejecución. **Como se comparte entre
+tenants, es inmutable y direccionada por contenido**: se construye solo desde
+paquetes pinneados de la lista blanca, por un builder de confianza, y ningún
+sandbox de build o run puede escribirla ([docs/11](11-threat-model.md) §5).
 
 ---
 
@@ -209,6 +216,16 @@ debe costar ni un segundo de cómputo.
 
 Los pasos 1–6 corren en tu backend, en milisegundos. **Cada mensaje de error
 nombra el problema y propone la acción.** Nunca "validación fallida".
+
+**Seguridad del parseo (paso 4).** Abrir un xlsx para validarlo es parsear un
+ZIP/XML completo — un archivo malicioso (decompression-bomb) puede reventar la
+memoria del proceso que lo abre. Este parseo **no corre en el proceso web
+compartido**: va en un **worker aislado con RAM y CPU acotadas**, en modo
+`read_only`, con límite de ratio de descompresión, tope de celdas/filas y
+timeout. Si el archivo es una bomba, muere el worker, no la API
+([docs/11](11-threat-model.md) §4). El contenido del archivo, además, es dato
+hostil para el Builder (una celda puede llevar una inyección) — tratamiento en
+docs/11 §4–§5.
 
 ---
 

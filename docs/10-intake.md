@@ -208,7 +208,15 @@ sabiendo que tiene 3 ajustes. El embudo lo registra (§10).
 | `viable` | Proceso sin estado con archivos/datos ([PLAN.md](../PLAN.md) §0) | Sigue normal |
 | `viable_con_reencuadre` | La versión literal no se puede (necesita Gmail, correr sola), pero la variante manual SÍ | La ronda 1 lo dice: "La parte de leer tu correo llegará después; la versión donde tú subes el archivo la hacemos hoy. ¿Te sirve?" — y sigue con el reencuadre |
 | `fuera_de_alcance` | Ni reencuadrada cabe (app con estado, integración esencial) | Honestidad + **lead de roadmap** con descripción |
-| `no_procede` | Ilegal, dañino, sin relación con automatizar | Rechazo amable y genérico. Contador agregado por org; **el transcript se borra en la misma operación** (no persistimos ideas rechazadas) |
+| `no_procede` | Ilegal, dañino, sin relación con automatizar | Rechazo amable y genérico. Contador por org + **un registro mínimo con control de acceso** (rasgos/hash, retención corta, separado de lo visible al cliente) para detectar sondeo — no el transcript visible. Alerta si una org acumula muchos `no_procede` rápido |
+
+**El reencuadre también puede lavar intención dañina.** "Genera correos
+personalizados a esta lista de clientes" se reencuadra a "procesa esta lista y
+genera mensajes" = viable, y luego `idea_original` se descarta aguas abajo (§4)
+dejando un objetivo limpio: phishing con apariencia de reporte. Por eso el
+clasificador de daño corre **sobre el spec POST-reencuadre, no solo sobre la
+idea original**, y todo caso donde un reencuadre cambió el veredicto de
+rechazable a viable se registra y se revisa — es la señal de lavado.
 
 El reencuadre es la diferencia entre rechazar a un buen cliente y venderle:
 casi nadie describe "el subconjunto automatizable" — describen su proceso

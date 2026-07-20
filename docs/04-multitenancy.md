@@ -19,7 +19,9 @@ la tabla de ejecuciones.** Están en cuatro sitios más:
 | **El ejemplo dentro del artefacto** | Un archivo real del cliente | **Sí** |
 | **Trazas de build en CMA** | El agente leyó e imprimió sus datos | **Sí** |
 | **El spec y la entrevista** | Cómo funciona su negocio por dentro | A veces |
+| **Leads de roadmap** (intakes `fuera_de_alcance`) | La descripción del negocio del cliente ([docs/10](10-intake.md) §7) | **Sí** |
 | Logs de ejecución (stdout) | Fragmentos de filas, mensajes de error | **Sí** |
+| Backups | Copia completa multi-tenant de todo lo anterior | **Sí** |
 
 Las dos marcadas en negrita son las que rompen un "borra todos mis datos" mal
 implementado. Si un cliente pide el borrado y solo limpias `runs`, **le mentiste**
@@ -39,6 +41,7 @@ tarde o temprano, **actívalo en la base de datos**, no solo en el código:
 
 ```sql
 alter table automations enable row level security;
+alter table automations force  row level security;   -- ⬅ crítico, ver abajo
 
 create policy aislamiento_org on automations
   using (org_id = current_setting('app.org_id')::uuid);
@@ -48,7 +51,20 @@ Con Postgres (Supabase o Neon), fijas `app.org_id` al inicio de cada petición y
 la base rechaza cualquier fila de otra organización — aunque la query esté mal
 escrita. **Es la diferencia entre un bug y una filtración entre clientes.**
 
-Un bug de este tipo no se explica a un cliente. Cuesta la empresa.
+**La trampa que lo vuelve inútil en silencio:** RLS **no aplica al rol dueño de
+la tabla** ni a roles con `BYPASSRLS`, y las cadenas de conexión por defecto de
+Neon/Supabase conectan **como dueño**. Con eso, todas las policies quedan
+inertes sin un solo error visible. Dos requisitos, no negociables:
+
+1. La app conecta con un **rol dedicado, no-dueño y sin `BYPASSRLS`** (las
+   migraciones sí usan el dueño; la app en runtime, nunca).
+2. `force row level security` en toda tabla con `org_id` — así ni el dueño se
+   salta la policy si por error conecta con él.
+
+El test de aislamiento ([docs/11](11-threat-model.md) §10) corre **como ese rol
+de app real** y confirma que una query cross-org devuelve 0 filas — no basta
+verificar que la policy exista. Un bug de este tipo no se explica a un cliente:
+cuesta la empresa.
 
 ### Archivos
 
@@ -134,13 +150,22 @@ verdad:
 1. runs: entradas, salidas y logs        → borrado en blob
 2. artefactos: incluido el ejemplo       → borrado en blob
 3. specs, entrevistas, transcripciones   → borrado en base
-4. sesiones de CMA                       → sessions.delete() en Anthropic
-5. filas de la base                      → borrado (no soft delete)
-6. copias de seguridad                   → caducan solas; dilo en la política
+4. leads de roadmap (fuera_de_alcance)   → borrado en base
+5. sesiones de CMA                       → sessions.delete() en Anthropic
+6. filas de la base                      → borrado (no soft delete)
+7. copias de seguridad                   → ver abajo
 ```
 
-**El paso 4 se olvida siempre.** Esos datos están en la infraestructura de
+**El paso 5 se olvida siempre.** Esos datos están en la infraestructura de
 Anthropic, no en la tuya, y no desaparecen porque borres tu base.
+
+**Los backups resucitan lo borrado.** Un backup contiene una copia de todo lo
+anterior; restaurarlo tras un borrado revive datos que el cliente pidió
+eliminar. Dos opciones honestas: (a) ventana de retención de backups corta
+(p. ej. 30 días) declarada en la política, tras la cual el dato desaparece
+solo; (b) toda restauración re-aplica la lista de borrados pendientes antes de
+volver a servir. La (a) es suficiente para el MVP si se comunica; la (b) es lo
+correcto a escala.
 
 Escribe este borrado como una función única y pruébala. Si vive repartido en
 seis sitios del código, tarde o temprano queda incompleto.

@@ -133,6 +133,7 @@ desconocido. Trátalo como hostil, siempre.
 | Control | Valor | Por qué |
 |---|---|---|
 | Red | **Desactivada** | Sin red no hay exfiltración de datos. Es el control más fuerte y el más barato. |
+| **Aislamiento del kernel** | **gVisor (o microVM)** | Ver abajo — el control portante del cross-tenant |
 | Usuario | No-root, UID fijo | Escalar privilegios se vuelve mucho más difícil |
 | Raíz del sistema | Solo lectura | Solo `/out` y `/tmp` escriben |
 | Memoria | 512 MB (tope duro) | Un bucle no tumba el host |
@@ -140,6 +141,18 @@ desconocido. Trátalo como hostil, siempre.
 | Procesos | Máx. 64 | Frena bombas de procesos |
 | Tamaño de `/out` | 100 MB | Frena llenar el disco |
 | Vida del contenedor | Se destruye siempre | Cero estado entre ejecuciones |
+
+**Sobre el aislamiento del kernel — corrección del red-team
+([docs/11](11-threat-model.md) §3).** El borrador ponía gVisor/Firecracker como
+"para cuando el producto crezca". Es un error: **ejecutar código arbitrario del
+cliente ES el producto**, así que un escape del contenedor es el único eslabón
+entre un cliente malicioso y los datos de otro — no un riesgo lejano. "Sin red"
+corta la exfiltración *después* de un escape, pero no el escape. Un contenedor
+`runc` estándar comparte kernel con el host; una vulnerabilidad de kernel lo
+atraviesa. **gVisor** (intercepta las syscalls en espacio de usuario, casi sin
+costo de operación) es el mínimo razonable para el cross-tenant, y debería
+estar desde el primer cliente de pago, no después. Firecracker (microVM) es más
+fuerte y más caro de operar — la opción si el volumen lo justifica.
 
 **Nunca reutilices un contenedor entre clientes.** El ahorro de arranque no
 compensa ni de lejos el riesgo de que datos de un cliente aparezcan en la
@@ -198,9 +211,17 @@ ve mensajes escritos para humanos, como en [01-artefacto](01-artefacto.md) §7.
 volumen es mínimo y ganas semanas.
 
 **Fase 2:** `RunnerContenedor` sobre **Fly Machines** o **Cloud Run Jobs**.
-Ambos arrancan un contenedor por petición, cobran por segundo y se apagan solos.
-Fly arranca más rápido; Cloud Run integra mejor si ya estás en Google. Cualquiera
-sirve — no gastes una semana eligiendo.
+Ambos arrancan un contenedor por petición, cobran por segundo y se apagan solos,
+**y ambos pueden correr con gVisor** (Cloud Run lo usa por defecto en su primera
+generación; Fly permite runtime endurecido) — que es justo lo que §6 exige para
+el cross-tenant. Fly arranca más rápido; Cloud Run integra mejor si ya estás en
+Google. Cualquiera sirve — no gastes una semana eligiendo.
+
+**Matiz sobre el MVP con `RunnerCMA`:** el aislamiento entre sesiones lo provee
+Anthropic (contenedores gestionados). Sirve para arrancar, pero verifica su
+modelo de aislamiento antes de meter datos sensibles de varios clientes — si no
+te da garantías cross-tenant equivalentes a gVisor, ese es otro motivo para
+adelantar el runner propio ([docs/11](11-threat-model.md) §12, decisión #1).
 
 **Lo que no debes hacer:** montar Kubernetes para esto. Es un contenedor efímero
 por petición; los servicios gestionados lo resuelven y no te obligan a operar un
