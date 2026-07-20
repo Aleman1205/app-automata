@@ -10,7 +10,9 @@ export interface EntradaManifiesto {
   tipo: "archivo" | "seleccion";
   etiqueta: string;
   ayuda?: string;
-  formatos?: string[];
+  formatos?: string[]; // p. ej. ["xlsx","csv"] o ["jpg","png","pdf"] — NO solo Excel
+  multiple?: boolean; // varios archivos a la vez (p. ej. fotos de tickets)
+  ejemploNombre?: string; // nombre falso que se muestra "cargado" en la demo
   opciones?: { valor: string; etiqueta: string }[];
 }
 
@@ -476,6 +478,110 @@ export const automatizaciones: Automatizacion[] = [
     ],
   },
   {
+    id: "gastos-tickets",
+    nombre: "Gastos desde fotos de tickets",
+    descripcion:
+      "Sube las fotos de tus tickets y notas de gasto; te las convierte en una tabla de gastos ordenada, sin capturar nada a mano.",
+    estado: "lista",
+    creada: "10 mar 2026",
+    ejecuciones: 9,
+    ultimaEjecucion: "hace 1 día",
+    ajustesUsados: 1,
+    entradas: [
+      {
+        id: "tickets",
+        tipo: "archivo",
+        etiqueta: "Las fotos de tus tickets",
+        ayuda: "Súbelas todas juntas — fotos del celular o PDF escaneados",
+        formatos: ["jpg", "png", "pdf"],
+        multiple: true,
+        ejemploNombre: "14 fotos de tickets",
+      },
+      {
+        id: "periodo",
+        tipo: "seleccion",
+        etiqueta: "¿De qué periodo son?",
+        opciones: [
+          { valor: "mes", etiqueta: "Este mes" },
+          { valor: "quincena", etiqueta: "Esta quincena" },
+        ],
+      },
+    ],
+    resultado: {
+      bloques: [
+        {
+          tipo: "resumen",
+          texto:
+            "Leímos 14 tickets por $18,940 en gastos. La mayor parte se fue en insumos de cocina. 2 fotos salieron borrosas y las apartamos para que las revises.",
+        },
+        {
+          tipo: "comparacion",
+          titulo: "Qué pasó con tus fotos",
+          pasos: [
+            { etiqueta: "Fotos subidas", valor: 16, tono: "neutro" },
+            { etiqueta: "Tickets leídos", valor: 14, tono: "ok" },
+            { etiqueta: "A revisar", valor: 2, tono: "alerta" },
+          ],
+        },
+        {
+          tipo: "metricas",
+          items: [
+            { etiqueta: "Total en gastos", valor: 18940, formato: "moneda" },
+            { etiqueta: "Tickets leídos", valor: 14, formato: "entero" },
+            { etiqueta: "Categorías", valor: 5, formato: "entero" },
+            { etiqueta: "Ticket promedio", valor: 1353, formato: "moneda" },
+          ],
+        },
+        {
+          tipo: "callout",
+          tono: "alerta",
+          titulo: "2 fotos salieron borrosas",
+          texto:
+            'No pudimos leer el monto con seguridad. Las dejamos en la hoja "A revisar" para que las captures a mano o subas una foto mejor.',
+        },
+        {
+          tipo: "barras",
+          titulo: "Gasto por categoría",
+          formato: "moneda",
+          datos: [
+            { etiqueta: "Cocina", valor: 8420 },
+            { etiqueta: "Limpieza", valor: 3860 },
+            { etiqueta: "Mantto.", valor: 2940 },
+            { etiqueta: "Papelería", valor: 2120 },
+            { etiqueta: "Otros", valor: 1600 },
+          ],
+        },
+        {
+          tipo: "tabla",
+          titulo: "Los gastos que leímos",
+          columnas: [
+            { campo: "fecha", etiqueta: "Fecha" },
+            { campo: "proveedor", etiqueta: "Proveedor" },
+            { campo: "categoria", etiqueta: "Categoría" },
+            { campo: "monto", etiqueta: "Monto", alinear: "derecha", formato: "moneda" },
+            { campo: "estatus", etiqueta: "Lectura", formato: "estado" },
+          ],
+          filas: [
+            { fecha: "3 mar", proveedor: "Central de Abastos", categoria: "Cocina", monto: 2840, estatus: "Al día" },
+            { fecha: "5 mar", proveedor: "Distribuidora Sabores", categoria: "Cocina", monto: 1650, estatus: "Al día" },
+            { fecha: "7 mar", proveedor: "Cloro y Más", categoria: "Limpieza", monto: 980, estatus: "Al día" },
+            { fecha: "9 mar", proveedor: "Ferretería El Tornillo", categoria: "Mantto.", monto: 1420, estatus: "Al día" },
+            { fecha: "11 mar", proveedor: "(borroso)", categoria: "Sin clasificar", monto: "—", estatus: "Revisar" },
+          ],
+        },
+      ],
+      archivoSalida: "gastos-marzo.xlsx",
+    },
+    historial: [
+      { fecha: "16 mar 2026", archivo: "tickets-marzo (16 fotos)", duracion: "44 s", estado: "Correcta", por: "carmen" },
+      { fecha: "2 mar 2026", archivo: "tickets-feb (11 fotos)", duracion: "38 s", estado: "Correcta", por: "carmen" },
+    ],
+    cambios: [
+      { version: 1, titulo: "Construcción original", fecha: "10 mar 2026", tipo: "construccion" },
+      { version: 2, titulo: "Detectar y apartar las fotos borrosas", fecha: "14 mar 2026", tipo: "ajuste" },
+    ],
+  },
+  {
     id: "limpieza-contactos",
     nombre: "Limpieza de lista de contactos",
     descripcion:
@@ -722,6 +828,7 @@ export const specResumen = {
 // Ideas de ejemplo: chips clicables + placeholder animado del textarea.
 export const ejemplosIdea = [
   "Cada mes junto las ventas de mis 4 vendedores en un solo Excel y saco totales por persona… me toma toda una tarde.",
+  "Le tomo foto a los tickets de gasto y alguien los captura a mano en una tabla; quiero que se haga solo.",
   "Recibo facturas de muchos proveedores y necesito un consolidado con IVA, agrupado por RFC.",
   "Tengo una lista de contactos llena de duplicados y correos mal escritos que quiero limpiar.",
 ];

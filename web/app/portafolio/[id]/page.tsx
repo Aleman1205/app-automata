@@ -88,17 +88,21 @@ function ZonaArchivo({
         {cargado ? (
           <>
             <span className="font-mono text-sm font-semibold">
-              {entrada.id}-marzo.xlsx
+              {entrada.ejemploNombre ??
+                `${entrada.id}-marzo.${entrada.formatos?.[0] ?? "xlsx"}`}
             </span>
             <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-oliva">
-              Archivo listo
+              {entrada.multiple ? "Archivos listos" : "Archivo listo"}
             </span>
           </>
         ) : (
           <>
             <span className="text-sm font-semibold">{entrada.etiqueta}</span>
             <span className="text-xs text-sepia">
-              {entrada.ayuda ?? "Haz clic para elegir tu archivo"}
+              {entrada.ayuda ??
+                (entrada.multiple
+                  ? "Haz clic para elegir tus archivos"
+                  : "Haz clic para elegir tu archivo")}
               {entrada.formatos && (
                 <span className="ml-2 font-mono uppercase tracking-[0.12em]">
                   {entrada.formatos.join(" · ")}
