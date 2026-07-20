@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "preflight": "node spike/preflight.js",
+    "preflight:env": "node --env-file=spike/.env spike/preflight.js",
     "spike": "node spike/run.js",
+    "spike:env": "node --env-file=spike/.env spike/run.js",
     "datos": "node spike/generar-datos.js && node spike/generar-gastos.js",
     "datos:vitrales": "node spike/generar-gastos.js"
   },
