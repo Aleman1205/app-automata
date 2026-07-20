@@ -27,9 +27,12 @@ const enlacesApp = [
 ];
 
 const RUTAS_APP = ["/panel", "/portafolio", "/equipo", "/cuenta", "/nueva"];
+const RUTAS_LIMPIAS = ["/entrar"]; // sin topbar (login)
 
 export function Topbar() {
   const ruta = usePathname();
+  if (RUTAS_LIMPIAS.includes(ruta)) return null;
+
   const esApp = RUTAS_APP.some((r) => ruta === r || ruta.startsWith(r + "/"));
   const enlaces = esApp ? enlacesApp : enlacesVenta;
 
@@ -96,7 +99,7 @@ export function Topbar() {
             </>
           ) : (
             <>
-              <Boton href="/panel" variante="fantasma" tamano="sm">
+              <Boton href="/entrar" variante="fantasma" tamano="sm">
                 Entrar
               </Boton>
               <Boton href="/nueva" variante="acento" tamano="sm" icono="flecha">

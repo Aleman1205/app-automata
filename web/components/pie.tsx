@@ -9,11 +9,14 @@ import { Boton } from "@/components/ui/boton";
 import { Etiqueta } from "@/components/ui/etiqueta";
 
 const RUTAS_APP = ["/panel", "/portafolio", "/equipo", "/cuenta", "/nueva"];
+const RUTAS_LIMPIAS = ["/entrar"]; // sin pie (login)
 
 // Pie global. En el sitio de venta: CTA grande + enlaces + nombre gigante con
 // parallax. En la app (cliente activo): una barra compacta, sin CTA de venta.
 export function Pie() {
   const ruta = usePathname();
+  if (RUTAS_LIMPIAS.includes(ruta)) return null;
+
   const esApp = RUTAS_APP.some((r) => ruta === r || ruta.startsWith(r + "/"));
 
   const ref = useRef<HTMLElement>(null);
