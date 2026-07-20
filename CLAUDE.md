@@ -19,17 +19,17 @@ serie de agentes piensa, planea, programa, ejecuta".
 |---|---|
 | Planeación de arquitectura | **Completa** — 13 documentos, 2 curtidos con crítica adversarial |
 | Prototipo del front | **Funcional** — solo apariencia, datos falsos, para inversionistas |
-| Spike (prueba técnica) | **Corrido ✓ — 3/3 casos, ~$2.7/build real** (ver `spike/RESULTADO.md`) |
+| Spike (prueba técnica) | **Corrido ✓ — 3/3 casos, ~$1.8/build real** (ver `spike/RESULTADO.md`) |
 | Backend / producto real | **No existe todavía** |
 
 ## Los riesgos abiertos (no se resuelven con más papel)
 
 1. ~~**El spike sin correr.**~~ **RESUELTO (2026-07-20).** 3 casos a ciegas,
-   **3/3 aprobados**, costo real **~$2.7/build** (bajo la asunción de ~$3, muy
-   bajo el umbral de $5). Cubrió 3 dominios (dashboard, pivote, consolidación) y
-   uno se auto-corrigió (2 iteraciones). Detalle en `spike/RESULTADO.md`. Nota:
-   run.js subcuenta ~2× (no cuenta compute del sandbox); el número real se lee en
-   la consola.
+   **3/3 aprobados**, costo real **~$1.8/build** (consola: $5.29 los 3). Muy bajo
+   la asunción de ~$3 y el umbral de $5. Cubrió 3 dominios (dashboard, pivote,
+   consolidación) y uno se auto-corrigió (2 iteraciones). Detalle en
+   `spike/RESULTADO.md`. Nota: run.js subcuenta ~1.4×; el número real está en la
+   consola.
 2. **Cero clientes consultados.** Nadie ha confirmado que pagarían ni cuál es el
    dominio. Enseñar el prototipo a 5 personas con el problema. **Ahora es el
    riesgo #1 abierto.**

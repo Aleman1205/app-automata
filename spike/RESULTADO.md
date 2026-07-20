@@ -26,31 +26,43 @@ confirmó.
 3. **Amplitud.** Tres dominios distintos (reporte, pivote, consolidación
    administrativa) con el mismo pipeline. Sin una pantalla por dominio.
 
-## El costo: cuidado, run.js SUBCUENTA
+## El costo real: ~$1.8/build (facturado en consola)
 
 run.js reporta **$1.24/build promedio**, pero solo suma tokens de modelo del
-stream — **no cuenta el compute del sandbox** de Managed Agents.
+stream — **no cuenta todo** (compute del sandbox, etc.). El número de verdad
+está en la consola.
 
-**Calibración:** la 1ª corrida de Vitrales la consola la cobró en **$2.80**;
-run.js calculó **$1.36** para el mismo build. Factor ≈ **2×**.
+**Desglose facturado (consola, 2026-07-20, todos los builds del día):**
 
-→ **Costo real por build ≈ $2.5-2.8.** El número exacto se lee en la consola
-(saldo de créditos antes vs. después), no en run.js.
+| token_type | costo |
+|---|---|
+| input_cache_read | $1.74 |
+| input_cache_write_5m | $2.81 |
+| input_no_cache | $0.00 |
+| output | $3.54 |
+| **Total del día (4 builds)** | **$8.09** |
+
+Los 4 builds = la corrida n=1 (Vitrales, $2.80) + esta n=3. Entonces los 3 de
+esta corrida costaron **$8.09 − $2.80 = $5.29 → $1.76/build real.**
+
+**Factor de subcuenta de run.js ≈ 1.4×** ($5.29 real ÷ $3.73 que reportó run.js).
+Nota: `input_no_cache = $0` y mucho `cache_read` → el prompt caching funciona,
+lo que abarata los builds tibios en producción.
 
 Contra los umbrales:
-- Asunción de la arquitectura: ~$3/build. Real ~$2.5-2.8. ✅ **por debajo.**
-- "El negocio cierra": < $5. ✅ **holgado, incluso con el 2× de subcuenta.**
+- Asunción de la arquitectura: ~$3/build. Real **~$1.8**. ✅ **por debajo.**
+- "El negocio cierra": < $5. ✅ **muy holgado.**
 - "Para": > $10. Ni cerca.
 
-## Economía (con costo real ~$2.7/build)
+## Economía (con costo real ~$1.8/build)
 
 Build = costo **de una sola vez** por automatización; el Run no usa modelos.
 
-- Plan $499 MXN ≈ **$27 USD**. Si incluye ~3 automatizaciones: 3 × $2.7 =
-  **~$8** de build, una vez. Margen sano ya en el mes 1; los siguientes, casi
+- Plan $499 MXN ≈ **$27 USD**. Si incluye ~3 automatizaciones: 3 × $1.8 =
+  **~$5.40** de build, una vez. Margen sano ya en el mes 1; los siguientes, casi
   puro margen.
 - **A vigilar: los ajustes.** Cada automatización permite 3 reparaciones
-  ([docs/08](../docs/08-ciclo-de-vida.md)) y cada una vuelve a costar ~$2.7.
+  ([docs/08](../docs/08-ciclo-de-vida.md)) y cada una vuelve a costar ~$1.8.
   El caso facturas ya mostró que un ajuste puede pasar solo — bien —, pero la
   métrica *"% que agota los 3 ajustes"* sigue siendo la que hay que monitorear.
 
@@ -67,4 +79,5 @@ Build = costo **de una sola vez** por automatización; el Run no usa modelos.
 
 - **2026-07-20, n=1:** Vitrales, ✓ 6/6, **$2.80** (consola). La corrida imprimió
   `✗ $0.00` por un bug de descarga (archivo no-descargable) — ya arreglado.
-- **2026-07-20, n=3:** los 3 casos, ✅ 3/3, run.js $1.24 prom (~$2.7 real).
+- **2026-07-20, n=3:** los 3 casos, ✅ 3/3, run.js $1.24 prom, **$1.76/build
+  real** (consola: $5.29 los 3).
