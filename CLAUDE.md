@@ -19,18 +19,21 @@ serie de agentes piensa, planea, programa, ejecuta".
 |---|---|
 | Planeación de arquitectura | **Completa** — 13 documentos, 2 curtidos con crítica adversarial |
 | Prototipo del front | **Funcional** — solo apariencia, datos falsos, para inversionistas |
-| Spike (prueba técnica) | **Escrito, NO corrido** — falta API key de Anthropic |
+| Spike (prueba técnica) | **Corrido ✓ — $2.80/build, 6/6 criterios** (ver `spike/RESULTADO.md`) |
 | Backend / producto real | **No existe todavía** |
 
-## Los DOS riesgos abiertos (no se resuelven con más papel)
+## Los riesgos abiertos (no se resuelven con más papel)
 
-1. **El spike sin correr.** Todo el pricing descansa en que un build cueste
-   ~$3 USD. Si sale ~$10, los precios se vuelven pérdida. Se contesta en 3 días
-   con la API key. Es lo más importante pendiente.
+1. ~~**El spike sin correr.**~~ **RESUELTO (2026-07-20).** El build real costó
+   **$2.80** (asunción era ~$3) y pasó 6/6 a la primera. El pipeline real
+   (Builder + Verifier de Managed Agents) funcionó de punta a punta sobre datos
+   sucios. Detalle en `spike/RESULTADO.md`. **Salvedad: es n=1** — hay que correr
+   más casos para sostener el pricing (activar sintéticos en `spike/casos.js`).
 2. **Cero clientes consultados.** Nadie ha confirmado que pagarían ni cuál es el
-   dominio. Enseñar el prototipo a 5 personas con el problema.
+   dominio. Enseñar el prototipo a 5 personas con el problema. **Ahora es el
+   riesgo #1 abierto.**
 
-Más planeación de arquitectura es, a estas alturas, procrastinar estos dos.
+Más planeación de arquitectura es, a estas alturas, procrastinar el #2.
 
 ## Estructura del repo
 
