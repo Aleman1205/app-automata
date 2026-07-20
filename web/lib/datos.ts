@@ -128,7 +128,7 @@ export const automatizaciones: Automatizacion[] = [
         {
           tipo: "resumen",
           texto:
-            "En marzo vendiste $438,250 en 214 ventas, 12% más que el mes pasado. Ana Ruiz volvió a encabezar y el ticket promedio subió a $2,048. Las 12 ventas canceladas ya quedaron fuera.",
+            "En marzo vendiste $438,250 (subtotal) en 214 ventas: 12% más que el mes pasado y 104% de tu meta de $420,000. Ana Ruiz volvió a encabezar y el ticket promedio subió a $2,048. Las 12 canceladas ya quedaron fuera.",
         },
         {
           tipo: "metricas",
@@ -141,7 +141,14 @@ export const automatizaciones: Automatizacion[] = [
               nota: "12 canceladas excluidas",
             },
             { etiqueta: "Ventas procesadas", valor: 214, formato: "entero" },
-            { etiqueta: "Vendedores", valor: 4, formato: "entero" },
+            {
+              etiqueta: "Cumplimiento de meta",
+              valor: 104,
+              formato: "entero",
+              sufijo: "%",
+              tendencia: "+4% sobre la meta",
+              nota: "Meta: $420,000",
+            },
             {
               etiqueta: "Ticket promedio",
               valor: 2048,
@@ -609,26 +616,35 @@ export const automatizaciones: Automatizacion[] = [
           { valor: "producto", etiqueta: "% por producto" },
         ],
       },
+      {
+        id: "tipo",
+        tipo: "seleccion",
+        etiqueta: "¿Cómo les pagas?",
+        opciones: [
+          { valor: "externo", etiqueta: "Comisionistas externos (facturan)" },
+          { valor: "empleado", etiqueta: "Empleados (por nómina)" },
+        ],
+      },
     ],
     resultado: {
       bloques: [
         {
           tipo: "resumen",
           texto:
-            "Calculamos $14,163 en comisiones para 4 vendedores este periodo con el esquema escalonado. Ana Ruiz encabeza con $4,423. 2 ventas venían sin vendedor asignado y las apartamos para que las revises.",
+            "Calculamos $14,163 en comisiones brutas para 4 comisionistas externos con el esquema escalonado. Tras las retenciones de ISR e IVA ($2,927 a enterar al SAT), el neto a pagar es $13,502. 2 ventas venían sin vendedor y las apartamos para que las revises.",
         },
         {
           tipo: "metricas",
           items: [
-            { etiqueta: "Total en comisiones", valor: 14163, formato: "moneda" },
-            { etiqueta: "Vendedores", valor: 4, formato: "entero" },
-            { etiqueta: "Comisión promedio", valor: 3541, formato: "moneda" },
+            { etiqueta: "Comisión bruta", valor: 14163, formato: "moneda" },
             {
-              etiqueta: "Base del cálculo",
-              valor: 438250,
+              etiqueta: "Retenciones ISR + IVA",
+              valor: 2927,
               formato: "moneda",
-              nota: "Ventas del periodo",
+              nota: "A enterar al SAT",
             },
+            { etiqueta: "Neto a pagar", valor: 13502, formato: "moneda" },
+            { etiqueta: "Comisionistas", valor: 4, formato: "entero" },
           ],
         },
         {
@@ -656,13 +672,14 @@ export const automatizaciones: Automatizacion[] = [
             { campo: "vendedor", etiqueta: "Vendedor" },
             { campo: "ventas", etiqueta: "Ventas", alinear: "derecha", formato: "moneda" },
             { campo: "regla", etiqueta: "Regla aplicada" },
-            { campo: "comision", etiqueta: "Comisión", alinear: "derecha", formato: "moneda" },
+            { campo: "comision", etiqueta: "Comisión bruta", alinear: "derecha", formato: "moneda" },
+            { campo: "estatus", etiqueta: "Pago", formato: "estado" },
           ],
           filas: [
-            { vendedor: "Ana Ruiz", ventas: 128450, regla: "3% + 5% excedente", comision: 4423 },
-            { vendedor: "Luis Mora", ventas: 117300, regla: "3% + 5% excedente", comision: 3865 },
-            { vendedor: "Carmen Díaz", ventas: 104980, regla: "3% + 5% excedente", comision: 3249 },
-            { vendedor: "Jorge Peña", ventas: 87520, regla: "3% (primer tramo)", comision: 2626 },
+            { vendedor: "Ana Ruiz", ventas: 128450, regla: "3% + 5% excedente", comision: 4423, estatus: "Pagado" },
+            { vendedor: "Luis Mora", ventas: 117300, regla: "3% + 5% excedente", comision: 3865, estatus: "Pagado" },
+            { vendedor: "Carmen Díaz", ventas: 104980, regla: "3% + 5% excedente", comision: 3249, estatus: "Pendiente" },
+            { vendedor: "Jorge Peña", ventas: 87520, regla: "3% (primer tramo)", comision: 2626, estatus: "Pendiente" },
           ],
         },
       ],

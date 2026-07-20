@@ -119,3 +119,57 @@ estándar y sus combinaciones; las excepciones caso-por-caso caen en "a revisar"
 - **Comisiones:** la más fácil de cerrar (intake acotado, solo depende del CSV).
 - **Facturas (XML):** el mayor techo de valor y, con el XML, también segura.
 - **Conciliación:** muy relatable; su calidad vive de la referencia compartida.
+
+---
+
+## Primitivos fiscales MX (tratarlos como tipos del sistema)
+
+Se repiten en las 3 y el Builder debe manejarlos siempre:
+
+- **RFC** — validar 12 caracteres (persona moral) vs. 13 (persona física).
+- **Subtotal / IVA / Total** — **nunca asumir si el monto trae o no IVA.** El
+  total de un export suele venir con IVA; el análisis de ventas se hace sobre
+  **subtotal**. IVA general **16%**, **8%** en frontera norte/sur.
+- **UUID (folio fiscal CFDI)** — llave para deduplicar facturas.
+- **Formato peso con centavos** (`$1,234,567.89`) — el descuadre de centavos por
+  IVA/comisión es la fuente #1 de falsos "no cuadra".
+- **ClaveProdServ (SAT)** — si el insumo es CFDI, ya viene; sirve para agrupar.
+
+### Métricas MUST-HAVE por reporte (no nice-to-have)
+
+- **Ventas:** ventas totales (subtotal) · **% cumplimiento vs. objetivo** ·
+  variación vs. periodo anterior · ticket promedio. *(Una cifra de ventas sola,
+  sin objetivo, no dice nada.)*
+- **Conciliación:** saldo libros vs. banco + diferencia neta · # y monto no
+  conciliado (por lado) · % conciliado · monto de diferencias por captura/comisión.
+- **Comisiones:** total bruto **y neto post-retenciones** · comisión por vendedor
+  · # en "a revisar" · **total de retenciones (ISR+IVA) a enterar al SAT**.
+
+### Retenciones a comisionistas (el detalle que casi todos omiten)
+
+El intake **debe preguntar empleado vs. comisionista externo** — cambia todo:
+
+- **Comisionista externo** (factura honorarios): del neto se restan retenciones.
+  - **ISR**: 10% (persona física, Art. 106 LISR); **1.25%** si está en RESICO
+    y cobra de persona moral (Art. 113-J).
+  - **IVA retenido**: siempre **2/3 del IVA** = 16% × 2/3 = **10.6667%**
+    (5.3333% en frontera).
+  - **Neto = comisión + IVA − IVA retenido − ISR retenido.** (Coincide con el
+    total del CFDI que emite el comisionista.)
+- **Empleado**: la comisión va **por nómina** (ISR por tarifa, sin IVA). Sin
+  retención de honorarios.
+
+### Reason codes canónicos (bucket "a revisar")
+
+- **Ventas:** sin vendedor · producto sin ClaveProdServ · RFC faltante/ inválido
+  · Total ≠ Subtotal+IVA · fecha fuera de periodo · duplicado (UUID) · moneda ≠ MXN.
+- **Conciliación** (partidas conciliatorias clásicas): depósito en tránsito ·
+  cheque pendiente de cobro · cargo/abono del banco no correspondido · comisión
+  bancaria · intereses · cheque sin fondos · error del banco · error de captura
+  (mismo folio, monto distinto) · duplicado. **Regla de oro:** las no
+  correspondidas se arrastran ("roll forward") hasta resolverse; las conciliadas
+  se etiquetan con folio de auditoría.
+- **Comisiones:** venta sin vendedor · producto sin regla · monto fuera de todos
+  los tiers · vendedor sin RFC/régimen · devolución posterior al corte (clawback)
+  · venta no cobrada (si paga sobre cobrado) · comisión con adeudo del vendedor
+  · excepción manual.
