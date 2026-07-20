@@ -51,21 +51,21 @@ export function Pie() {
             </div>
             <div className="flex flex-col gap-2.5">
               <Etiqueta className="mb-1">Compañía</Etiqueta>
-              <a href="#" className="text-sepia transition-colors hover:text-tinta">
+              <Link href="/sobre" className="text-sepia transition-colors hover:text-tinta">
                 Sobre nosotros
-              </a>
-              <a href="#" className="text-sepia transition-colors hover:text-tinta">
+              </Link>
+              <Link href="/contacto" className="text-sepia transition-colors hover:text-tinta">
                 Contacto
-              </a>
+              </Link>
             </div>
             <div className="flex flex-col gap-2.5">
               <Etiqueta className="mb-1">Legal</Etiqueta>
-              <a href="#" className="text-sepia transition-colors hover:text-tinta">
+              <Link href="/privacidad" className="text-sepia transition-colors hover:text-tinta">
                 Privacidad
-              </a>
-              <a href="#" className="text-sepia transition-colors hover:text-tinta">
+              </Link>
+              <Link href="/terminos" className="text-sepia transition-colors hover:text-tinta">
                 Términos
-              </a>
+              </Link>
             </div>
           </nav>
         </div>
