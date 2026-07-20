@@ -9,10 +9,10 @@
 // los números, se tira.
 //
 //   npm install
-//   npm run datos          # genera archivos de prueba
+//   npm run datos          # genera los datos de prueba (incluye el .xlsx de Vitrales)
 //   export ANTHROPIC_API_KEY=sk-ant-...
-//   npm run spike          # los 3 casos
-//   npm run spike -- ventas-mensual    # uno solo
+//   npm run spike          # todos los casos activos de spike/casos.js
+//   npm run spike -- dashboard-popularidad    # uno solo, por id
 
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
@@ -278,12 +278,15 @@ console.log(`  Costo por build:  $${(costoTotal / resultados.length).toFixed(2)}
 console.log(`  Tiempo por build: ${minProm.toFixed(1)} min promedio`);
 
 console.log(`
-  Cómo leerlo:
-    3/3 y menos de $5  →  el modelo de negocio cierra. Arranca la Fase 1.
-    2/3                →  revisa qué falló: ¿el rubric era vago, o el agente
-                          se equivocó? Casi siempre es el rubric.
-    0-1/3, o >$10      →  para. Acota el producto a un tipo de proceso más
-                          estrecho, o replantea antes de construir el MVP.
+  Cómo leerlo (${resultados.length} caso${resultados.length === 1 ? "" : "s"}):
+    todo ✓ y < $5/build   →  el modelo de negocio cierra. Arranca la Fase 1.
+    alguna falla suelta    →  revisa qué falló: ¿el rubric era vago, o el agente
+                             se equivocó? Casi siempre es el rubric.
+    la mayoría ✗, o >$10   →  para. Acota el producto a un tipo de proceso más
+                             estrecho, o replantea antes de construir el MVP.
+
+  Con pocos casos el "$/build" es apenas una señal — para sostener el pricing
+  conviene correr varios (activa más en spike/casos.js).
 
   Abre spike/salidas/*/ y revisa los archivos con tus propios ojos. Que el
   Verifier diga "aprobado" no es lo mismo que esté bien.

@@ -14,9 +14,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ExcelJS from "exceljs";
 
-const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "datos");
+const AQUI = path.dirname(fileURLToPath(import.meta.url));
+const DIR = path.join(AQUI, "datos");
+// El catálogo (nombres del menú, sin cifras) vive versionado en spike/, no en
+// datos/ (que está gitignoreado). Así el spike se reproduce en un clon limpio.
 const catalogo = JSON.parse(
-  fs.readFileSync(path.join(DIR, "_catalogo.json"), "utf8"),
+  fs.readFileSync(path.join(AQUI, "catalogo.json"), "utf8"),
 );
 
 // PRNG determinista (mulberry32) — sin Math.random, resultados reproducibles.
@@ -103,6 +106,7 @@ for (const [fam, v] of Object.entries(porFam)) {
 // Gran total de la segunda tabla
 ws.getRow(r).values = ["VIT01", "", "", totCant, "", "", "100.00 %", totCant, "100.00 %", +totIng.toFixed(2), "100.00 %"];
 
+fs.mkdirSync(DIR, { recursive: true }); // datos/ está gitignoreado: puede no existir
 await wb.xlsx.writeFile(path.join(DIR, "gastos.xlsx"));
 
 // --- Reporte de los números correctos (para escribir/validar el rubric) ---

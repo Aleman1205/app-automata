@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "spike": "node spike/run.js",
-    "datos": "node spike/generar-datos.js"
+    "datos": "node spike/generar-datos.js && node spike/generar-gastos.js",
+    "datos:vitrales": "node spike/generar-gastos.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3"

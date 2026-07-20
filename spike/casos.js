@@ -63,8 +63,8 @@ export const casos = [
         "La utilidad total es 26,100,916.43 (± 0.5 %) y el margen redondea a 49.0 %.",
         "Hay 44 familias (± 2), y la suma del ingreso de todas las familias es " +
           "igual al ingreso total (± 0.5 %) — consistencia interna.",
-        "El top de productos por ingreso encabeza con EXTRA RAJAS POBLANAS " +
-          "C/QUESO (~425,783) y TACOS DE FIDEO SECO (~410,761).",
+        "El top de productos por ingreso encabeza con TACO DE FILETE (1 PZ) " +
+          "(~425,783) y JUGO DE TOMATE (~410,761).",
       ],
     },
   },
