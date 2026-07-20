@@ -582,6 +582,101 @@ export const automatizaciones: Automatizacion[] = [
     ],
   },
   {
+    id: "comisiones-ventas",
+    nombre: "Cálculo de comisiones por vendedor",
+    descripcion:
+      "Toma tus ventas del periodo y calcula la comisión de cada vendedor con tu esquema, y aparta las ventas sin vendedor para que las revises.",
+    estado: "lista",
+    creada: "6 mar 2026",
+    ejecuciones: 5,
+    ultimaEjecucion: "hace 2 días",
+    ajustesUsados: 0,
+    entradas: [
+      {
+        id: "ventas",
+        tipo: "archivo",
+        etiqueta: "Tu archivo de ventas del periodo",
+        ayuda: "El export de tu sistema, en Excel o CSV",
+        formatos: ["xlsx", "csv"],
+      },
+      {
+        id: "esquema",
+        tipo: "seleccion",
+        etiqueta: "¿Cómo calculas la comisión?",
+        opciones: [
+          { valor: "escalonado", etiqueta: "Escalonado por volumen" },
+          { valor: "plano", etiqueta: "% plano por vendedor" },
+          { valor: "producto", etiqueta: "% por producto" },
+        ],
+      },
+    ],
+    resultado: {
+      bloques: [
+        {
+          tipo: "resumen",
+          texto:
+            "Calculamos $14,163 en comisiones para 4 vendedores este periodo con el esquema escalonado. Ana Ruiz encabeza con $4,423. 2 ventas venían sin vendedor asignado y las apartamos para que las revises.",
+        },
+        {
+          tipo: "metricas",
+          items: [
+            { etiqueta: "Total en comisiones", valor: 14163, formato: "moneda" },
+            { etiqueta: "Vendedores", valor: 4, formato: "entero" },
+            { etiqueta: "Comisión promedio", valor: 3541, formato: "moneda" },
+            {
+              etiqueta: "Base del cálculo",
+              valor: 438250,
+              formato: "moneda",
+              nota: "Ventas del periodo",
+            },
+          ],
+        },
+        {
+          tipo: "callout",
+          tono: "alerta",
+          titulo: "2 ventas sin vendedor asignado",
+          texto:
+            'No pudimos calcularles comisión porque no traían vendedor. Las dejamos en "a revisar" para que las asignes y se recalculen.',
+        },
+        {
+          tipo: "ranking",
+          titulo: "Comisión por vendedor",
+          formato: "moneda",
+          datos: [
+            { etiqueta: "Ana Ruiz", valor: 4423 },
+            { etiqueta: "Luis Mora", valor: 3865 },
+            { etiqueta: "Carmen Díaz", valor: 3249 },
+            { etiqueta: "Jorge Peña", valor: 2626 },
+          ],
+        },
+        {
+          tipo: "tabla",
+          titulo: "Desglose por vendedor",
+          columnas: [
+            { campo: "vendedor", etiqueta: "Vendedor" },
+            { campo: "ventas", etiqueta: "Ventas", alinear: "derecha", formato: "moneda" },
+            { campo: "regla", etiqueta: "Regla aplicada" },
+            { campo: "comision", etiqueta: "Comisión", alinear: "derecha", formato: "moneda" },
+          ],
+          filas: [
+            { vendedor: "Ana Ruiz", ventas: 128450, regla: "3% + 5% excedente", comision: 4423 },
+            { vendedor: "Luis Mora", ventas: 117300, regla: "3% + 5% excedente", comision: 3865 },
+            { vendedor: "Carmen Díaz", ventas: 104980, regla: "3% + 5% excedente", comision: 3249 },
+            { vendedor: "Jorge Peña", ventas: 87520, regla: "3% (primer tramo)", comision: 2626 },
+          ],
+        },
+      ],
+      archivoSalida: "comisiones-marzo.xlsx",
+    },
+    historial: [
+      { fecha: "16 mar 2026", archivo: "ventas-marzo.xlsx", duracion: "26 s", estado: "Correcta", por: "ana" },
+      { fecha: "1 mar 2026", archivo: "ventas-febrero.xlsx", duracion: "24 s", estado: "Correcta", por: "ana" },
+    ],
+    cambios: [
+      { version: 1, titulo: "Construcción original", fecha: "6 mar 2026", tipo: "construccion" },
+    ],
+  },
+  {
     id: "limpieza-contactos",
     nombre: "Limpieza de lista de contactos",
     descripcion:
