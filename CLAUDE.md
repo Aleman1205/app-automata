@@ -83,6 +83,10 @@ spike/             prueba técnica — Node + npm (raíz)
 - **Equipo:** cuenta del negocio, portafolio compartido, **2 roles**
   (admin crea/ajusta/invita/factura, operador solo ejecuta).
 - **Marca "Automata" es provisional** (se cambia en `web/lib/marca.ts`).
+- **No es Zapier.** Automata NO es automatización de integración (conectar apps
+  A→B con disparadores); es "desastre → resultado terminado y verificado", a
+  demanda, para PyME no-técnica. La respuesta a "¿esto no es Zapier?" vive en
+  `docs/posicionamiento.md` (munición de pitch).
 
 ## Cómo correr
 
