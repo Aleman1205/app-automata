@@ -105,6 +105,12 @@ sobra para crear todo y ajustarlo un par de veces, y corta en seco a los tres
 casos de arriba. Peor escenario del plan Base: 6 × $3 = **$18 sobre $30**. El
 margen no baja del 40% ni en el mes más caro.
 
+> **Decisión final** ([docs/08](08-ciclo-de-vida.md) §7): el contador visible
+> se sustituyó por el modelo de 3 ajustes por automatización, y esta cifra
+> (2× espacios/mes) sobrevive como **tope interno anti-abuso** aplicado al
+> aprobar la entrevista ([docs/10](10-intake.md) §8). La aritmética de este
+> documento sigue siendo el techo de costo real.
+
 Y un regalo que te sale barato y le encanta al cliente:
 
 > **Los ajustes durante los primeros 30 días no cuentan.**

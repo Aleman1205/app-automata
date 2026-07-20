@@ -35,9 +35,9 @@ progreso. Solo ve el resultado en su portafolio.
 Toda la UI son cuatro pantallas:
 
 1. **Nueva automatización** — el cliente escribe su idea.
-2. **Entrevista** — un agente le hace 3–5 preguntas de opción múltiple, generadas
-   a partir de su idea, y le enseña un resumen de lo que va a construir.
-   El cliente aprueba.
+2. **Entrevista** — un agente le hace 3–4 preguntas de opción múltiple por
+   ronda (máximo dos rondas), generadas a partir de su idea, y le enseña un
+   resumen de lo que va a construir. El cliente aprueba o corrige.
 3. **Portafolio** — tarjetas: `Generando…` / `Lista` / `Falló`.
 4. **Detalle** — abrir una automatización lista, meter sus datos, Ejecutar,
    descargar resultado, historial.
@@ -193,9 +193,10 @@ persona que hace este proceso hoy a mano? Si no, está mal escrita.
 
 Dos reglas más:
 
-1. **Adaptativas, no diez fijas.** El límite de 10 es un techo, no una meta. Si
-   con 3 preguntas el agente ya puede escribir el spec, cierra. Preguntar de
-   más para "llegar a diez" hace que el producto se sienta burocrático.
+1. **Adaptativas, no fijas.** El techo son 2 rondas de 3–4 preguntas (máximo
+   8; lo normal, 3–5 — [docs/10](docs/10-intake.md) §2). Si con 3 preguntas el
+   agente ya puede escribir el spec, cierra. Preguntar de más para "llenar la
+   ronda" hace que el producto se sienta burocrático.
 2. **Pide un archivo de ejemplo, no lo describas.** Un campo "sube una factura
    de ejemplo" vale más que cinco preguntas sobre el formato, y ese archivo
    entra al build como caso de prueba real.
@@ -261,7 +262,8 @@ Eso define el pricing: cobrar por automatización creada, no por ejecución.
 users / organizations       plan, cuota_automatizaciones, usadas
 intakes           id, org_id, transcripción, spec (JSON), aprobado_at
 automations       id, org_id, intake_id, nombre_generado, status
-                  status: interviewing | queued | building | ready | failed
+                  status: queued | building | ready | failed
+                  (la entrevista vive en intakes — docs/10)
                   current_version_id
 versions          id, automation_id, código, input_manifest (JSON Schema),
                   rubric, build_session_id, tests_passed
@@ -272,8 +274,10 @@ runs              id, version_id, inputs, outputs, status, logs, duración, cost
 agente barato (Haiku) a partir del prompt, para que la tarjeta diga
 "Limpieza de facturas mensuales" y no las primeras 40 letras del texto.
 
-**La cuota del plan se cuenta en `automations` con status `ready`.** Un build
-fallido no consume cuota — si no, el cliente paga por algo que no recibió.
+**La cuota se reserva al aprobar la entrevista** y cuenta espacios
+comprometidos (`queued`+`building`+`ready`); `failed` y `archived` liberan
+([docs/10](docs/10-intake.md) §9). Un build fallido no consume cuota — si no,
+el cliente paga por algo que no recibió.
 
 `input_manifest` es la pieza que hace todo funcionar: el agente de build declara
 qué necesita el proceso (un CSV con estas columnas, un PDF, un texto), y el

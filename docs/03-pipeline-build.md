@@ -10,26 +10,24 @@ más delicada del sistema.
 
 ## 1. Máquina de estados
 
+La entrevista vive completa en la tabla `intakes` ([docs/10](10-intake.md) §9)
+— la fila de `automations` **nace al aprobar**, directamente en `queued`:
+
 ```
-  interviewing ──► queued ──► building ──┬──► validating ──► ready
-       │                         │       │         │           │
-       │                         │       │         └──► failed │
-       ▼                         ▼       ▼                ▲    ▼
-   abandoned                   failed ───┴────────────────┘  archived
-                                  │
-                                  └──► queued   (reintento, gratis)
+  queued ──► building ──┬──► validating ──► ready ──► (archived)
+                        │         │
+                        │         └──► failed ──► queued  (reintento, gratis)
+                        └──► failed
 ```
 
-| Estado | Quién lo activa | Cuota | Visible como |
+| Estado | Quién lo activa | Cuota (espacio comprometido) | Visible como |
 |---|---|---|---|
-| `interviewing` | El cliente empieza la entrevista | No | (no aparece en el portafolio) |
-| `abandoned` | Barrido: 7 días sin aprobar | No | — |
-| `queued` | El cliente aprueba el spec | No | «En cola» |
-| `building` | El worker toma el trabajo | No | «Generando…» |
-| `validating` | Llegó el artefacto, corre la puerta de calidad | No | «Generando…» |
+| `queued` | El cliente aprueba el spec | **Sí** (reserva) | «En cola» |
+| `building` | El worker toma el trabajo | **Sí** | «Generando…» |
+| `validating` | Llegó el artefacto, corre la puerta de calidad | **Sí** | «Generando…» |
 | `ready` | Pasó la puerta de calidad | **Sí** | «Lista» |
-| `failed` | Falló en cualquier punto | No | «No se pudo — reintentar» |
-| `archived` | El cliente la borra | No | — |
+| `failed` | Falló en cualquier punto | No — libera | «No se pudo — reintentar» |
+| `archived` | El cliente la borra | No — libera | — |
 
 Tres reglas que evitan la mayoría de los problemas:
 
@@ -37,7 +35,12 @@ Tres reglas que evitan la mayoría de los problemas:
 distinguir "el agente sigue trabajando" de "el agente terminó y estamos
 comprobando". Cuando algo se atasque, esa diferencia te dice dónde mirar.
 
-**La cuota se cobra al entrar en `ready`.** En ningún otro sitio.
+**La cuota es de espacios comprometidos, reservados al aprobar.** El check
+ocurre en la transacción de aprobación del intake, con lock por organización,
+y cuenta `queued + building + validating + ready` ([docs/10](10-intake.md)
+§9). `failed` y `archived` liberan el espacio — un build fallido nunca deja
+al cliente pagando por nada. Sin la reserva, N aprobaciones con builds en
+vuelo pasan todas el check y revientan la cuota.
 
 **Al cliente `building` y `validating` le suenan igual.** Los estados internos
 son para ti; él ve tres cosas: Generando, Lista, No se pudo.
@@ -92,6 +95,10 @@ cada 10 min:
     estado = sessions.retrieve(build.session_id).status
     si idle o terminated  → continuar el pipeline desde el paso 6
     si running            → dejarlo, pero si supera 60 min → failed
+
+  para cada automation en `queued` sin job asociado con más de 10 min:
+    re-despachar desde la fila outbox (docs/10 §9) — el commit pudo
+    ocurrir sin que el encolado llegara a Inngest
 ```
 
 Sin ese barrido, un webhook perdido es una automatización muerta y un cliente

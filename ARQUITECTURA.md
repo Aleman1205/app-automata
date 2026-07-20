@@ -97,25 +97,26 @@ que se salga, se mata.
 
 Una automatización solo puede estar en uno de estos estados:
 
+La entrevista vive en su propia tabla (`intakes`, [docs/10](docs/10-intake.md));
+la automatización nace al aprobar, ya en `queued`:
+
 ```
-  interviewing ──► queued ──► building ──┬──► ready ──► (archived)
-       │                          │      │
-       │                          │      └──► failed ──► queued  (reintento)
-       └──► abandoned             └──► failed
+  queued ──► building ──┬──► ready ──► (archived)
+                        │
+                        └──► failed ──► queued  (reintento gratis)
 ```
 
-| Estado | Significa | Consume cuota |
+| Estado | Significa | Compromete cuota |
 |---|---|---|
-| `interviewing` | El cliente está en la entrevista | No |
-| `abandoned` | Se fue sin terminar (limpiar a los 7 días) | No |
-| `queued` | Aprobado, esperando worker | No |
-| `building` | Agentes trabajando | No |
+| `queued` | Aprobado, esperando worker | **Sí** (reserva) |
+| `building` | Agentes trabajando | **Sí** |
 | `ready` | Usable | **Sí** |
-| `failed` | No se pudo. Reintento gratis. | No |
-| `archived` | El cliente la borró (soft delete) | No |
+| `failed` | No se pudo. Reintento gratis. | No — libera |
+| `archived` | El cliente la borró (soft delete) | No — libera |
 
-**La cuota se cobra al llegar a `ready`, nunca antes.** Si el cliente paga por
-un build que falló, se va.
+**La cuota se reserva al aprobar la entrevista** (con lock por organización,
+[docs/10](docs/10-intake.md) §9) y se libera si el build falla o se archiva.
+Si el cliente paga por un build que falló, se va.
 
 Las ejecuciones tienen su propia máquina, más simple:
 `queued → running → succeeded | failed | timeout`.

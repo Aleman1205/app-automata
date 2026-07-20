@@ -182,9 +182,17 @@ entran como contexto, así que la nueva parte del trabajo hecho.
 
 ## 7. Qué cambia en el pricing
 
-Este modelo **sustituye** el contador de generaciones que propuse en
-[docs/06](06-pricing.md) §4. Ya no hace falta: el límite vive en la
+Este modelo **sustituye** el contador de generaciones *visible* que propuse en
+[docs/06](06-pricing.md) §4: el límite que el cliente ve vive en la
 automatización, no en el mes.
+
+Pero el contador no desaparece del todo — se vuelve **interno**: sin él, el
+"reciclador" de docs/06 §3 regresa por la puerta de atrás (archivar libera
+espacio → crear otra → 1 build + 3 ajustes nuevos, en bucle). Queda como tope
+invisible de **builds iniciados por mes = 2× los espacios del plan** (Base 6,
+Pro 12, Equipo 20), aplicado al aprobar la entrevista
+([docs/10](10-intake.md) §8). Nadie normal lo toca; quien lo toque ve "has
+creado muchas automatizaciones este mes — escríbenos si necesitas más".
 
 ```
 Plan Base — $30/mes
