@@ -218,22 +218,35 @@ async function correrCaso(caso, { env, agent }) {
   await new Promise((r) => setTimeout(r, 3000));
 
   const destino = path.join(AQUI, "salidas", caso.id);
-  fs.mkdirSync(destino, { recursive: true });
   const archivos = [];
-  const lista = await client.beta.files.list({
-    scope_id: session.id,
-    betas: ["managed-agents-2026-04-01"],
-  });
-  for (const f of lista.data ?? []) {
-    const resp = await client.beta.files.download(f.id);
-    const nombre = path.basename(f.filename);
-    fs.writeFileSync(path.join(destino, nombre), Buffer.from(await resp.arrayBuffer()));
-    archivos.push(nombre);
+  const omitidos = [];
+  // La descarga de outputs es BEST-EFFORT: si falla, NO debe tirar la corrida ni
+  // borrar el veredicto/costo que ya se capturaron. Algunos archivos de la sesión
+  // (p. ej. la entrada montada) no son descargables y devuelven 400.
+  try {
+    fs.mkdirSync(destino, { recursive: true });
+    const lista = await client.beta.files.list({
+      scope_id: session.id,
+      betas: ["managed-agents-2026-04-01"],
+    });
+    for (const f of lista.data ?? []) {
+      try {
+        const resp = await client.beta.files.download(f.id);
+        const nombre = path.basename(f.filename);
+        fs.writeFileSync(path.join(destino, nombre), Buffer.from(await resp.arrayBuffer()));
+        archivos.push(nombre);
+      } catch {
+        omitidos.push(path.basename(f.filename || f.id));
+      }
+    }
+  } catch (e) {
+    log(`  ⚠ no se pudieron bajar los outputs (${e.message}) — el veredicto sigue válido`);
   }
 
   const minutos = (Date.now() - inicio) / 60_000;
   log(`${aprobado ? "✓ APROBADO" : `✗ ${motivo}`} · ${minutos.toFixed(1)} min · $${costo.toFixed(2)}`);
   log(`Archivos en spike/salidas/${caso.id}/: ${archivos.join(", ") || "ninguno"}`);
+  if (omitidos.length) log(`  (omitidos por no-descargables: ${omitidos.join(", ")})`);
 
   return { caso, ok: aprobado, motivo, minutos, costo, iteraciones, archivos };
 }
