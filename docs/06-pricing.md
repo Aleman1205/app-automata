@@ -185,17 +185,41 @@ la mesa con $30. Si dicen "$10", el problema no es el precio, es el segmento.
 
 ---
 
-## 8. Recomendación
+## 8. Recomendación — precios para México (MXN)
+
+**Mercado objetivo: PyMEs mexicanas.** Los precios van en pesos, no en dólares
+convertidos. Todo el análisis de arriba (en USD) sigue valiendo como *lógica*;
+lo que cambia es la moneda y una tensión nueva que la moneda revela.
+
+**La tensión estructural: cobras en pesos, pagas en dólares.** Tus costos son
+en USD (Anthropic, Vercel, blob) — un build ~$3 USD ≈ **$52 MXN**, infra fija
+~$70–125 USD/mes ≈ **$1,225–2,190 MXN/mes**. Tu mercado paga en pesos y con
+menor poder adquisitivo. Eso comprime el margen más que en un negocio 100%
+mexicano, y obliga a poner el piso de precio *arriba* del costo USD, no donde
+el instinto local diría. (Tipo de cambio de referencia: ~17.5 MXN/USD, jul 2026.)
+
+**Ancla de mercado** (Alegra, líder de facturación/contabilidad PyME): la
+mayoría paga $138–$599 MXN/mes por software administrativo, y hay mercado hasta
+$1,999 MXN en el tier serio. Nuestro rango se posiciona un escalón arriba: no
+vendemos plantillas, vendemos automatización a la medida.
 
 | | Base | Pro | Equipo |
 |---|---|---|---|
-| Precio | $30 | $50 | $100 |
+| **Precio** | **$499 MXN** | **$999 MXN** | **$1,999 MXN** |
+| Anual (2 meses gratis, por mes) | $415 | $832 | $1,665 |
+| ≈ USD | ~$28 | ~$57 | ~$114 |
 | Automatizaciones activas | 3 | 6 | 10 |
 | Generaciones al mes | 6 | 12 | 20 |
 | Ejecuciones | 500/mes* | 2,000/mes* | 10,000/mes* |
 | Ajustes primeros 30 días | Gratis | Gratis | Gratis |
 | Usuarios | 1 | 3 | 10 |
 | Exportar código | — | — | Sí |
+
+**Márgenes en pesos** (peor caso plan Base, 3 automatizaciones × 4 builds ×
+$52 MXN = $624 MXN de costo variable el mes 1): pérdida de ~$125 MXN **solo si
+el cliente agota todo el primer mes** — improbable. Desde el mes 2 el costo
+variable casi desaparece y quedan ~$499 MXN limpios. Es costo de adquisición,
+se recupera al segundo mes — igual que en la versión USD, pero más apretado.
 
 \* **Con corte duro, no solo alarma** — corrección de seguridad
 ([docs/11](11-threat-model.md) §8). Mientras el Run viva en CMA (~$0.30/
@@ -207,12 +231,18 @@ tope puede subir mucho o volverse "uso justo" real — pero el corte se queda,
 porque quitarlo del código es más difícil que relajar el número. Los límites
 exactos se afinan con datos de uso reales.
 
-**Primera automatización: $15, pago único.**
+**Primera automatización: $249 MXN, pago único.**
+
+> **Provisional.** Estos números son un punto de partida honesto, no la palabra
+> final. El piso real lo fija el **costo por build**, que sale del spike: a
+> $52 MXN/build el margen aguanta; a $175 MXN/build (si el build cuesta $10 USD)
+> el peor caso del plan Base salta a ~$2,100 MXN y estos precios se vuelven
+> pérdida. Por eso el spike no es opcional — define el piso del pricing.
 
 Tres cosas que hacer antes de publicar estos números:
 
-1. Correr el spike y confirmar que el build cuesta ~$3 y no ~$15. **Todo este
-   documento se apoya en ese número.**
+1. Correr el spike y confirmar que el build cuesta ~$3 USD y no ~$10. **Todo
+   este documento se apoya en ese número.**
 2. Preguntarle a cinco clientes potenciales qué pagarían.
 3. Decidir el límite de generaciones — es la pieza que evita el desangrado.
 

@@ -75,14 +75,15 @@ export default function Precios() {
                   Estrena con una sola automatización por
                 </span>{" "}
                 <Contador
-                  valor={15}
+                  valor={249}
                   formato="entero"
                   prefijo="$"
                   className="font-semibold"
                 />
                 <span className="text-sepia">
-                  , pago único. Si te convence — y te va a convencer — cualquier
-                  plan te espera.
+                  {" "}
+                  MXN, pago único. Si te convence — y te va a convencer —
+                  cualquier plan te espera.
                 </span>
               </p>
               <Boton

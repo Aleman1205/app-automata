@@ -57,7 +57,7 @@ export function TarjetaPlan({
             oscura ? "text-crema/60" : "text-sepia"
           }`}
         >
-          /mes
+          MXN /mes
         </span>
       </div>
 

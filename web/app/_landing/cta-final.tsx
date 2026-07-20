@@ -19,7 +19,7 @@ export function CtaFinal() {
             <Reveal retraso={0.15}>
               <p className="mx-auto mt-5 max-w-md text-base leading-relaxed text-linea md:text-lg">
                 Tu primera automatización por{" "}
-                <Contador valor={15} formato="entero" prefijo="$" />. Sin
+                <Contador valor={249} formato="entero" prefijo="$" /> MXN. Sin
                 suscripción, sin riesgo.
               </p>
             </Reveal>

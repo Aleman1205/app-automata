@@ -9,5 +9,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3"
+  },
+  "devDependencies": {
+    "exceljs": "^4.4.0"
   }
 }

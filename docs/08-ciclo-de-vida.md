@@ -194,8 +194,13 @@ Pro 12, Equipo 20), aplicado al aprobar la entrevista
 ([docs/10](10-intake.md) §8). Nadie normal lo toca; quien lo toque ve "has
 creado muchas automatizaciones este mes — escríbenos si necesitas más".
 
+> Los montos de esta sección están en USD como ilustración de la *lógica* del
+> margen. Los precios de venta reales van en pesos ($499 / $999 / $1,999 MXN,
+> [docs/06](06-pricing.md) §8) — el razonamiento de abajo no cambia, solo la
+> moneda, y en pesos el margen es algo más apretado por la tensión costos-USD.
+
 ```
-Plan Base — $30/mes
+Plan Base — $30/mes (ilustrativo; real: $499 MXN)
   3 automatizaciones activas
   Cada una: 1 construcción + hasta 3 ajustes
   Reparaciones: gratis e ilimitadas

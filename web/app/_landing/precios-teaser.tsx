@@ -8,8 +8,9 @@ import { Reveal } from "@/components/motion/reveal";
 import { TextoRevelado } from "@/components/motion/texto-revelado";
 import { planes } from "@/lib/datos";
 
-// Adelanto de precios. OJO: los planes van en dólares — por eso el Contador
-// usa formato entero con prefijo "$" y el "USD" va aparte, nunca formato MXN.
+// Adelanto de precios. Los planes van en pesos (MXN): el Contador usa formato
+// entero con prefijo "$" y el "MXN" va aparte. Precios provisionales — el piso
+// real lo fija el costo por build que revele el spike.
 export function PreciosTeaser() {
   return (
     <section className="border-t border-linea py-24 md:py-32">
@@ -37,7 +38,7 @@ export function PreciosTeaser() {
                     />
                   </span>
                   <span className="font-mono text-[11px] tracking-[0.18em] text-sepia uppercase">
-                    USD / mes
+                    MXN / mes
                   </span>
                 </div>
                 <p className="mt-4 text-sm text-sepia">

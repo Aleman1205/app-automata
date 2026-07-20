@@ -481,8 +481,8 @@ export const planes: Plan[] = [
   {
     id: "base",
     nombre: "Base",
-    precioMes: 30,
-    precioAnual: 25,
+    precioMes: 499,
+    precioAnual: 415,
     espacios: 3,
     usuarios: 1,
     descripcion: "Para quitarte de encima tus procesos de todos los días.",
@@ -497,8 +497,8 @@ export const planes: Plan[] = [
   {
     id: "pro",
     nombre: "Pro",
-    precioMes: 50,
-    precioAnual: 42,
+    precioMes: 999,
+    precioAnual: 832,
     espacios: 6,
     usuarios: 3,
     descripcion: "Para equipos que ya automatizan varias áreas.",
@@ -515,8 +515,8 @@ export const planes: Plan[] = [
   {
     id: "equipo",
     nombre: "Equipo",
-    precioMes: 100,
-    precioAnual: 83,
+    precioMes: 1999,
+    precioAnual: 1665,
     espacios: 10,
     usuarios: 10,
     descripcion: "Para operaciones donde varias personas ejecutan a diario.",
