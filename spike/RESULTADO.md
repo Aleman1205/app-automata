@@ -1,58 +1,70 @@
 # Resultado del spike (corrida real)
 
-> El número que contesta el riesgo #1 del proyecto. Corrida real contra Managed
-> Agents (Anthropic), no simulación. Fecha: 2026-07-20.
+> El número que contesta el riesgo #1 del proyecto. Corridas reales contra
+> Managed Agents (Anthropic), no simulación. Última: 2026-07-20 (n=3).
 
-## Veredicto
+## Veredicto: 3/3 ✓
 
-| | |
-|---|---|
-| Caso | `dashboard-popularidad` (Excel sucio de Vitrales) |
-| Resultado | ✅ **APROBADO — 6/6 criterios** |
-| Iteraciones del Verifier | **1** (aprobado a la primera, sin reintentos) |
-| Tiempo | ~11 min |
-| **Costo del build** | **USD 2.80** |
-| Sesión | `sesn_01UeZzRHFM7TgqwoJ7gTf13K` |
+| Caso | Tipo de tarea | Resultado | Iter. | Costo (run.js) |
+|---|---|---|---|---|
+| `dashboard-popularidad` | Dashboard de Excel sucio (2 tablas apiladas) | ✅ | 1 | $1.36 |
+| `ventas-mensual` | Tabla pivote (vendedor × mes) | ✅ | 1 | $1.23 |
+| `facturas-consolidado` | Agrupar por RFC + IVA + dedup | ✅ | **2** | $1.14 |
 
-El costo se confirmó en la consola (Gasto del mes = $2.80; créditos $20 → $17.21
-restantes = $2.79 gastado). El grader independiente encontró los 6 criterios
-cumplidos: script reutilizable + `resultado.json` con métricas, familias y top.
+**3/3 aprobados · 9.5 min promedio.** Todos a ciegas: el agente solo recibió el
+spec y el archivo, descubrió la solución solo, y un grader independiente la
+confirmó.
 
-## Cómo leerlo
+## Lo que prueba
 
-- **Asunción de la arquitectura:** ~$3/build. **Real: $2.80.** ✅ por debajo.
-- **Umbral "el negocio cierra":** < $5. ✅ holgado.
-- **Umbral "para":** > $10. Ni cerca.
+1. **La tesis completa, a ciegas.** No es que la tarea *tenga* solución (eso lo
+   vio `FACTIBILIDAD.md`); es que el **agente la encuentra sin pistas** y el
+   Verifier la valida. Build → verify → entregable, de punta a punta.
+2. **La auto-corrección funciona.** `facturas-consolidado` falló la verificación
+   #1 (`needs_revision`), el agente se corrigió y pasó en la #2. El loop
+   Verifier↔agente —el corazón de la arquitectura— operó en vivo.
+3. **Amplitud.** Tres dominios distintos (reporte, pivote, consolidación
+   administrativa) con el mismo pipeline. Sin una pantalla por dominio.
 
-La mitad de **costo** del spike —el riesgo #1— salió a favor. Sumado a que el
-pipeline real (Builder + Verifier de Managed Agents) funcionó de punta a punta
-sobre datos sucios, la tesis técnica del producto queda validada.
+## El costo: cuidado, run.js SUBCUENTA
 
-## Economía (aproximada)
+run.js reporta **$1.24/build promedio**, pero solo suma tokens de modelo del
+stream — **no cuenta el compute del sandbox** de Managed Agents.
+
+**Calibración:** la 1ª corrida de Vitrales la consola la cobró en **$2.80**;
+run.js calculó **$1.36** para el mismo build. Factor ≈ **2×**.
+
+→ **Costo real por build ≈ $2.5-2.8.** El número exacto se lee en la consola
+(saldo de créditos antes vs. después), no en run.js.
+
+Contra los umbrales:
+- Asunción de la arquitectura: ~$3/build. Real ~$2.5-2.8. ✅ **por debajo.**
+- "El negocio cierra": < $5. ✅ **holgado, incluso con el 2× de subcuenta.**
+- "Para": > $10. Ni cerca.
+
+## Economía (con costo real ~$2.7/build)
 
 Build = costo **de una sola vez** por automatización; el Run no usa modelos.
 
-- Plan $499 MXN ≈ **$27 USD** (tipo de cambio ~18.5, aprox).
-- Si incluye ~3 automatizaciones: 3 × $2.80 = **$8.40 USD** de build, una vez.
-- Margen bruto sano ya en el mes 1; los meses siguientes son casi puro margen.
+- Plan $499 MXN ≈ **$27 USD**. Si incluye ~3 automatizaciones: 3 × $2.7 =
+  **~$8** de build, una vez. Margen sano ya en el mes 1; los siguientes, casi
+  puro margen.
+- **A vigilar: los ajustes.** Cada automatización permite 3 reparaciones
+  ([docs/08](../docs/08-ciclo-de-vida.md)) y cada una vuelve a costar ~$2.7.
+  El caso facturas ya mostró que un ajuste puede pasar solo — bien —, pero la
+  métrica *"% que agota los 3 ajustes"* sigue siendo la que hay que monitorear.
 
-**El detalle a vigilar:** los **ajustes**. Cada automatización permite hasta 3
-reparaciones ([docs/08](../docs/08-ciclo-de-vida.md)), y cada una vuelve a costar
-~$2.80. En el peor caso (3 automatizaciones × 3 ajustes) el costo del mes 1 sube
-a ~$33 y se come el margen. Por eso la métrica *"% que agota los 3 ajustes"* de
-docs/08 es la que hay que monitorear: si supera ~30%, el intake produce specs
-malos y la economía se aprieta.
+## Lo que NO prueba
 
-## Lo que este número NO prueba
+- **Datos sintéticos.** Los tres archivos son inventados (con la forma sucia
+  real). Un archivo real más raro podría costar o fallar distinto.
+- **n=3 es señal decente, no ley.** Da un rango ($1.1-1.4 en run.js, ~$2.5-2.8
+  real) y 3/3 de éxito — suficiente para arrancar Fase 1, no para garantizar
+  que ningún proceso salga caro.
+- No mide intake real, planner real, ni el Run — ver [FACTIBILIDAD.md](FACTIBILIDAD.md).
 
-- **Es n=1.** Un build a $2.80 no prueba que *todos* lo sean. Un proceso más
-  grande o ambiguo puede costar más. **Para sostener el pricing hay que correr
-  varios casos** (activar sintéticos en [casos.js](casos.js)).
-- No mide intake, planner real, ni el Run — ver [FACTIBILIDAD.md](FACTIBILIDAD.md).
+## Historial de corridas
 
-## Nota de la corrida
-
-La corrida imprimió falsamente `✗ 0/1 · $0.00` por un bug del harness: tras
-aprobar el Verifier, la descarga de outputs reventó con un archivo no-descargable
-(400) y el `catch` borró el veredicto y el costo. **Ya está arreglado** (descarga
-best-effort en [run.js](run.js)); el resultado real fue el ✓ 6/6 de arriba.
+- **2026-07-20, n=1:** Vitrales, ✓ 6/6, **$2.80** (consola). La corrida imprimió
+  `✗ $0.00` por un bug de descarga (archivo no-descargable) — ya arreglado.
+- **2026-07-20, n=3:** los 3 casos, ✅ 3/3, run.js $1.24 prom (~$2.7 real).
