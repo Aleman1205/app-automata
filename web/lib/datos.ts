@@ -45,6 +45,7 @@ export interface EjecucionPrevia {
   archivo: string;
   duracion: string;
   estado: "Correcta" | "Falló";
+  por: string; // id del miembro que la ejecutó
 }
 
 export interface CambioVersion {
@@ -140,11 +141,11 @@ export const automatizaciones: Automatizacion[] = [
       archivoSalida: "reporte-ventas-marzo.xlsx",
     },
     historial: [
-      { fecha: "17 mar 2026", archivo: "ventas-marzo.xlsx", duracion: "22 s", estado: "Correcta" },
-      { fecha: "12 mar 2026", archivo: "ventas-feb-corregido.xlsx", duracion: "19 s", estado: "Correcta" },
-      { fecha: "10 mar 2026", archivo: "ventas-febrero.xlsx", duracion: "21 s", estado: "Correcta" },
-      { fecha: "3 mar 2026", archivo: "ventas-febrero.xlsx", duracion: "8 s", estado: "Falló" },
-      { fecha: "17 feb 2026", archivo: "ventas-enero.xlsx", duracion: "24 s", estado: "Correcta" },
+      { fecha: "17 mar 2026", archivo: "ventas-marzo.xlsx", duracion: "22 s", estado: "Correcta", por: "luis" },
+      { fecha: "12 mar 2026", archivo: "ventas-feb-corregido.xlsx", duracion: "19 s", estado: "Correcta", por: "carmen" },
+      { fecha: "10 mar 2026", archivo: "ventas-febrero.xlsx", duracion: "21 s", estado: "Correcta", por: "luis" },
+      { fecha: "3 mar 2026", archivo: "ventas-febrero.xlsx", duracion: "8 s", estado: "Falló", por: "luis" },
+      { fecha: "17 feb 2026", archivo: "ventas-enero.xlsx", duracion: "24 s", estado: "Correcta", por: "ana" },
     ],
     cambios: [
       { version: 1, titulo: "Construcción original", fecha: "12 feb 2026", tipo: "construccion" },
@@ -225,9 +226,9 @@ export const automatizaciones: Automatizacion[] = [
       archivoSalida: "consolidado-proveedores.xlsx",
     },
     historial: [
-      { fecha: "14 mar 2026", archivo: "facturas-marzo.csv", duracion: "31 s", estado: "Correcta" },
-      { fecha: "1 mar 2026", archivo: "facturas-febrero.csv", duracion: "28 s", estado: "Correcta" },
-      { fecha: "28 feb 2026", archivo: "facturas-ejemplo.csv", duracion: "26 s", estado: "Correcta" },
+      { fecha: "14 mar 2026", archivo: "facturas-marzo.csv", duracion: "31 s", estado: "Correcta", por: "carmen" },
+      { fecha: "1 mar 2026", archivo: "facturas-febrero.csv", duracion: "28 s", estado: "Correcta", por: "carmen" },
+      { fecha: "28 feb 2026", archivo: "facturas-ejemplo.csv", duracion: "26 s", estado: "Correcta", por: "ana" },
     ],
     cambios: [
       { version: 1, titulo: "Construcción original", fecha: "28 feb 2026", tipo: "construccion" },
@@ -326,9 +327,9 @@ export const automatizaciones: Automatizacion[] = [
       archivoSalida: "alerta-inventario.xlsx",
     },
     historial: [
-      { fecha: "17 mar 2026", archivo: "inventario+ventas (2 archivos)", duracion: "38 s", estado: "Correcta" },
-      { fecha: "10 mar 2026", archivo: "inventario+ventas (2 archivos)", duracion: "36 s", estado: "Correcta" },
-      { fecha: "3 mar 2026", archivo: "inventario+ventas (2 archivos)", duracion: "41 s", estado: "Correcta" },
+      { fecha: "17 mar 2026", archivo: "inventario+ventas (2 archivos)", duracion: "38 s", estado: "Correcta", por: "jorge" },
+      { fecha: "10 mar 2026", archivo: "inventario+ventas (2 archivos)", duracion: "36 s", estado: "Correcta", por: "jorge" },
+      { fecha: "3 mar 2026", archivo: "inventario+ventas (2 archivos)", duracion: "41 s", estado: "Correcta", por: "carmen" },
     ],
     cambios: [
       { version: 1, titulo: "Construcción original", fecha: "8 ene 2026", tipo: "construccion" },
