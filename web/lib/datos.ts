@@ -604,6 +604,47 @@ export const equipo: Miembro[] = [
 export const obtenerMiembro = (id: string) => equipo.find((m) => m.id === id);
 export const usuarioActual = () => obtenerMiembro(usuarioActualId)!;
 
+// ── Cuenta y plan (vista de cliente activo) ─────────────────────────────────
+
+export const cuenta = {
+  plan: "Equipo",
+  precioMes: 1999,
+  cicloRenovacion: "mensual" as const,
+  proximaRenovacion: "18 de abril, 2026",
+  metodoPago: { tipo: "Visa", ultimos4: "4291" },
+  automatizacionesActivas: 4, // listas + congeladas
+  espaciosTotal: 10,
+  ejecucionesMes: 342,
+  ejecucionesTotal: 10000,
+};
+
+// Historial de pagos (demo).
+export const pagos = [
+  { fecha: "18 mar 2026", concepto: "Plan Equipo — mensual", monto: 1999, estado: "Pagado" },
+  { fecha: "18 feb 2026", concepto: "Plan Equipo — mensual", monto: 1999, estado: "Pagado" },
+  { fecha: "18 ene 2026", concepto: "Plan Equipo — mensual", monto: 1999, estado: "Pagado" },
+];
+
+// ── Actividad reciente (panel de inicio) ────────────────────────────────────
+
+export type TipoActividad = "ejecucion" | "ajuste" | "nueva" | "invitacion";
+
+export interface EventoActividad {
+  miembroId: string;
+  tipo: TipoActividad;
+  objeto: string; // nombre de la automatización o persona
+  cuando: string;
+}
+
+export const actividadReciente: EventoActividad[] = [
+  { miembroId: "luis", tipo: "ejecucion", objeto: "Reporte mensual de ventas", cuando: "hace 2 horas" },
+  { miembroId: "jorge", tipo: "ejecucion", objeto: "Alerta semanal de inventario bajo", cuando: "hace 3 horas" },
+  { miembroId: "carmen", tipo: "ejecucion", objeto: "Consolidado de facturas por proveedor", cuando: "hace 5 horas" },
+  { miembroId: "ana", tipo: "invitacion", objeto: "Roberto Lara", cuando: "ayer" },
+  { miembroId: "luis", tipo: "ejecucion", objeto: "Reporte mensual de ventas", cuando: "ayer" },
+  { miembroId: "ana", tipo: "ajuste", objeto: "Reporte mensual de ventas", cuando: "hace 3 días" },
+];
+
 // Quién creó cada automatización (solo los admin crean).
 export const creadoPor: Record<string, string> = {
   "reporte-ventas": "ana",

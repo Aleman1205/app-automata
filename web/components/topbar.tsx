@@ -9,18 +9,30 @@ import { Boton } from "@/components/ui/boton";
 import { Avatar } from "@/components/ui/avatar";
 import { usuarioActual } from "@/lib/datos";
 
-// Topbar de píldora (ref. imagen 3): la píldora clara SE DESLIZA entre
-// opciones al pasar el mouse — sin hacer clic. Al salir, vuelve a la ruta
-// activa. El clic sí navega.
-const enlaces = [
+// El sitio tiene DOS mundos:
+//  · venta (público): landing, precios, sobre, contacto, legal
+//  · app (cliente activo): panel, portafolio, equipo, cuenta, nueva
+// El topbar detecta en cuál está y muestra el menú correspondiente.
+
+const enlacesVenta = [
   { href: "/", etiqueta: "Inicio" },
-  { href: "/portafolio", etiqueta: "Portafolio" },
   { href: "/precios", etiqueta: "Precios" },
+  { href: "/sobre", etiqueta: "Nosotros" },
 ];
+
+const enlacesApp = [
+  { href: "/panel", etiqueta: "Panel" },
+  { href: "/portafolio", etiqueta: "Portafolio" },
+  { href: "/equipo", etiqueta: "Equipo" },
+];
+
+const RUTAS_APP = ["/panel", "/portafolio", "/equipo", "/cuenta", "/nueva"];
 
 export function Topbar() {
   const ruta = usePathname();
-  // Sin fallback: en rutas fuera del menú (p. ej. /nueva) no se resalta nada.
+  const esApp = RUTAS_APP.some((r) => ruta === r || ruta.startsWith(r + "/"));
+  const enlaces = esApp ? enlacesApp : enlacesVenta;
+
   const activo =
     enlaces.find((e) =>
       e.href === "/" ? ruta === "/" : ruta.startsWith(e.href),
@@ -32,7 +44,7 @@ export function Topbar() {
     <header className="pointer-events-none fixed inset-x-0 top-0 z-50">
       <div className="relative flex items-center justify-between px-6 py-4">
         <Link
-          href="/"
+          href={esApp ? "/panel" : "/"}
           className="pointer-events-auto text-lg font-black tracking-tight"
         >
           {MARCA}
@@ -69,16 +81,29 @@ export function Topbar() {
         </nav>
 
         <div className="pointer-events-auto flex items-center gap-3">
-          <Boton href="/nueva" variante="acento" tamano="sm" icono="flecha">
-            Nueva automatización
-          </Boton>
-          <Link
-            href="/equipo"
-            aria-label="Equipo y cuenta"
-            className="transition-transform duration-200 hover:scale-105"
-          >
-            <Avatar nombre={usuarioActual().nombre} anillo />
-          </Link>
+          {esApp ? (
+            <>
+              <Boton href="/nueva" variante="acento" tamano="sm" icono="flecha">
+                Nueva automatización
+              </Boton>
+              <Link
+                href="/cuenta"
+                aria-label="Tu cuenta"
+                className="transition-transform duration-200 hover:scale-105"
+              >
+                <Avatar nombre={usuarioActual().nombre} anillo />
+              </Link>
+            </>
+          ) : (
+            <>
+              <Boton href="/panel" variante="fantasma" tamano="sm">
+                Entrar
+              </Boton>
+              <Boton href="/nueva" variante="acento" tamano="sm" icono="flecha">
+                Empezar
+              </Boton>
+            </>
+          )}
         </div>
       </div>
     </header>

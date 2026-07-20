@@ -2,20 +2,50 @@
 
 import Link from "next/link";
 import { useRef } from "react";
+import { usePathname } from "next/navigation";
 import { motion, useScroll, useTransform } from "motion/react";
 import { MARCA } from "@/lib/marca";
 import { Boton } from "@/components/ui/boton";
 import { Etiqueta } from "@/components/ui/etiqueta";
 
-// Pie global: CTA + enlaces + nombre gigante recortado en el borde inferior
-// (ref. imagen 2), con parallax sutil al hacer scroll.
+const RUTAS_APP = ["/panel", "/portafolio", "/equipo", "/cuenta", "/nueva"];
+
+// Pie global. En el sitio de venta: CTA grande + enlaces + nombre gigante con
+// parallax. En la app (cliente activo): una barra compacta, sin CTA de venta.
 export function Pie() {
+  const ruta = usePathname();
+  const esApp = RUTAS_APP.some((r) => ruta === r || ruta.startsWith(r + "/"));
+
   const ref = useRef<HTMLElement>(null);
   const { scrollYProgress } = useScroll({
     target: ref,
     offset: ["start end", "end end"],
   });
   const y = useTransform(scrollYProgress, [0, 1], ["22%", "0%"]);
+
+  if (esApp) {
+    return (
+      <footer className="border-t border-linea bg-papel">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-6 text-center sm:flex-row sm:text-left">
+          <Etiqueta>© 2026 {MARCA}</Etiqueta>
+          <nav className="flex items-center gap-5 text-sm text-sepia">
+            <Link href="/cuenta" className="transition-colors hover:text-tinta">
+              Cuenta
+            </Link>
+            <Link href="/privacidad" className="transition-colors hover:text-tinta">
+              Privacidad
+            </Link>
+            <Link href="/terminos" className="transition-colors hover:text-tinta">
+              Términos
+            </Link>
+            <Link href="/contacto" className="transition-colors hover:text-tinta">
+              Soporte
+            </Link>
+          </nav>
+        </div>
+      </footer>
+    );
+  }
 
   return (
     <footer
