@@ -84,6 +84,27 @@ referencia. El intake lo pregunta de frente; si no hay, baja la promesa a
 cliente insiste en PDFs de maqueta arbitraria vuelve la fragilidad de layout →
 ahí el intake advierte y sube la tasa de "a revisar".
 
+**Estructura CFDI para el extractor (Anexo 20, CFDI 4.0)**
+- **Parsea por namespace URI, no por prefijo** (`cfdi:` es convención): CFDI =
+  `http://www.sat.gob.mx/cfd/4`; Timbre = `.../TimbreFiscalDigital`. Atributos
+  case-sensitive (`Rfc`, `SubTotal`). Montos → decimal, **no float**.
+- **Jerarquía:** `Comprobante` (SubTotal, Descuento, Total, Moneda,
+  TipoDeComprobante I/E/T/N/P, MetodoPago) → `Emisor` (Rfc, Nombre,
+  RegimenFiscal) → `Receptor` (Rfc, UsoCFDI…) → `Conceptos/Concepto` (1..n = una
+  fila por línea: ClaveProdServ, Descripcion, Cantidad, ValorUnitario, Importe,
+  ObjetoImp) → `Impuestos` (Traslados 002=IVA · Retenciones 001=ISR / 002=IVA).
+- **El UUID vive en `Complemento/tfd:TimbreFiscalDigital/@UUID`**, NO en
+  Comprobante. Es la llave de deduplicación.
+- **Cuadre (bucket "a revisar"):** Σ Importe(conceptos) = SubTotal · Total =
+  SubTotal − Descuento + trasladados − retenidos · Σ IVA(líneas) =
+  TotalImpuestosTrasladados.
+- **Complementos:** Pagos 2.0 (tipo P — liga pago↔factura por
+  `DoctoRelacionado/@IdDocumento` = UUID, clave para **conciliación**) · Nómina
+  1.2 (tipo N — los asimilados a salarios incluyen comisionistas por nómina).
+- **Gotchas que rompen extractores ingenuos:** el UUID no está en Comprobante ·
+  el nodo Impuestos totales puede faltar (todo exento) · el prefijo puede no ser
+  `cfdi:` · Total ya trae IVA (no lo re-sumes).
+
 ---
 
 ## 3. Cálculo de comisiones
@@ -173,3 +194,31 @@ El intake **debe preguntar empleado vs. comisionista externo** — cambia todo:
   los tiers · vendedor sin RFC/régimen · devolución posterior al corte (clawback)
   · venta no cobrada (si paga sobre cobrado) · comisión con adeudo del vendedor
   · excepción manual.
+
+---
+
+## Extracción desde imágenes: el atajo QR/XML (resuelve el asterisco 🟡)
+
+El OCR de fotos parecía meter un costo de modelo por corrida. La investigación lo
+acota y **casi lo desactiva para México:**
+
+- **Si existe XML o QR** (la mayoría de facturas/tickets fiscales MX): decodificar
+  el QR (visión clásica = **código**, determinista) o parsear el XML → **código
+  puro, ~$0.** El QR del CFDI ya trae UUID, RFC emisor/receptor y Total. →
+  **reclasifica el 🟡 a 🟢.**
+- **Solo foto SIN QR y SIN XML** (ticket no fiscal, extranjero, nota a mano — el
+  verdadero caso OCR): aquí sí sales de código puro. Piso honesto por documento:
+  - Textract *AnalyzeExpense* / Google Document AI ≈ **$0.008–0.01** (determinista,
+    estructurado; devuelve total, impuesto, fecha, proveedor).
+  - Vision-LLM barato (Llama 4 Scout / GPT-5 mini) ≈ **$0.0004–0.0016** (mejor en
+    fotos malas, **no** determinista).
+  - Tesseract solo: **$0** pero ~60–90% en térmico → cambias costo-de-modelo por
+    **costo-de-revisión** (alta tasa de "a revisar").
+- **Patrón que mantiene barato el Run: ruteo híbrido** — Tesseract primero, y solo
+  las páginas de baja confianza van al modelo. La mayoría queda en $0.
+- **Costo esperado del asterisco = % de docs sin QR/XML × costo/doc del método.**
+  En MX ese % es minoría → probablemente chico. El mini-spike debe medir
+  exactamente eso, no "cuánto cuesta OCR" en abstracto.
+
+> Ojo de captura: el papel térmico se borra en 3–6 meses; hay que fotografiar el
+> ticket de inmediato — lo que refuerza usar la ruta QR/XML mientras exista.

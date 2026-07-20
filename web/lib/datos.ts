@@ -221,7 +221,7 @@ export const automatizaciones: Automatizacion[] = [
     id: "consolidado-facturas",
     nombre: "Consolidado de facturas por proveedor",
     descripcion:
-      "Agrupa tus facturas por RFC —aunque el nombre venga escrito distinto—, suma el IVA y excluye las canceladas.",
+      "Lee los XML del SAT (o tu Excel), agrupa por RFC —aunque el nombre venga escrito distinto—, suma el IVA y excluye las canceladas.",
     estado: "lista",
     creada: "28 feb 2026",
     ejecuciones: 11,
@@ -232,8 +232,10 @@ export const automatizaciones: Automatizacion[] = [
         id: "facturas",
         tipo: "archivo",
         etiqueta: "Tus facturas del periodo",
-        ayuda: "Un CSV o Excel con folio, proveedor, RFC, monto e IVA",
-        formatos: ["csv", "xlsx"],
+        ayuda: "Los XML del SAT o el ZIP de tu contador — también acepta Excel",
+        formatos: ["xml", "zip", "xlsx"],
+        multiple: true,
+        ejemploNombre: "facturas-marzo (186 XML)",
       },
       {
         id: "periodo",
@@ -250,7 +252,7 @@ export const automatizaciones: Automatizacion[] = [
         {
           tipo: "resumen",
           texto:
-            "Consolidamos 186 facturas en 5 proveedores por $1,284,600 con IVA. Distribuidora del Norte concentra un tercio del gasto. Agrupamos por RFC, así que los proveedores con el nombre escrito distinto quedaron en una sola fila.",
+            "Leímos los 186 XML directo del SAT —sin adivinar campos ni escanear nada— por $1,284,600 con IVA, en 5 proveedores. Distribuidora del Norte concentra un tercio del gasto. Agrupamos por RFC, así que los proveedores con el nombre escrito distinto quedaron en una sola fila.",
         },
         {
           tipo: "metricas",
@@ -271,7 +273,7 @@ export const automatizaciones: Automatizacion[] = [
           tono: "info",
           titulo: "3 facturas venían con el proveedor escrito de dos formas",
           texto:
-            "Las agrupamos por RFC, no por nombre, así que quedaron consolidadas correctamente. También excluimos 9 canceladas del total.",
+            "Las agrupamos por RFC, no por nombre, así que quedaron consolidadas. También quitamos 2 duplicadas por su folio fiscal (UUID) y excluimos 9 canceladas del total.",
         },
         {
           tipo: "barras",
