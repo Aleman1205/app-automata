@@ -710,15 +710,117 @@ export const automatizaciones: Automatizacion[] = [
   },
   {
     id: "conciliacion-pagos",
-    nombre: "Conciliación de pagos",
+    nombre: "Conciliación de pagos con el banco",
     descripcion:
-      "Cruza los pagos recibidos con tu estado de cuenta y marca lo que no cuadra.",
+      "Cruza tu registro de pagos y cobros con los movimientos del banco y te dice qué cuadra, qué no, y por qué.",
+    estado: "lista",
+    creada: "20 feb 2026",
+    ejecuciones: 7,
+    ultimaEjecucion: "hace 3 días",
+    ajustesUsados: 1,
+    entradas: [
+      {
+        id: "registro",
+        tipo: "archivo",
+        etiqueta: "Tu registro de pagos y cobros",
+        ayuda: "El auxiliar o la hoja donde llevas lo que entra y sale",
+        formatos: ["xlsx", "csv"],
+      },
+      {
+        id: "banco",
+        tipo: "archivo",
+        etiqueta: "Tu estado de cuenta del banco",
+        ayuda: "El export del banco, en Excel, CSV o PDF",
+        formatos: ["xlsx", "csv", "pdf"],
+      },
+      {
+        id: "tolerancia",
+        tipo: "seleccion",
+        etiqueta: "¿Cuántos días de desfase permites?",
+        opciones: [
+          { valor: "0", etiqueta: "Solo el mismo día" },
+          { valor: "3", etiqueta: "Hasta 3 días (por el desfase del banco)" },
+          { valor: "5", etiqueta: "Hasta 5 días" },
+        ],
+      },
+    ],
+    resultado: {
+      bloques: [
+        {
+          tipo: "resumen",
+          texto:
+            "De 142 movimientos, 128 cuadran exacto y 14 quedan por revisar. El banco cobró $2,462 en comisiones y cargos que no tenías registrados, y 6 pagos tuyos aún no aparecen en el banco. La diferencia neta entre tus libros y el banco es $2,340, casi todo comisiones.",
+        },
+        {
+          tipo: "metricas",
+          items: [
+            { etiqueta: "Saldo según libros", valor: 486200, formato: "moneda" },
+            { etiqueta: "Saldo según banco", valor: 483860, formato: "moneda" },
+            {
+              etiqueta: "Diferencia",
+              valor: 2340,
+              formato: "moneda",
+              nota: "Casi todo comisiones",
+            },
+            { etiqueta: "Conciliado", valor: 90, formato: "entero", sufijo: "%" },
+          ],
+        },
+        {
+          tipo: "comparacion",
+          titulo: "Cómo quedaron las partidas",
+          pasos: [
+            { etiqueta: "Movimientos", valor: 142, tono: "neutro" },
+            { etiqueta: "Conciliados", valor: 128, tono: "ok" },
+            { etiqueta: "A revisar", valor: 14, tono: "alerta" },
+          ],
+        },
+        {
+          tipo: "callout",
+          tono: "alerta",
+          titulo: "3 cargos del banco que no tenías registrados",
+          texto:
+            "Comisiones y un cargo no identificado por $2,462. Revísalos: si son correctos, regístralos; si no, recláma al banco.",
+        },
+        {
+          tipo: "tabla",
+          titulo: "Partidas por revisar",
+          columnas: [
+            { campo: "fecha", etiqueta: "Fecha" },
+            { campo: "concepto", etiqueta: "Concepto" },
+            { campo: "monto", etiqueta: "Monto", alinear: "derecha", formato: "moneda" },
+            { campo: "motivo", etiqueta: "Motivo" },
+          ],
+          filas: [
+            { fecha: "3 mar", concepto: "Comisión mensual + IVA", monto: 812, motivo: "Comisión bancaria" },
+            { fecha: "5 mar", concepto: "Cargo no identificado", monto: 1650, motivo: "Cargo del banco no registrado" },
+            { fecha: "8 mar", concepto: "Depósito cliente Vega", monto: 9800, motivo: "Depósito en tránsito" },
+            { fecha: "12 mar", concepto: "Cheque 0451", monto: 4200, motivo: "Cheque pendiente de cobro" },
+            { fecha: "15 mar", concepto: "Pago a proveedor", monto: 3200, motivo: "Diferencia de monto ($120)" },
+          ],
+        },
+      ],
+      archivoSalida: "conciliacion-marzo.xlsx",
+    },
+    historial: [
+      { fecha: "14 mar 2026", archivo: "registro + banco (2 archivos)", duracion: "34 s", estado: "Correcta", por: "carmen" },
+      { fecha: "1 mar 2026", archivo: "registro + banco (2 archivos)", duracion: "31 s", estado: "Correcta", por: "carmen" },
+    ],
+    cambios: [
+      { version: 1, titulo: "Construcción original", fecha: "20 feb 2026", tipo: "construccion" },
+      { version: 2, titulo: "Sumar la tolerancia de ±3 días por el desfase del banco", fecha: "24 feb 2026", tipo: "ajuste" },
+    ],
+  },
+  {
+    id: "notas-manuscritas",
+    nombre: "Gastos desde notas escritas a mano",
+    descripcion:
+      "Toma fotos de notas de gasto escritas a mano y arma la tabla; cuando la letra no se lee, te lo dice en vez de inventar.",
     estado: "fallo",
     creada: "ayer",
     ejecuciones: 0,
     ajustesUsados: 0,
     motivoFallo:
-      "No conseguimos que el resultado cumpliera tus criterios después de 4 intentos. Suele resolverse dando un poco más de detalle sobre el formato de tu estado de cuenta. Reintentar es gratis.",
+      "La letra de varias notas no se pudo leer con seguridad y preferimos no inventar montos. Suele resolverse subiendo fotos más claras, o capturando a mano las que estén muy borrosas. Reintentar es gratis.",
     entradas: [],
     historial: [],
     cambios: [],
