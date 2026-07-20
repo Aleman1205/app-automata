@@ -8,7 +8,7 @@
 // restaurante (archivo real del usuario). Los sintéticos quedan abajo,
 // comentados, por si se quieren correr después.
 
-export const casos = [
+const casoBase = [
   {
     id: "dashboard-popularidad",
     nombre: "Dashboard de popularidad de productos",
@@ -71,8 +71,9 @@ export const casos = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CASOS SINTÉTICOS (desactivados). Para usarlos: genera sus datos con
-// `npm run datos`, y muévelos arriba al array `casos`.
+// CASOS SINTÉTICOS. Sus datos se generan con `npm run datos` (CSV en datos/).
+// Los dos primeros (ventas-mensual, facturas-consolidado) están ACTIVOS —ver el
+// export `casos` al final—; limpieza-contactos queda de reserva.
 // ─────────────────────────────────────────────────────────────────────────────
 export const casosSinteticos = [
   {
@@ -155,3 +156,7 @@ export const casosSinteticos = [
     },
   },
 ];
+
+// Casos ACTIVOS del spike: Vitrales (real) + 2 sintéticos para robustecer el
+// número de costo (pasar de n=1 a n=3). Para activar/desactivar, edita esta línea.
+export const casos = [casoBase[0], casosSinteticos[0], casosSinteticos[1]];
