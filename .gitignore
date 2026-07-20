@@ -1,0 +1,17 @@
+# Dependencias y builds
+node_modules/
+.next/
+
+# Entorno y secretos — NUNCA subir claves
+.env
+.env.*
+
+# Salidas del spike (se regeneran al correrlo)
+spike/salidas/
+spike/datos/
+
+# Sistema
+.DS_Store
+
+# Config local de herramientas
+.claude/

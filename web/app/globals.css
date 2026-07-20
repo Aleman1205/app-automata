@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+@theme {
+  /* Paleta — sepia vintage (ref: fotografía) + un solo acento */
+  --color-crema: #efe8d8;
+  --color-papel: #f6f1e3;
+  --color-hueso: #fbf8ef;
+  --color-tinta: #1d1710;
+  --color-noche: #16110b;
+  --color-sepia: #7c6f5c;
+  --color-linea: #dcd3be;
+  --color-acento: #ff4d00;
+  --color-oliva: #6b7c3f;
+  --color-ladrillo: #a8432b;
+}
+
+/* Las fuentes vienen de next/font (variables en <html>) — requieren inline. */
+@theme inline {
+  --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", monospace;
+}
+
+::selection {
+  background: var(--color-acento);
+  color: var(--color-hueso);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-acento);
+  outline-offset: 2px;
+}
+
+body {
+  background: var(--color-crema);
+  color: var(--color-tinta);
+}
+
+/* ——— Grano: textura de papel vintage sobre toda la página ——— */
+.grano::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  pointer-events: none;
+  opacity: 0.55;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='table' tableValues='0 0.05'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+}
+
+/* ——— Marquesina (marquee infinito, pausa al pasar el mouse) ——— */
+.pista-marquesina {
+  animation: marquesina linear infinite;
+}
+.pista-marquesina:hover {
+  animation-play-state: paused;
+}
+@keyframes marquesina {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* ——— Esqueleto shimmer (tarjetas "Generando…") ——— */
+.esqueleto {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-papel);
+}
+.esqueleto::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(251, 248, 239, 0.9),
+    transparent
+  );
+  animation: esqueleto 1.6s infinite;
+}
+@keyframes esqueleto {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* ——— Barra de progreso indeterminada ——— */
+.barra-indeterminada {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-linea);
+  border-radius: 9999px;
+}
+.barra-indeterminada::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -35%;
+  width: 35%;
+  border-radius: 9999px;
+  background: var(--color-tinta);
+  animation: barra-ind 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes barra-ind {
+  to {
+    left: 105%;
+  }
+}
+
+/* ——— Scrollbar discreto ——— */
+::-webkit-scrollbar {
+  width: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-crema);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-linea);
+  border-radius: 8px;
+  border: 2px solid var(--color-crema);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-sepia);
+}

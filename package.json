@@ -1,0 +1,13 @@
+{
+  "name": "app-auto-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "spike": "node spike/run.js",
+    "datos": "node spike/generar-datos.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.3"
+  }
+}
