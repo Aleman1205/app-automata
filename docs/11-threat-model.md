@@ -41,7 +41,7 @@ de verdad separa a los clientes es el **aislamiento del contenedor** (§3).
 |---|---|---|
 | **Cliente malicioso** (pagó $15) | Toda la superficie legítima: entrevista, archivos, ajustes, ejecuciones — y **ejecución de código propia** vía el artefacto | Datos de otros; cómputo gratis; usar el runner como plataforma de escape |
 | **Externo no autenticado** | Web, API, webhooks | Credenciales, IDOR, DoS, webhooks falsos |
-| **Insider intra-org** (viewer/ex-empleado) | Rol limitado dentro de una org | Elevación: hacer lo que su rol prohíbe |
+| **Insider intra-org** (operador/ex-empleado) | Rol limitado dentro de una org | Elevación: hacer lo que su rol prohíbe |
 | **Cliente negligente** | Sube datos de terceros, archivos rotos | Nada — causa incidentes igual |
 | **Cadena de suministro** | PyPI, imagen base, deps del front | Ejecución en tu infra o en los artefactos |
 | **El propio agente** (falla, no malicia) | Todo lo que el Builder escribe | Código incorrecto o inseguro sin que nadie lo pida |
@@ -203,8 +203,8 @@ sandbox de build o run puede escribirlas. Un caso del checklist lo verifica.
 
 | Vector | Defensa | Doc |
 |---|---|---|
-| **Toma de cuenta (spoofing)** | Delegado a Clerk. **MFA obligatoria para owner y facturación** (no solo "disponible"). Diseño de sesiones/recuperación/revocación: **pendiente, docs/13** | 13 (pendiente) |
-| **Elevación intra-org** | Roles owner/member/viewer ([docs/04](04-multitenancy.md) §3) verificados en la capa de aplicación en CADA acción con efecto (RLS filtra por `org_id`, NO por rol — un viewer podría disparar un build si no se comprueba). Revocación de membresía de ex-empleados | 04 §3 + §10 |
+| **Toma de cuenta (spoofing)** | Delegado a Clerk. **MFA obligatoria para admin y facturación** (no solo "disponible"). Sesiones/recuperación/revocación **diseñadas** en [docs/13](13-auth-y-webhooks.md); casos comunes en [docs/14 §1](14-controles-de-seguridad.md) | 13 + 14 |
+| **Elevación intra-org** | **2 roles `admin`/`operador`** ([docs/04](04-multitenancy.md) §3) verificados en la capa de aplicación en CADA acción con efecto (RLS filtra por `org_id`, NO por rol — un `operador` podría disparar un build si no se comprueba). `assertCan`+`leerMembresia` **probados en M2**; revocación de membresía de ex-empleados | 04 §3 + 14 §2 |
 | **IDOR cross-org** | RLS en Postgres — con la corrección de abajo | 04 §2 |
 | Archivos ajenos por URL | URLs firmadas de 5 min + verificación de pertenencia | 04 §2 |
 | **XSS/inyección vía strings generados** | React auto-escapa en la UI. El riesgo real está en el **correo HTML y su asunto** (Resend): `nombre_generado` (Haiku), `saludo`, y nombres de columna reflejados en errores son **no confiables** y se escapan/normalizan antes de interpolar. La afirmación "las vistas no generan HTML ejecutable" ([docs/09](09-sistema-de-componentes.md) §1) aplica **solo al catálogo de vistas**, no a estos strings | 09 §1 + aquí |
@@ -239,14 +239,15 @@ Separada porque el red-team encontró un agujero que ninguna otra sección cubr�
 | Vector | Defensa |
 |---|---|
 | Builds en bucle (crear/borrar/ajustar) | Tope interno **2× espacios/mes** por org ([docs/10](10-intake.md) §8); corte a $10/build |
-| **Ejecuciones ilimitadas** — el agujero grande | Con el Run en CMA (~$0.30/ejecución, [docs/02](02-runtime.md) §2), una cuenta de $15 con una automatización puede ejecutar miles de veces. La idempotencia solo frena el doble-clic; con entradas distintas cada run cuesta. La alarma de [docs/05](05-observabilidad-costos.md) §4 **avisa pero no corta**. **Falta un tope duro de ejecuciones que CORTE.** Ver decisión #3 |
+| **Ejecuciones ilimitadas** | **Corregido:** el Run es **<1¢** ($0.08/session-hour, sin modelos — [docs/decisiones-runtime.md](decisiones-runtime.md)), **no $0.30**. Baja la urgencia pero **no la elimina**: session-hours se acumulan y la alarma de [docs/05](05-observabilidad-costos.md) §4 **avisa pero no corta**. Sigue faltando un **tope duro de ejecuciones que CORTE** — ahora con umbral **holgado**, no ajustado. Ver decisión #3 |
 | Entrevistas en bucle | 10 intakes/org/día + presupuesto de llamadas por intake ([docs/10](10-intake.md) §8) |
 | Sondeo del clasificador (`no_procede` repetido) | Alerta por org con muchos `no_procede` en poco tiempo + registro mínimo con control de acceso para forense (§9) |
 
 **Decisión pendiente #3:** definir una **cuota de ejecuciones por plan que
-corte**, no solo alarme — crítica mientras el Run viva en CMA. "Sin límite" en
-[docs/06](06-pricing.md) era viable *solo* con el runner propio barato (Fase 2);
-con CMA hay que poner un techo duro. Ver §12.
+corte**, no solo alarme. Con el Run a <1¢ el techo puede ser **holgado** (no aprieta
+al cliente legítimo), pero debe existir y **cortar** — un bucle desatendido acumula
+session-hours igual. Se construye en M3 ([docs/14 §3](14-controles-de-seguridad.md)).
+Ver §12.
 
 ## 9. Riesgos aceptados e higiene operacional
 
@@ -298,9 +299,13 @@ Cada línea es verificable; ninguna es opcional:
       por API directa → 404/403 en todos
 - [ ] **RLS con el rol de app real** (no dueño, sin BYPASSRLS, `FORCE`): query
       cross-org devuelve 0 filas corriendo COMO ese rol
-- [ ] **Elevación intra-org**: viewer intenta crear/modificar/disparar build →
-      403; member intenta tocar facturación/borrar org → 403; membresía de
-      ex-empleado revocada corta el acceso
+- [ ] **Elevación intra-org**: `operador` intenta crear/modificar/disparar build →
+      403; `operador` intenta tocar facturación/borrar org → 403; membresía de
+      ex-empleado revocada corta el acceso (`assertCan`+`leerMembresia`, docs/14 §2)
+- [ ] **Cobertura uniforme de autz**: test que enumera rutas con efecto y falla si
+      alguna no pasa por `withAuthz` (anti-olvido BFLA/BOLA, docs/14 §2)
+- [ ] **Aislamiento contra el pooler de Neon** (no solo cluster local): `SET LOCAL
+      ROLE`/`set_config local` sobreviven al pooler en transaction-mode (docs/14 §4)
 - [ ] **Escape de contenedor**: exploit conocido de runtime en el runner →
       contenido (decisión #1 define el runtime)
 - [ ] **Egress del build**: callback DNS/HTTP desde el sandbox de build →

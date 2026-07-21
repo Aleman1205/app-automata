@@ -37,6 +37,20 @@ membresía → el siguiente request a datos de esa org da 403. Además, para el
 runbook de incidentes, se puede **revocar las sesiones** del usuario (belt &
 suspenders). La membresía viva es el control portante; la revocación es el extra.
 
+**Casos delegados a Clerk — declarados, no asumidos.** La auditoría (docs/14 §1)
+encontró vectores canónicos que Clerk cubre pero que aquí no se decían; se declaran
+para poder **verificarlos** en el checklist ([docs/11 §10](11-threat-model.md)), no
+darlos por hechos:
+
+| Caso | Postura (a verificar, no asumir) |
+|---|---|
+| **Almacenamiento del token** | Cookie `httpOnly` + `Secure` + `SameSite` (default de Clerk). **Prohibido** el token de sesión en query string / URL (fuga por logs/referer/historial), en línea con la regla de privacidad del proyecto. |
+| **Session fixation** | Clerk **rota el id de sesión al login** — asunción a confirmar en el checklist. |
+| **Brute-force / credential stuffing** | Bot-protection + rate-limit **nativos de Clerk activados** (capa 0). Considerar lockout/backoff para el ICP PyME-MX. |
+| **Verificación del JWT** | En el **servidor**, en cada request, vía **JWKS** de Clerk (no secreto compartido), tolerante a rotación de llaves. Es el control **portante**: sin él, `assertCan` y RLS son evadibles. |
+| **OAuth / social login** | **Decisión de alcance del MVP** (Google es típico en PyME-MX). Si entra: verificación vía JWKS. Si no: declararlo fuera (distinto de "sin integraciones OAuth de terceros", que es otra cosa). |
+| **Secretos de auth** | Signing keys de Clerk/webhooks y DB del rol de app: inventario + rotación. **El repo es público** → jamás en git. |
+
 ## 2. Autorización intra-organización
 
 Dos roles `admin` / `operador` ([docs/04](04-multitenancy.md) §3). **RLS filtra
@@ -64,19 +78,32 @@ por `org_id`, NO por rol** — la comprobación de rol vive en la aplicación.
 
 ## 3. El ciclo de vida de una request (cómo se apilan las capas)
 
-Toda request con efecto pasa, en orden, por:
+Toda request con efecto pasa, en orden, por estas **8 capas** (la matriz completa
+de casos comunes por capa está en [docs/14](14-controles-de-seguridad.md)):
 
 ```
-1. Clerk         → ¿quién es? (autenticación; sesión válida, MFA si aplica)
-2. Contexto org  → ¿en qué org actúa? (de la ruta / el header de org)
-3. assertCan     → ¿su rol permite esta acción en esta org? (§2)  → 403 si no
-4. step-up MFA   → ¿acción peligrosa? re-verificar (§1)           → challenge
-5. Query con el ROL DE APP no-dueño → RLS filtra por org_id (docs/04 §2)
+0. Rate limit / WAF   → ¿demasiadas peticiones? (por IP y por org)      → 429
+1. Clerk (authn)      → ¿quién es? JWT verificado en el SERVIDOR         → 401
+2. CSRF / Origin      → ¿la mutación viene de nuestro origen?            → 403
+3. Contexto org       → ¿en qué org? de la SESIÓN, nunca de un header del cliente
+4. assertCan (authz)  → ¿su rol permite esta acción aquí? membresía VIVA → 403
+5. step-up MFA        → ¿acción peligrosa? re-verificar el factor        → challenge
+6. Validación (Zod)   → ¿body/query/params válidos, con allowlist?       → 400
+7. Query con el ROL DE APP no-dueño → RLS filtra por org_id (docs/04 §2)
 ```
 
-Las capas 3 y 5 son distintas y **ambas** hacen falta: `assertCan` es el **rol**
-(qué puede hacer), RLS es el **aislamiento** (a qué org pertenece el dato). Un
-bug en una no debe abrir la otra.
+Las capas **4** y **7** son distintas y **ambas** hacen falta: `assertCan` es el
+**rol** (qué puede hacer), RLS es el **aislamiento** (a qué org pertenece el dato). Un
+bug en una no debe abrir la otra. Las capas **0, 2 y 6** (rate-limit, CSRF, validación)
+se añadieron tras la auditoría de 2026-07-21 (docs/14): eran controles reales que no
+figuraban como escalón explícito.
+
+**Garantía anti-olvido.** El mayor riesgo práctico (BFLA/BOLA de OWASP) no es la
+lógica sino **olvidar** una capa en un endpoint nuevo. Por eso el pipeline se
+implementa como un **wrapper obligatorio (`withAuthz`)**, no como llamadas sueltas, y
+un **test enumera el árbol de rutas** y falla si alguna con efecto no pasa por él. El
+webhook entrante (§4) se salta 0–6 pero se autentica por **firma HMAC** y deriva su
+org del **recurso firmado**, no del payload (anti *confused deputy*).
 
 ## 4. Verificación de firma de webhooks
 

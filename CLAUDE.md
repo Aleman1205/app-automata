@@ -63,7 +63,8 @@ spike/             prueba técnica — Node + npm (raíz)
 | 09 | Sistema de componentes | el agente declara vistas, no escribe HTML; **catálogo v1 construido** en el prototipo |
 | 10 | Intake | el agente entrevistador (opción múltiple → spec validado) |
 | 11 | Threat model | ejecutar código de IA es el producto; escape de contenedor = riesgo #1 |
-| 13 | Auth y webhooks | **diseñado**: sesiones/step-up MFA, assertCan por request, cadena de firma de webhooks |
+| 13 | Auth y webhooks | **diseñado**: sesiones/step-up MFA, assertCan por request, cadena de firma de webhooks; pipeline de request de 8 capas |
+| 14 | Controles de seguridad | **matriz de casos comunes** (65, 5 dominios) estilo OWASP: caso → postura → capa → milestone → estado; une docs/13+11+04 |
 
 (No hay docs/12; el 13 se numeró así a propósito.)
 
