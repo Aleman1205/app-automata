@@ -358,6 +358,12 @@ autorizado a clientes.
 
 ## 12. Decisiones pendientes (elevadas por el red-team)
 
+> **Resueltas con recomendación en [docs/decisiones-runtime.md](decisiones-runtime.md)**
+> (2026-07-20). Resumen: #1 el aislamiento lo hereda de CMA en el MVP, gVisor
+> obligatorio en el runner propio de Fase 2; #2 preferir build **sin red** con
+> deps pre-horneadas; #3 topes recalculados para la era-CMA (50/100/200, no
+> 500/2k/10k). Faltan confirmar 3 hechos de CMA (ver ese doc).
+
 Tres necesitan decisión de negocio, no de ingeniería:
 
 1. **¿Aislamiento fuerte (gVisor/Firecracker) antes del primer cliente?** El
