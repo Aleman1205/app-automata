@@ -20,7 +20,7 @@ serie de agentes piensa, planea, programa, ejecuta".
 | Planeación de arquitectura | **Completa** — 13 documentos, 2 curtidos con crítica adversarial |
 | Prototipo del front | **Funcional** — solo apariencia, datos falsos, para inversionistas |
 | Spike (prueba técnica) | **Corrido ✓ — 3/3 casos, ~$1.8/build real** (ver `spike/RESULTADO.md`) |
-| Backend / producto real | **No existe todavía** |
+| Backend / producto real | **No existe** — plan de construcción listo en `docs/plan-fase-1.md` |
 
 ## Los riesgos abiertos (no se resuelven con más papel)
 
