@@ -696,6 +696,118 @@ export const automatizaciones: Automatizacion[] = [
     ],
   },
   {
+    id: "cierre-gastos",
+    nombre: "Cierre de gastos del mes",
+    descripcion:
+      "Avienta tus facturas y tickets como te lleguen —XML, PDF o fotos— y te arma el consolidado por proveedor con el IVA acreditable, sin capturar nada a mano.",
+    estado: "lista",
+    creada: "18 feb 2026",
+    ejecuciones: 4,
+    ultimaEjecucion: "hace 2 días",
+    ajustesUsados: 1,
+    entradas: [
+      {
+        id: "documentos",
+        tipo: "archivo",
+        etiqueta: "Tus facturas y tickets del mes",
+        ayuda: "XML del SAT, PDF, o fotos de tickets — todo junto, como te lleguen",
+        formatos: ["xml", "pdf", "zip", "jpg", "png"],
+        multiple: true,
+        ejemploNombre: "gastos-marzo (60 archivos)",
+      },
+      {
+        id: "periodo",
+        tipo: "seleccion",
+        etiqueta: "¿Qué periodo?",
+        opciones: [
+          { valor: "mes", etiqueta: "Este mes" },
+          { valor: "quincena", etiqueta: "Esta quincena" },
+        ],
+      },
+    ],
+    resultado: {
+      bloques: [
+        {
+          tipo: "resumen",
+          texto:
+            "De 60 archivos leímos 59: 40 por su XML, 12 por PDF, 5 por el QR del ticket y 2 fotos por lectura de imagen. 1 foto de gasolina quedó ilegible y la apartamos. En total, $186,440 con $25,716 de IVA acreditable, en 9 proveedores.",
+        },
+        {
+          tipo: "comparacion",
+          titulo: "Cómo se leyeron tus archivos",
+          pasos: [
+            { etiqueta: "Recibidos", valor: 60, tono: "neutro" },
+            { etiqueta: "Leídos", valor: 59, tono: "ok" },
+            { etiqueta: "A revisar", valor: 1, tono: "alerta" },
+          ],
+        },
+        {
+          tipo: "metricas",
+          items: [
+            { etiqueta: "Total del periodo", valor: 186440, formato: "moneda", nota: "Con IVA" },
+            { etiqueta: "IVA acreditable", valor: 25716, formato: "moneda", nota: "Con CFDI válido" },
+            { etiqueta: "Proveedores", valor: 9, formato: "entero" },
+            { etiqueta: "Archivos leídos", valor: 59, formato: "entero", nota: "de 60" },
+          ],
+        },
+        {
+          tipo: "callout",
+          tono: "info",
+          titulo: "Casi todo se leyó sin escanear",
+          texto:
+            "45 archivos venían con XML o QR, así que se leyeron exactos y al instante. Solo 2 fotos necesitaron lectura de imagen — tu plan Equipo la incluye.",
+        },
+        {
+          tipo: "callout",
+          tono: "alerta",
+          titulo: "1 foto quedó ilegible",
+          texto:
+            "Un ticket de gasolina salió muy borroso para leer el monto con seguridad. Lo dejamos en \"a revisar\": sube una foto mejor o captúralo a mano.",
+        },
+        {
+          tipo: "barras",
+          titulo: "Total por proveedor",
+          formato: "moneda",
+          datos: [
+            { etiqueta: "Central de Abastos", valor: 42800 },
+            { etiqueta: "Gas Express", valor: 28600 },
+            { etiqueta: "Dist. Sabores", valor: 24300 },
+            { etiqueta: "Sam's Club", valor: 21900 },
+            { etiqueta: "OXXO (varios)", valor: 12400 },
+            { etiqueta: "Otros", valor: 56440 },
+          ],
+        },
+        {
+          tipo: "tabla",
+          titulo: "Consolidado (una fila por factura)",
+          columnas: [
+            { campo: "proveedor", etiqueta: "Proveedor" },
+            { campo: "rfc", etiqueta: "RFC emisor" },
+            { campo: "iva", etiqueta: "IVA", alinear: "derecha", formato: "moneda" },
+            { campo: "total", etiqueta: "Total", alinear: "derecha", formato: "moneda" },
+            { campo: "fuente", etiqueta: "Leído de" },
+          ],
+          filas: [
+            { proveedor: "Central de Abastos", rfc: "CAB120315AB2", iva: 5903, total: 42800, fuente: "XML" },
+            { proveedor: "Gas Express", rfc: "GEX980722QW1", iva: 3945, total: 28600, fuente: "XML" },
+            { proveedor: "Distribuidora Sabores", rfc: "DSA150610MN7", iva: 3352, total: 24300, fuente: "PDF" },
+            { proveedor: "Gasolinera Shell", rfc: "GSH991201ZZ3", iva: 66, total: 480, fuente: "QR ticket" },
+            { proveedor: "OXXO Reforma", rfc: "CCO860523K21", iva: 39, total: 285, fuente: "Foto (OCR)" },
+          ],
+        },
+      ],
+      archivoSalida: "cierre-gastos-marzo.xlsx",
+    },
+    historial: [
+      { fecha: "15 mar 2026", archivo: "gastos-marzo (60 archivos)", duracion: "1 min 12 s", estado: "Correcta", por: "carmen" },
+      { fecha: "1 mar 2026", archivo: "gastos-feb (54 archivos)", duracion: "1 min 4 s", estado: "Correcta", por: "carmen" },
+    ],
+    cambios: [
+      { version: 1, titulo: "Construcción original", fecha: "18 feb 2026", tipo: "construccion" },
+      { version: 2, titulo: "Leer también las fotos de tickets sin QR", fecha: "26 feb 2026", tipo: "ajuste" },
+    ],
+  },
+  {
     id: "limpieza-contactos",
     nombre: "Limpieza de lista de contactos",
     descripcion:
@@ -1074,6 +1186,7 @@ export const planes: Plan[] = [
     descripcion: "Para quitarte de encima tus procesos de todos los días.",
     rasgos: [
       "3 automatizaciones activas",
+      "Lee tus XML del SAT, Excel, CSV y PDF",
       "1 construcción + 3 ajustes por automatización",
       "Ejecuciones sin límite",
       "Reparaciones gratis, siempre",
@@ -1091,6 +1204,7 @@ export const planes: Plan[] = [
     destacado: true,
     rasgos: [
       "6 automatizaciones activas",
+      "Además lee fotos de tickets con QR (gasolina, OXXO)",
       "1 construcción + 3 ajustes por automatización",
       "Ejecuciones sin límite",
       "Reparaciones gratis, siempre",
@@ -1108,6 +1222,7 @@ export const planes: Plan[] = [
     descripcion: "Para operaciones donde varias personas ejecutan a diario.",
     rasgos: [
       "10 automatizaciones activas",
+      "Además lee fotos de tickets sin QR (lectura de imagen)",
       "1 construcción + 3 ajustes por automatización",
       "Ejecuciones sin límite",
       "Reparaciones gratis, siempre",
