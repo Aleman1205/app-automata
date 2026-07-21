@@ -139,8 +139,13 @@ abajo. Si el Planner alguna vez la necesita, la recibe delimitada como dato
 hostil — nunca como campo limpio del contrato.
 
 **Archivos de ejemplo**: máx. 3 por intake, 10 MB cada uno, extensiones
-permitidas `csv xlsx xls pdf txt`, guardados en
+permitidas `csv xlsx xls pdf txt xml zip jpg png`, guardados en
 `s3://bucket/{org_id}/intakes/{intake_id}/` ([docs/04](04-multitenancy.md) §2).
+El intake solo necesita una **muestra** para construir; el **lote grande** de la
+ejecución (p. ej. 60 facturas/fotos en "cierre de gastos") es cosa del RUN y
+tiene su propio sobre de recursos —conteo, tamaño total, ratio de descompresión
+agregado— en [docs/11](11-threat-model.md) §4. Cada formato nuevo (`xml zip jpg
+png`) abre un vector propio que ese doc cubre.
 Si el cliente no tiene el archivo a mano, la entrevista **no se bloquea**:
 cierra con la ambigüedad "sin archivo de ejemplo — validaremos con datos
 sintéticos y el primer archivo real puede requerir un ajuste". El contenido

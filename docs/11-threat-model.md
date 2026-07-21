@@ -10,6 +10,10 @@ ceremonia académica: es una lista de trabajo.
 > cross-tenant principal**; se añade tope de **ejecuciones** (no solo builds);
 > se corrige la falsedad de "los archivos nunca se parsean en la API"; y se
 > añaden auth, autorización intra-org, backups y el spike como superficies.
+>
+> v3 — al ampliar los insumos a XML/ZIP/fotos y lotes grandes (switch multi-input,
+> docs/06), se añade §4bis: XXE y bomba de entidades en XML, ZIP-bomb + path
+> traversal, pixel-flood de imagen, el egress nuevo del OCR, y el sobre de lote.
 
 **La premisa que ordena todo:** este producto tiene una amenaza que un SaaS
 normal no tiene — **ejecutar código generado por IA a partir del pedido de un
@@ -75,8 +79,9 @@ aislamiento**. Honestidad sobre optimismo.
 ## 4. Superficie: archivos subidos
 
 El canal de entrada más gordo y menos estructurado. Reglas base en
-[docs/10](10-intake.md) §4 (3 archivos, 10 MB, extensiones `csv xlsx xls pdf
-txt`). Correcciones que el red-team obligó:
+[docs/10](10-intake.md) §4 (3 archivos de ejemplo, 10 MB, extensiones `csv xlsx
+xls pdf txt xml zip jpg png`; el lote grande de la ejecución tiene su propio
+sobre, ver §4bis). Correcciones que el red-team obligó:
 
 **Los archivos SÍ se parsean fuera del sandbox — y hay que blindarlo.** La
 validación del manifiesto ([docs/01](01-artefacto.md) §5) corre en el backend
@@ -106,6 +111,53 @@ texto. Regla estructural.
 ataca el Excel del *cliente*. Regla del Builder + verificación en la puerta de
 calidad: texto que empieza con `= + - @` se neutraliza. Caso en la suite de
 regresión.
+
+## 4bis. Insumos ampliados (multi-input): XML, ZIP, imágenes, lote
+
+Al aceptar XML/ZIP/fotos y lotes grandes (la automatización multi-input "cierre
+de gastos", [docs/06](06-pricing.md) el switch por plan), se abren vectores que
+las reglas de §4 —pensadas para csv/xlsx— NO atrapan solas.
+
+**XML del CFDI: XXE y bomba de entidades.** Parsear un XML del SAT con un parser
+ingenuo abre dos ataques que el límite de descompresión (§4) **no ve**, porque no
+son compresión:
+- **XXE** — `<!ENTITY x SYSTEM "file:///etc/passwd">` o `SYSTEM "http://interno/"`
+  → lectura de archivos locales del worker y **SSRF** a la red interna.
+- **Bomba de entidades ("billion laughs")** — expansión recursiva de entidades
+  que revienta la RAM.
+
+Defensa: parsear con **DTD, entidades externas y red DESHABILITADAS**
+(`defusedxml`, o lxml con `resolve_entities=False, no_network, load_dtd=False`).
+Para leer un CFDI no se necesitan entidades — se apagan enteras. Corre en el
+worker acotado de §4.
+
+**ZIP directo (el del contador).** Antes el ZIP solo venía *dentro* de un xlsx;
+ahora se acepta como insumo (el ZIP de CFDIs). El límite de ratio de
+descompresión de §4 debe aplicarse **explícitamente al ZIP de primer nivel**, con
+tope de **número de entradas** y de **tamaño descomprimido total** (un ZIP de 500
+XMLs es legítimo; uno que descomprime a 50 GB es una bomba). Rechazar **path
+traversal** en nombres de entrada (`../`, rutas absolutas).
+
+**Imágenes (jpg/png): bomba de descompresión + egress de OCR.**
+- **Pixel-flood / imagen malformada** — un PNG chico que decodifica a un bitmap
+  gigante, o una imagen deforme que revienta el decodificador. Defensa:
+  `Image.MAX_IMAGE_PIXELS` (DecompressionBombError de Pillow) + validar
+  dimensiones ANTES de decodificar, en el worker acotado.
+- **Egress nuevo hacia el OCR.** Mandar la foto a Textract/Document AI saca datos
+  del cliente a un tercero: es superficie de **privacidad**, no solo de infra.
+  Debe salir del worker acotado, con scope por org, **declarado en la política de
+  privacidad**, y contarse en el presupuesto (el rung que cuesta, docs/06 switch).
+
+**Sobre de lote (multi-input).** La regla "3 archivos, 10 MB" es del *ejemplo* de
+intake; el RUN de "cierre de gastos" recibe decenas de archivos. Necesita su
+propio sobre, verificado antes de procesar: **número máximo de archivos**,
+**tamaño total del lote**, **ratio de descompresión agregado** (suma de todo lo
+que expanden los ZIP/XML), y **timeout del lote completo**. El ruteo por archivo
+no exime del tope agregado: 60 archivos "chicos" pueden sumar una bomba.
+
+Regla transversal: **todo insumo nuevo se valida en el worker aislado, con tope,
+antes de tocar al Builder o al runner** — mismo principio de §4, extendido a los
+formatos que abrimos.
 
 ## 5. Superficie: el código generado — build y run son distintos
 
@@ -256,6 +308,17 @@ Cada línea es verificable; ninguna es opcional:
 - [ ] Magic bytes en upload + rechazo de tipo disfrazado
 - [ ] **Decompression-bomb xlsx** en el endpoint de subida → rechazo por
       límites, sin tumbar la API
+- [ ] **XXE / bomba de entidades en XML** (CFDI con `<!ENTITY … SYSTEM …>` y
+      con expansión recursiva) → parser sin DTD/entidades/red; sin leer archivos
+      locales, sin SSRF, sin reventar RAM
+- [ ] **ZIP-bomb / path traversal** en ZIP de primer nivel → rechazo por tope de
+      entradas, tamaño descomprimido y ratio; nombres con `../` rechazados
+- [ ] **Pixel-flood / imagen malformada** (jpg/png) → DecompressionBombError por
+      límite de píxeles antes de decodificar
+- [ ] **Sobre de lote** (60+ archivos, o suma que expande a bomba) → corte por
+      conteo / tamaño total / ratio agregado / timeout del lote
+- [ ] **Egress de OCR** (foto → Textract/DocAI) sale del worker acotado, con
+      scope por org, y está declarado en la política de privacidad
 - [ ] Fórmulas neutralizadas en salidas xlsx/csv (caso en la suite de regresión)
 - [ ] Fork-bomb y archivo de 100 MB contra el runner → mueren por límites
 - [ ] Caché de dependencias no es escribible por el sandbox
