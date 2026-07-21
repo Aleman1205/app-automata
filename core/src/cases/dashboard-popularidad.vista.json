@@ -1,0 +1,50 @@
+{
+  "version_vista": 1,
+  "titulo": "Dashboard de popularidad de productos",
+  "archivoSalida": "dashboard.xlsx",
+  "bloques": [
+    {
+      "tipo": "resumen",
+      "texto": "Del reporte de popularidad: el negocio movió el ingreso del periodo con un margen sano. Abajo, el desglose por familia y el top de productos."
+    },
+    {
+      "tipo": "metricas",
+      "items": [
+        { "etiqueta": "Ingreso total", "valor": "@resultado.metricas.ingreso_total", "formato": "moneda" },
+        { "etiqueta": "Utilidad total", "valor": "@resultado.metricas.utilidad_total", "formato": "moneda" },
+        { "etiqueta": "Margen", "valor": "@resultado.metricas.margen_pct", "formato": "entero", "sufijo": "%" },
+        { "etiqueta": "Productos", "valor": "@resultado.metricas.num_productos", "formato": "entero", "nota": "en 44 familias" }
+      ]
+    },
+    {
+      "tipo": "barras",
+      "titulo": "Ingreso por familia",
+      "formato": "moneda",
+      "fuente": "@resultado.familias",
+      "eje_x": "familia",
+      "eje_y": "ingreso",
+      "limite": 8
+    },
+    {
+      "tipo": "ranking",
+      "titulo": "Top productos por ingreso",
+      "formato": "moneda",
+      "fuente": "@resultado.top_productos",
+      "eje_x": "producto",
+      "eje_y": "ingreso",
+      "limite": 10
+    },
+    {
+      "tipo": "tabla",
+      "titulo": "Desglose por familia",
+      "fuente": "@resultado.familias",
+      "limite": 12,
+      "columnas": [
+        { "campo": "familia", "etiqueta": "Familia" },
+        { "campo": "num_productos", "etiqueta": "Productos", "alinear": "derecha", "formato": "entero" },
+        { "campo": "ingreso", "etiqueta": "Ingreso", "alinear": "derecha", "formato": "moneda" },
+        { "campo": "margen_pct", "etiqueta": "Margen", "alinear": "derecha", "formato": "porcentaje" }
+      ]
+    }
+  ]
+}

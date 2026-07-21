@@ -15,3 +15,7 @@ spike/datos/
 
 # Config local de herramientas
 .claude/
+
+# core (Fase 1)
+core/node_modules/
+core/.artefactos/

@@ -1,0 +1,20 @@
+{
+  "name": "automata-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Motor del producto (Fase 1, M0): el loop build -> artefacto -> run -> vista. Framework-agnostico; se envuelve en API routes de Next mas adelante.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "verify": "tsx scripts/verify-run-vista.ts",
+    "m0": "tsx scripts/run-m0.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
