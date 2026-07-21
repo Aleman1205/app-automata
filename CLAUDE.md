@@ -93,7 +93,10 @@ spike/             prueba técnica — Node + npm (raíz)
   lo ilegible va a "a revisar". El "agente extra" es esto (determinista), NO un
   chatbot conversacional (que metería modelo en el Run + no-determinismo).
   **Pendiente: mini-spike de OCR** para el costo real del rung de foto — spec en
-  `docs/automatizaciones-fichas.md` (§ "Pendiente: mini-spike de OCR").
+  `docs/automatizaciones-fichas.md` (§ "Pendiente: mini-spike de OCR"). **Cada
+  formato nuevo (xml/zip/jpg) es un vector de seguridad** — threat model en
+  `docs/11` §4bis (XXE, ZIP-bomb, pixel-flood, egress de OCR, sobre de lote); el
+  spike/regresión debe ejercerlos con fixtures maliciosos.
 
 ## Cómo correr
 

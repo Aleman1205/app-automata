@@ -246,3 +246,10 @@ spike chico —estilo el del build, pero para el **costo de Run del OCR**.
   Textract/Google Document AI (para el OCR determinista).
 - **Regla de oro:** ruteo híbrido (Tesseract gratis primero, modelo solo en las
   de baja confianza) mantiene el promedio cerca de $0.
+- **Casos de seguridad (no solo costo):** el spike y la suite de regresión deben
+  ejercer también los vectores de insumo multi-input de
+  [docs/11](11-threat-model.md) §4bis con **fixtures maliciosos** —XML con XXE y
+  bomba de entidades, ZIP-bomb + path traversal, imagen pixel-flood, y un lote
+  que suma a bomba—. El rung de OCR no es solo un tema de costo: cada formato que
+  abrimos (xml/zip/jpg) es un vector, y el worker acotado debe matarlos sin
+  tumbar nada.
