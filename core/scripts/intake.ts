@@ -47,11 +47,13 @@ async function main() {
   console.log(`\nValidación §4: ${v.ok ? "✓ pasa" : "✗ " + v.errores.join("; ")}`);
 
   const buildSpec = intakeSpecABuildSpec(res.spec);
-  console.log("\nSpec adaptado para el Builder de M0 (lo que alimentaría el build):");
+  console.log("\nSpec adaptado al formato que consume el Builder de M0:");
   console.log("  objetivo:", buildSpec.objetivo.slice(0, 80) + "…");
   console.log("  reglas:", buildSpec.reglas.length, "· criterios:", buildSpec.criterios_exito.length, "· entradas:", buildSpec.entradas.length);
-  console.log("\n✓ M1: idea en lenguaje natural → spec validado → listo para el build (M0).");
-  console.log("  Para construir de verdad con este spec: usa el pipeline con --build (cuesta ~$2).");
+  console.log("\n✓ M1: idea en lenguaje natural → spec validado y adaptado al formato del Builder.");
+  console.log("  NOTA (honesta): conectar este spec al build todavía necesita la VISTA, que produce");
+  console.log("  el planner (pendiente). Hoy `npm run m0` usa un caso a mano y NO consume este spec.");
+  console.log("  M1 entrega el spec; el cableado intake→planner→build es lo que sigue.");
 }
 
 main().catch((e) => {

@@ -51,6 +51,9 @@ check(
     criterios_exito: [{ criterio: "algo", criterio_cliente: "" }, specValido.criterios_exito[1]!],
   }).ok,
 );
+// Regresión de la revisión adversarial:
+check("spec ausente NO crashea y falla", !validarSpec(undefined as unknown as IntakeSpec).ok);
+check("regla larguísima falla (maxLength §4)", !validarSpec({ ...specValido, reglas: ["x".repeat(500)] }).ok);
 
 console.log("\n2. Adaptador intake→build — produce un Spec que el Builder consume:");
 const buildSpec = intakeSpecABuildSpec(specValido);

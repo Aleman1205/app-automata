@@ -97,7 +97,7 @@ const SPEC_SCHEMA = {
         required: ["tipo", "formato", "descripcion"],
       },
     },
-    reglas: { type: "array", maxItems: 15, items: { type: "string" } },
+    reglas: { type: "array", maxItems: 15, items: { type: "string", maxLength: 400 } },
     criterios_exito: {
       type: "array",
       minItems: 2,
@@ -105,13 +105,13 @@ const SPEC_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          criterio: { type: "string", description: "Técnico, verificable; va al rubric del Verifier" },
-          criterio_cliente: { type: "string", description: "Lenguaje natural; va a la aprobación" },
+          criterio: { type: "string", maxLength: 400, description: "Técnico, verificable; va al rubric del Verifier" },
+          criterio_cliente: { type: "string", maxLength: 400, description: "Lenguaje natural; va a la aprobación" },
         },
         required: ["criterio", "criterio_cliente"],
       },
     },
-    ambiguedades_restantes: { type: "array", items: { type: "string" } },
+    ambiguedades_restantes: { type: "array", items: { type: "string", maxLength: 400 } },
     confianza: { type: "string", enum: ["alta", "media", "baja"] },
   },
   required: ["version", "objetivo", "entradas", "salidas", "reglas", "criterios_exito", "ambiguedades_restantes", "confianza"],
