@@ -9,15 +9,19 @@
     "verify": "tsx scripts/verify-run-vista.ts",
     "verify:intake": "tsx scripts/verify-intake.ts",
     "verify:planner": "tsx scripts/verify-planner.ts",
+    "verify:auth": "tsx scripts/verify-auth.ts",
+    "verify:pg": "tsx scripts/verify-pg.ts",
     "m0": "tsx scripts/run-m0.ts",
     "intake:live": "tsx scripts/intake.ts",
     "planner:live": "tsx scripts/planner.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.112.3"
+    "@anthropic-ai/sdk": "^0.112.3",
+    "pg": "^8.13.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }
