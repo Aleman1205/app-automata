@@ -87,6 +87,13 @@ spike/             prueba técnica — Node + npm (raíz)
   A→B con disparadores); es "desastre → resultado terminado y verificado", a
   demanda, para PyME no-técnica. La respuesta a "¿esto no es Zapier?" vive en
   `docs/posicionamiento.md` (munición de pitch).
+- **Insumos multi-formato por plan (switch).** Las automatizaciones de extracción
+  tragan XML/PDF/fotos y rutean **archivo por archivo** (XML/QR = gratis; foto
+  pelona = OCR, el único rung que cuesta, gateado al plan alto). **Nunca inventa**;
+  lo ilegible va a "a revisar". El "agente extra" es esto (determinista), NO un
+  chatbot conversacional (que metería modelo en el Run + no-determinismo).
+  **Pendiente: mini-spike de OCR** para el costo real del rung de foto — spec en
+  `docs/automatizaciones-fichas.md` (§ "Pendiente: mini-spike de OCR").
 
 ## Cómo correr
 

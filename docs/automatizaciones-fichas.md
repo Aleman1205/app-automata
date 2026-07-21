@@ -222,3 +222,27 @@ acota y **casi lo desactiva para México:**
 
 > Ojo de captura: el papel térmico se borra en 3–6 meses; hay que fotografiar el
 > ticket de inmediato — lo que refuerza usar la ruta QR/XML mientras exista.
+
+### Pendiente: mini-spike de OCR (cuando haya API)
+
+Antes de prometer el rung de foto-pelona con número duro (el plan Equipo, en
+`web/lib/datos.ts` → `planes` y la automatización `cierre-gastos`), correr un
+spike chico —estilo el del build, pero para el **costo de Run del OCR**.
+
+- **Objetivo:** confirmar que el costo del rung caro es tan chico como se estima.
+- **Insumo:** un lote de **~30–50 tickets mexicanos reales** (térmicos, fotos de
+  celular, OXXO/gasolina/taquería), mezclando con QR y sin QR.
+- **Qué medir:**
+  1. **% que llega sin QR ni XML** (el subconjunto que de verdad necesita OCR).
+  2. **Costo/doc** del método: Textract *AnalyzeExpense* (~$0.01, determinista)
+     vs. un vision-LLM (~$0.0004–0.013, no determinista).
+  3. **Exactitud a nivel campo** en los críticos (total, IVA, fecha, RFC) — meta
+     ≥ 95% F1; lo que no llegue va a **"a revisar"**, no se inventa.
+  4. **Tasa de "a revisar"** resultante (el costo-de-revisión de Tesseract solo).
+- **El número que sale:** costo esperado de Run del asterisco =
+  **% sin-QR/XML × costo/doc**. Con ~3–5% y ~$0.01/doc, es trivial — el spike lo
+  confirma o lo rompe.
+- **Necesita:** `ANTHROPIC_API_KEY` (para el vision-LLM) y/o una cuenta de
+  Textract/Google Document AI (para el OCR determinista).
+- **Regla de oro:** ruteo híbrido (Tesseract gratis primero, modelo solo en las
+  de baja confianza) mantiene el promedio cerca de $0.
