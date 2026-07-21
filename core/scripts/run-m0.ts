@@ -24,7 +24,7 @@ const XLSX = path.join(RAIZ, "spike", "datos", "gastos.xlsx");
 
 // BuildClient que reutiliza el artefacto ya construido del spike (gratis).
 class ReuseArtifactBuildClient implements BuildClient {
-  async build(_spec: Spec, _ejemplo: string) {
+  async build(_spec: Spec, _ejemplo: string, _contrato?: string) {
     const automatizacionPy = await fs.readFile(path.join(ARTIF, "automatizacion.py"), "utf8");
     let manifiesto: Manifiesto = { entradas: [] };
     try {

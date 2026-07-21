@@ -32,7 +32,7 @@ function artefactoKey(versionId: string): string {
 /** Compone el artefacto (código construido + vista provista) y lo guarda. */
 export async function construir(
   deps: Deps,
-  args: { orgId: string; nombre: string; spec: Spec; vista: Vista; ejemploPath: string },
+  args: { orgId: string; nombre: string; spec: Spec; vista: Vista; ejemploPath: string; contratoTexto?: string },
 ): Promise<{ version: Version; artefacto: Artefacto; costoUsd: number; iteraciones: number }> {
   const auto = await deps.state.crearAutomatizacion({ orgId: args.orgId, nombre: args.nombre });
   let version = await deps.state.crearVersion({
@@ -47,7 +47,7 @@ export async function construir(
   let iteraciones: number;
   let aprobado: boolean;
   try {
-    ({ codigo, costoUsd, iteraciones, aprobado } = await deps.build.build(args.spec, args.ejemploPath));
+    ({ codigo, costoUsd, iteraciones, aprobado } = await deps.build.build(args.spec, args.ejemploPath, args.contratoTexto));
   } catch (e) {
     await deps.state.actualizarVersion(version.id, { estado: "failed" });
     throw e;

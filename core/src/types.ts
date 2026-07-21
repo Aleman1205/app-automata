@@ -188,11 +188,14 @@ export interface CodigoConstruido {
   requirements?: string;
 }
 
-/** Construye el código a partir de un spec. CMA en M0; runner propio en Fase 2. */
+/** Construye el código a partir de un spec. CMA en M0; runner propio en Fase 2.
+ * `contratoTexto` (del planner) le dice al builder qué forma debe tener el
+ * resultado.json para que la vista resuelva. */
 export interface BuildClient {
   build(
     spec: Spec,
     ejemploPath: string,
+    contratoTexto?: string,
   ): Promise<{ codigo: CodigoConstruido; costoUsd: number; iteraciones: number; aprobado: boolean }>;
 }
 

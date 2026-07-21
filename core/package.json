@@ -8,8 +8,10 @@
     "typecheck": "tsc --noEmit",
     "verify": "tsx scripts/verify-run-vista.ts",
     "verify:intake": "tsx scripts/verify-intake.ts",
+    "verify:planner": "tsx scripts/verify-planner.ts",
     "m0": "tsx scripts/run-m0.ts",
-    "intake:live": "tsx scripts/intake.ts"
+    "intake:live": "tsx scripts/intake.ts",
+    "planner:live": "tsx scripts/planner.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3"

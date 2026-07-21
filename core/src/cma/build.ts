@@ -63,7 +63,7 @@ function rubricDesde(spec: Spec): string {
   ].join("\n");
 }
 
-function instruccionesDesde(spec: Spec, rutaRemota: string): string {
+function instruccionesDesde(spec: Spec, rutaRemota: string, contratoTexto?: string): string {
   return [
     spec.objetivo,
     `\nEl archivo de entrada está en: ${rutaRemota}`,
@@ -71,14 +71,18 @@ function instruccionesDesde(spec: Spec, rutaRemota: string): string {
     "automatizacion.py (recibe la ruta como argumento), su resultado ejecutado, y",
     "manifiesto.json. Reglas de negocio a respetar:",
     spec.reglas.map((r) => `- ${r}`).join("\n"),
-  ].join("\n");
+    // El planner fija la forma del resultado.json para que la vista resuelva.
+    contratoTexto ? `\n${contratoTexto}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export class CmaBuildClient implements BuildClient {
   private client = new Anthropic();
   private log = (m: string) => console.log(`  [cma] ${m}`);
 
-  async build(spec: Spec, ejemploPath: string) {
+  async build(spec: Spec, ejemploPath: string, contratoTexto?: string) {
     const NOMBRE_ENV = "automata-core";
 
     // 1. Environment con la config de la decisión (b): deps pre-horneadas + sin red.
@@ -131,7 +135,7 @@ export class CmaBuildClient implements BuildClient {
       events: [
         {
           type: "user.define_outcome",
-          description: instruccionesDesde(spec, rutaRemota),
+          description: instruccionesDesde(spec, rutaRemota, contratoTexto),
           rubric: { type: "text", content: rubricDesde(spec) },
           max_iterations: MAX_ITERACIONES,
         },
