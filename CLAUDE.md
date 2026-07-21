@@ -63,7 +63,7 @@ spike/             prueba técnica — Node + npm (raíz)
 | 09 | Sistema de componentes | el agente declara vistas, no escribe HTML; **catálogo v1 construido** en el prototipo |
 | 10 | Intake | el agente entrevistador (opción múltiple → spec validado) |
 | 11 | Threat model | ejecutar código de IA es el producto; escape de contenedor = riesgo #1 |
-| 13 | Auth y webhooks | stub: MFA, 2 roles, firma de webhooks (pendiente de diseñar) |
+| 13 | Auth y webhooks | **diseñado**: sesiones/step-up MFA, assertCan por request, cadena de firma de webhooks |
 
 (No hay docs/12; el 13 se numeró así a propósito.)
 
