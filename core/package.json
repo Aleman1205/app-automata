@@ -7,7 +7,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "verify": "tsx scripts/verify-run-vista.ts",
-    "m0": "tsx scripts/run-m0.ts"
+    "verify:intake": "tsx scripts/verify-intake.ts",
+    "m0": "tsx scripts/run-m0.ts",
+    "intake:live": "tsx scripts/intake.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3"
