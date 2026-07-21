@@ -72,11 +72,13 @@ spike/             prueba técnica — Node + npm (raíz)
 - **Build vs Run separados.** El Build (agentes, caro, 1 vez) y el Run
   (ejecutar código, barato, N veces) son distintos. El Run **no usa modelos**.
 - **Managed Agents (Anthropic)** para el Build en el MVP; runner propio en Fase 2.
-- **Decisiones de runtime** (resuelven docs/11 §12) en `docs/decisiones-runtime.md`:
-  aislamiento heredado de CMA en el MVP (gVisor obligatorio en el runner de Fase 2);
-  build **sin red** con deps pre-horneadas (preferido); topes de ejecución
-  recalculados para CMA (50/100/200, no 500/2k/10k). Faltan confirmar 3 hechos de
-  CMA (aislamiento fuerte, modo red "none" + imágenes con deps, egress restringido).
+- **Decisiones de runtime** (resuelven docs/11 §12) en `docs/decisiones-runtime.md`,
+  con hechos de CMA confirmados: **build se blinda en CMA** (`packages`
+  pre-instalados + `networking: limited` sin hosts → sin red, sin runner propio en
+  el MVP); **Run <1¢** ($0.08/session-hour, sin modelos, NO $0.30) → topes de
+  ejecución holgados; **environment por org** como mitigación de aislamiento
+  (gVisor en el runner de Fase 2). Residuales: garantía anti-escape del sandbox
+  (preguntar a Anthropic) y si el Run corre sin modelo (probar con API).
 - **Modelo del build:** intake (Sonnet 5) → planner (Opus) → builder (Opus) →
   verifier (Opus, contexto fresco). 6 roles de modelo, solo 2 son agentes reales.
 - **Alcance MVP:** automatizaciones **sin estado** (archivo → proceso → resultado).

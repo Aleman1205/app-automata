@@ -1,104 +1,98 @@
 # Decisiones de runtime (resuelve docs/11 §12)
 
 > Las 3 decisiones que el red-team elevó a "necesitan decisión de negocio"
-> ([docs/11](11-threat-model.md) §12), con **recomendación decidida** para cada
-> una. Las tres cuelgan de hechos de CMA que hay que **confirmar con su doc**
-> (marcados ⚠️). Fecha: 2026-07-20.
+> ([docs/11](11-threat-model.md) §12), con **recomendación decidida**. Los hechos
+> de CMA se **confirmaron contra la doc oficial** (2026-07-21). Quedan 2
+> residuales que necesitan pregunta directa a Anthropic (no bloquean el plan).
 
 ---
 
-## Decisión #1 — Aislamiento: ¿gVisor antes del primer cliente?
+## Decisión #1 — Aislamiento cross-tenant
 
-**Recomendación: la pregunta se disuelve en el MVP, y se vuelve regla en Fase 2.**
+**Confirmado parcial + mitigación concreta.** La doc de CMA confirma: **sandbox
+fresco y aislado por sesión, sin filesystem compartido.** PERO **no dice qué
+tecnología** (gVisor / microVM / contenedor) ni **confirma explícitamente** que
+sea seguro entre fronteras de confianza mutuamente hostiles. Más aún, la doc de
+sandboxes self-hosted aconseja *"un workspace/environment separado por cada
+frontera de confianza"*.
 
-En el MVP, **Build y Run viven en CMA** (Anthropic). Eso significa que **tú no
-operas el contenedor** — el aislamiento cross-tenant es de *su* sandbox, no de tu
-runtime. No construyes gVisor ni runtime endurecido: **heredas el suyo.**
+**Recomendación:**
+- **MVP (Build+Run en CMA):** el aislamiento lo heredas de CMA. **Mitigación que
+  adoptamos: un environment separado por org** (no uno compartido entre tenants)
+  — es la propia guía de Anthropic aplicada, y refuerza el aislamiento sin
+  depender de saber la tecnología interna.
+- **Fase 2 (runner propio):** **gVisor (`runsc`) desde el día 1 — no negociable.**
 
-- **MVP:** no gastes esfuerzo en runtime de contenedor. Tu control portante para
-  el activo #1 pasa a ser *"confiar en el sandbox de CMA + validar pertenencia
-  org↔artefacto dentro de tu capa"* ([docs/04](04-multitenancy.md) §6).
-- **Fase 2 (runner propio):** **gVisor (`runsc`) desde el día 1 de ese runner —
-  no negociable.** Nunca lances un runner propio con solo hardening estándar
-  (no-root/sin-red/efímero); el escape es el eslabón portante del cross-tenant.
-
-⚠️ **Confirmar con Anthropic:** que el sandbox de CMA sea aislamiento fuerte
-(clase gVisor/microVM). Tu activo #1 se está apoyando en él — hay que saberlo por
-escrito, no asumirlo.
-
-**Impacto en (c):** el MVP no presupuesta trabajo de runtime de contenedor. Fase 2
-presupuesta gVisor desde el inicio del runner.
-
----
-
-## Decisión #2 — ¿El build puede vivir en CMA con egress seguro?
-
-**Este es el cuello de botella real. Recomendación en orden de preferencia:**
-
-1. **Pre-hornear la lista blanca en la imagen del environment → build sin red.**
-   Si los paquetes aprobados vienen **preinstalados** en el environment de CMA, el
-   build **no necesita `pip` en vivo**, y se corre con **red DESHABILITADA**. Eso
-   **disuelve** el problema de exfiltración-en-build de raíz. El spike ya
-   configura la red del environment (`networking: { type: "unrestricted" }`) — o
-   sea, es **configurable**; falta confirmar que existe el modo "none" y que se
-   pueden hornear deps en la imagen. **Esta es la opción preferida.**
-2. **Si el build sí necesita `pip` vivo:** egress restringido a un **mirror
-   privado de PyPI + DNS fijado** (solo la lista blanca), *si CMA lo permite*.
-3. **Si ninguna:** **aceptar por escrito el riesgo de exfil-en-build para el
-   MVP** — es un riesgo acotado porque **durante el build solo hay datos de UN
-   tenant** (el propio cliente) y el Verifier de contexto fresco atrapa la
-   desviación de resultado — y **mover el build a runner propio en Fase 2.**
-
-⚠️ **Confirmar con la doc de CMA (3 preguntas):**
-- ¿Existe modo de red **"none"** para el environment?
-- ¿Se pueden crear **imágenes con paquetes preinstalados** (para no necesitar pip)?
-- Si no, ¿permite **egress restringido a un mirror + DNS fijado**?
-
-**Impacto en (c):** la opción 1 mantiene el MVP simple (sin infra de red propia).
-La 3 adelanta el runner propio. **(c) no se puede secuenciar sin esta respuesta.**
+⚠️ **Residual:** como el activo #1 (datos cross-tenant) se apoya en el
+aislamiento de CMA y la doc no confirma la tecnología ni la garantía anti-escape,
+**preguntárselo directo a Anthropic** (soporte/cuenta) antes del primer cliente
+con datos sensibles.
 
 ---
 
-## Decisión #3 — Cuota de ejecuciones por plan que CORTE
+## Decisión #2 — Egress del build → **RESUELTO, a favor**
 
-**Recomendación: sí, tope duro que corta — pero los números del doc estaban mal.**
+Era el cuello de botella. **La doc confirma las dos piezas que lo cierran, y el
+MVP NO necesita runner de build propio.**
 
-Sí es obligatorio un tope que **corte** (no solo alarme) mientras el Run viva en
-CMA. **Pero** los números sugeridos en §12 (Base 500 / Pro 2,000 / Equipo 10,000)
-**asumían el runner barato de Fase 2**; a **~$0.30/ejecución de CMA** te quiebran.
+- **`packages`** en la config del environment pre-instala las deps de la lista
+  blanca (pip/npm/apt), **cacheadas por-environment** → el build **no necesita
+  `pip` en runtime.**
+- **`networking: { type: "limited", allowed_hosts: [...] }`** restringe el egress
+  a hosts explícitos (hay `unrestricted` y `limited`; **no** hay un modo "none"
+  literal, pero `limited` sin hosts es el equivalente funcional).
 
-Recálculo para la era-CMA (tope = **backstop de abuso**, no límite de uso normal):
+**La receta:** environment con `packages` pre-instalados + `networking: limited`
+con **`allowed_hosts: []` y `allow_package_managers: false`**. Resultado: el build
+corre con las deps ya puestas y **sin salida de red** — la superficie de
+exfiltración-en-build se cierra, sin infra propia.
 
-| Plan | Precio | Tope/mes | Costo Run al tope | Uso normal esperado |
-|---|---|---|---|---|
-| Base | $499 MXN (~$27) | **50** | ~$15 | 10–15 (procesos mensuales) |
-| Pro | $999 (~$54) | **100** | ~$30 | 20–40 |
-| Equipo | $1,999 (~$108) | **200** | ~$60 | 40–80 |
+*(Matiz a probar: confirmar que `allowed_hosts: []` no cae por default a algo
+permisivo; si no, poner el host más estrecho posible.)*
 
-- Los topes son **~50-56% del ingreso al máximo absoluto** — un abusador queda
-  acotado, no te quiebra. El **uso normal** (un cierre mensual, unas corridas por
-  automatización) **ni los roza.**
-- **Corta en el tope** con *"sube de plan o espera al reinicio"*; **nunca sigas
-  cobrándote** en silencio.
-- **Fase 2 (Run propio, ~$0):** los topes suben drásticamente o pasan a "uso
-  justo". Estos números bajos son un **artefacto de la era-CMA.**
-
-**Insight de roadmap:** que $0.30/ejecución deje las tarifas bajas tan apretadas
-**es en sí un argumento para mover el Run fuera de CMA antes de lo planeado.**
-#3 no es solo un cap — es una señal de que el runner propio (Fase 2) tiene más
-urgencia económica de la que parecía.
-
-**Impacto en (c) y docs/06:** el pricing debe cambiar **"ejecuciones sin límite"**
-por estos topes; el **metering que corta** es código de Fase 1 (no opcional).
+**Impacto en (c): el pipeline entero vive en CMA en el MVP.** Sin runner de build
+propio. Este era el mayor riesgo de alcance y salió a favor.
 
 ---
 
-## Lo que queda antes de cerrar (b) del todo
+## Decisión #3 — Cuota de ejecuciones → **el Run es MUCHO más barato de lo asumido**
 
-Las 3 recomendaciones están tomadas, pero **#1 y #2 tienen un ⚠️ de hechos de
-CMA** que conviene confirmar leyendo su doc antes de comprometer el plan:
-1. ¿El sandbox de CMA es aislamiento fuerte? (#1)
-2. ¿Modo de red "none" + imágenes con deps preinstaladas? (#2, la preferida)
-3. ¿Egress restringido a mirror + DNS fijado? (#2, el plan B)
+La doc confirma el billing de CMA: **$0.08 por session-hour** (medido a
+milisegundos, solo mientras corre) **+ tokens** (precio del modelo). El supuesto
+de **$0.30/ejecución estaba inflado**.
 
-Con esas 3 respuestas, (b) queda cerrado sin asteriscos y (c) se puede secuenciar.
+Como **el Run no usa modelos** (decisión de arquitectura), su costo es **solo
+session-runtime**: una corrida de 1–3 min ≈ **$0.002–0.004**, no $0.30.
+
+**Consecuencias:**
+- Los topes **50/100/200 estaban basados en un supuesto falso.** Con el Run a
+  **<1¢**, los topes pueden ser **holgados** — los originales del doc
+  (500/2,000/10,000) son viables con margen sano, o incluso "uso justo". El cap
+  sigue siendo un backstop de abuso, pero generoso.
+- **Retracto parcial del insight de roadmap:** el costo de CMA **no** aprieta las
+  tarifas como creí. La urgencia económica de mover el Run a runner propio
+  **baja** — sigue valiendo por *control* (Fase 2), no por costo.
+
+⚠️ **Residual:** confirmar si ejecutar el script en CMA se puede hacer **sin
+agente/modelo** (ejecución de sandbox pura = solo session-hours) o si obliga a una
+sesión con agente (suma tokens). Eso fija el costo exacto del Run. Se prueba en
+minutos cuando haya API.
+
+**Impacto en (c) y docs/06:** cambiar "ejecuciones sin límite" por un tope
+holgado; el metering que corta sigue siendo código de Fase 1, pero deja de ser
+una restricción económica ajustada.
+
+---
+
+## Estado de (b): cerrado para (c)
+
+Con los hechos confirmados, **(b) queda cerrado para efectos de secuenciar (c):**
+- **#2 salió a favor** → el MVP **no** lleva runner de build propio; todo en CMA.
+- **#3 el Run es <1¢** → topes holgados, no la restricción que creíamos.
+
+Quedan **2 residuales que NO bloquean (c)** pero sí conviene cerrar antes del
+primer cliente con datos sensibles:
+1. La **garantía de aislamiento anti-escape** del sandbox cloud de CMA
+   (la doc no dice la tecnología) — pregunta directa a Anthropic. Mitigación ya
+   adoptada: environment por org.
+2. Si el **Run puede correr sin modelo** (ejecución pura) — se prueba con la API.

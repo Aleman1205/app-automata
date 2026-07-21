@@ -358,11 +358,13 @@ autorizado a clientes.
 
 ## 12. Decisiones pendientes (elevadas por el red-team)
 
-> **Resueltas con recomendación en [docs/decisiones-runtime.md](decisiones-runtime.md)**
-> (2026-07-20). Resumen: #1 el aislamiento lo hereda de CMA en el MVP, gVisor
-> obligatorio en el runner propio de Fase 2; #2 preferir build **sin red** con
-> deps pre-horneadas; #3 topes recalculados para la era-CMA (50/100/200, no
-> 500/2k/10k). Faltan confirmar 3 hechos de CMA (ver ese doc).
+> **Resueltas en [docs/decisiones-runtime.md](decisiones-runtime.md)** con hechos
+> de CMA confirmados (2026-07-21): **#2 salió a favor** — el build se blinda en
+> CMA con `packages` pre-instalados + `networking: limited` sin hosts (sin runner
+> propio en el MVP); **#3 el Run es <1¢** ($0.08/session-hour, sin modelos), no
+> $0.30 → topes holgados; **#1** environment por org como mitigación, gVisor en
+> el runner de Fase 2. Residuales: garantía anti-escape del sandbox (preguntar a
+> Anthropic) y si el Run corre sin modelo (probar con API).
 
 Tres necesitan decisión de negocio, no de ingeniería:
 
