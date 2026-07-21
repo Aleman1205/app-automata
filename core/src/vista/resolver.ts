@@ -53,7 +53,7 @@ function resolverNumero(resultado: unknown, v: Ref | number, contexto: string): 
   return valor;
 }
 
-/** Resuelve un valor que debe ser texto (resumen). */
+/** Resuelve un valor que debe ser texto (resumen, titulo, nota…). */
 function resolverTexto(resultado: unknown, v: Ref | string, contexto: string): string {
   if (!esRef(v)) return v;
   const valor = resolverRef(resultado, v);
@@ -61,6 +61,11 @@ function resolverTexto(resultado: unknown, v: Ref | string, contexto: string): s
     throw new VistaError(`${contexto}: la referencia ${v} resolvió a ${typeof valor}, se esperaba texto.`);
   }
   return valor;
+}
+
+/** Igual pero para campos opcionales (sufijo, nota, tendencia, texto de callout). */
+function resolverTextoOpt(resultado: unknown, v: Ref | string | undefined, contexto: string): string | undefined {
+  return v === undefined ? undefined : resolverTexto(resultado, v, contexto);
 }
 
 /** Resuelve una `fuente` que debe ser un arreglo de objetos. */
@@ -86,17 +91,25 @@ function resolverBloque(resultado: unknown, b: VistaBloque): Bloque {
       return { tipo: "resumen", texto: resolverTexto(resultado, b.texto, "bloque resumen") };
 
     case "callout":
-      return { tipo: "callout", tono: b.tono, titulo: b.titulo, texto: b.texto };
+      return {
+        tipo: "callout",
+        tono: b.tono,
+        titulo: resolverTexto(resultado, b.titulo, `callout "${typeof b.titulo === "string" ? b.titulo : ""}"`),
+        texto: resolverTextoOpt(resultado, b.texto, "callout texto"),
+      };
 
     case "metricas": {
-      const items: MetricaDemo[] = b.items.map((m, i) => ({
-        etiqueta: m.etiqueta,
-        valor: resolverNumero(resultado, m.valor, `métrica #${i + 1} "${m.etiqueta}"`),
-        formato: m.formato,
-        sufijo: m.sufijo,
-        nota: m.nota,
-        tendencia: m.tendencia,
-      }));
+      const items: MetricaDemo[] = b.items.map((m, i) => {
+        const ctx = `métrica #${i + 1} "${m.etiqueta}"`;
+        return {
+          etiqueta: m.etiqueta,
+          valor: resolverNumero(resultado, m.valor, ctx),
+          formato: m.formato,
+          sufijo: resolverTextoOpt(resultado, m.sufijo, `${ctx} sufijo`),
+          nota: resolverTextoOpt(resultado, m.nota, `${ctx} nota`),
+          tendencia: resolverTextoOpt(resultado, m.tendencia, `${ctx} tendencia`),
+        };
+      });
       return { tipo: "metricas", items };
     }
 

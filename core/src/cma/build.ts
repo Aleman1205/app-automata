@@ -95,7 +95,10 @@ export class CmaBuildClient implements BuildClient {
         config: {
           type: "cloud",
           packages: { pip: PAQUETES_PIP },
-          networking: { type: "limited", allowed_hosts: [] },
+          // Decisión (b): deps pre-horneadas + SIN red. `allowed_hosts: []` y
+          // `allow_package_managers: false` son toggles independientes; ambos
+          // hacen falta para cerrar el egress (docs/decisiones-runtime.md #2).
+          networking: { type: "limited", allowed_hosts: [], allow_package_managers: false },
         },
       } as any);
       this.log(`environment creado: ${env.id}`);

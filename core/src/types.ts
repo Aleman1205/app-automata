@@ -61,15 +61,15 @@ export interface VistaMetrica {
   etiqueta: string;
   valor: Ref | number;
   formato: "moneda" | "entero";
-  sufijo?: string;
-  nota?: string;
-  tendencia?: string;
+  sufijo?: Ref | string;
+  nota?: Ref | string;
+  tendencia?: Ref | string;
 }
 
 export type VistaBloque =
   | { tipo: "resumen"; texto: Ref | string }
   | { tipo: "metricas"; items: VistaMetrica[] }
-  | { tipo: "callout"; tono: "info" | "ok" | "alerta"; titulo: string; texto?: string }
+  | { tipo: "callout"; tono: "info" | "ok" | "alerta"; titulo: Ref | string; texto?: Ref | string }
   | {
       tipo: "barras" | "linea" | "ranking";
       titulo: string;

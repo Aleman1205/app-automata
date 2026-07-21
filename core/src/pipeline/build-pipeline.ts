@@ -68,13 +68,21 @@ export async function construir(
 /** Ejecuta un artefacto sobre insumos y devuelve el Resultado ya resuelto. */
 export async function ejecutar(
   deps: Deps,
-  args: { version: Version; artefacto: Artefacto; inputs: Record<string, string> },
+  args: { version: Version; inputs: Record<string, string> },
 ): Promise<{ resultado: Resultado; datos: unknown; ejecucion: Ejecucion; ms: number }> {
-  const { resultado: datos, ms, costoUsd, salidas } = await deps.run.run(args.artefacto, args.inputs);
+  // Carga el artefacto desde el Storage por su clave. Ejerce el hop
+  // artefacto→Storage→run de ida y vuelta: en producción, build y run son steps
+  // separados de Inngest y el run NO tiene el objeto en memoria (docs/03).
+  if (!args.version.artefactoKey) {
+    throw new Error("La versión no tiene artefacto (¿el build terminó bien?).");
+  }
+  const artefacto = JSON.parse(await deps.storage.getText(args.version.artefactoKey)) as Artefacto;
+
+  const { resultado: datos, ms, costoUsd, salidas } = await deps.run.run(artefacto, args.inputs);
   void salidas;
 
   // La vista se aterriza sobre los datos crudos (aquí está la puerta de calidad).
-  const resultado = resolverVista(args.artefacto.vista, datos);
+  const resultado = resolverVista(artefacto.vista, datos);
 
   const ejecucion = await deps.state.crearEjecucion({
     versionId: args.version.id,

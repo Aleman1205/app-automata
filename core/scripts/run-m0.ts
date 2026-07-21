@@ -65,20 +65,19 @@ async function main() {
 
   // ── build -> artefacto ──
   console.log("\n[1/2] Construyendo (o reusando) el artefacto…");
-  const { version, artefacto, costoUsd, iteraciones } = await construir(deps, {
+  const { version, costoUsd, iteraciones } = await construir(deps, {
     orgId: "org_demo",
     nombre: "Dashboard de popularidad de productos",
     spec: dashboardPopularidadSpec,
     vista,
     ejemploPath: XLSX,
   });
-  console.log(`   ✓ versión ${version.id} ${version.estado} · $${costoUsd.toFixed(2)} · ${iteraciones} iteración(es)`);
+  console.log(`   ✓ versión ${version.id} ${version.estado} · artefacto en ${version.artefactoKey} · $${costoUsd.toFixed(2)} · ${iteraciones} iteración(es)`);
 
-  // ── run -> vista ──
-  console.log("\n[2/2] Ejecutando el artefacto y aterrizando la vista…");
+  // ── run -> vista (el artefacto se relee del Storage por su clave) ──
+  console.log("\n[2/2] Cargando el artefacto del Storage, ejecutando y aterrizando la vista…");
   const { resultado, ejecucion, ms } = await ejecutar(deps, {
     version,
-    artefacto,
     inputs: { reporte: XLSX },
   });
   console.log(`   ✓ ejecución ${ejecucion.id} · ${(ms / 1000).toFixed(1)}s · costo Run local $${ejecucion.costoUsd} (CMA ~$${costoCmaEquivalente(ms).toFixed(5)})`);
