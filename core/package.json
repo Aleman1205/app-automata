@@ -10,7 +10,9 @@
     "verify:intake": "tsx scripts/verify-intake.ts",
     "verify:planner": "tsx scripts/verify-planner.ts",
     "verify:auth": "tsx scripts/verify-auth.ts",
+    "verify:cuota": "tsx scripts/verify-cuota.ts",
     "verify:pg": "tsx scripts/verify-pg.ts",
+    "verify:cuota:pg": "tsx scripts/verify-cuota-pg.ts",
     "m0": "tsx scripts/run-m0.ts",
     "intake:live": "tsx scripts/intake.ts",
     "planner:live": "tsx scripts/planner.ts"

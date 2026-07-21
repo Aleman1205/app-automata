@@ -111,6 +111,28 @@ Stripe — aquí se saca docs/13 de stub), metering de ejecuciones (holgado, per
 **Prueba:** un cliente paga; los planes gatean features y cuotas; una ráfaga de
 aprobaciones concurrentes **no** revienta la cuota (test del lock).
 
+**✅ Construido (rebanada de motor, probada contra Postgres — `core/src/billing/`):**
+el **enforcement de cuota vive en la BD, no en el código de la app** (corrección de
+la revisión adversarial: con solo RLS el rol de app podía auto-ascenderse de plan y
+resetear sus contadores). Tabla `planes` (límites) + `subscriptions` (plan/estado) +
+`uso_periodo` (contadores). Triggers de STOCK (espacios/usuarios) con **advisory lock
+por-org** (TOCTOU-safe) y función `app_consumir` (SECURITY DEFINER, solo-suma) para el
+FLUJO; el rol de app pierde `UPDATE/DELETE` sobre billing. `verify:cuota:pg` (24/24)
+prueba: sin oversell bajo concurrencia real, sin auto-ascenso, sin reset, cancelado no
+consume, cross-org aislado, fail-closed, y drift TS↔BD. **Falta cablear** a la capa
+HTTP (como `assertCan`) + la integración **Stripe** (checkout/portal/firma) — difieren
+al wrapping de Next, igual que Clerk en M2.
+
+**Diferido (con tarea, hallazgos de la revisión M3):**
+- **Idempotencia del consumo**: `consumirGeneracion/Ejecucion` no llevan clave; un
+  webhook `ready` duplicado (at-least-once, docs/03) doble-cuenta. Contrato de cableado:
+  consumir **en la misma tx** que registra la versión/ejecución, keyed por `version_id`
+  (`INSERT … ON CONFLICT DO NOTHING`), para que el reintento sea no-op.
+- **Periodo vs ciclo de facturación**: hoy es mes-calendario UTC; alinear a
+  `subscriptions.periodo_fin` (aniversario de cobro) y a zona MX.
+- **Creación org→subscription atómica**: el signup debe crear ambas en una tx (o
+  trigger que inserte `subscription` 'base'); el motor ya falla cerrado si falta.
+
 ### M4 — Ciclo de vida + robustez + seguridad *(antes de usuarios externos)*
 **Objetivo:** ajustes, fallos e insumos hostiles.
 **Construyes:** el ciclo de **3 ajustes** ([docs/08](08-ciclo-de-vida.md)),
@@ -124,6 +146,12 @@ pixel-flood, sobre de lote, **magic bytes** vs content-type spoofing). El bucket
   incidente; **probado en staging**.
 - **`[SEG]` Runbook concreto** (docs/11 §11): pasos exactos de revocación de sesiones en
   Clerk; inventario y rotación de secretos.
+- **Ciclo de vida de cuota (hallazgos M3):** rutina de **downgrade** que ponga
+  `activa=false` a las automatizaciones sobrantes al bajar de plan (docs/06 §9 — la
+  columna ya existe, falta la lógica); y el modelo de **ajustes** (los primeros 30 días
+  y los 3 gratis por automatización de docs/06/[docs/08](08-ciclo-de-vida.md) §7) — hoy
+  `consumirGeneracion` cuenta todo build-a-`ready` por igual, sin distinguir nueva vs
+  ajuste.
 **Prueba:** el **checklist pre-lanzamiento** de docs/11 §10.
 **Dependencia dura:** esto DEBE aterrizar **antes** de aceptar archivos de usuarios
 externos.

@@ -94,10 +94,20 @@ evitan el olvido.
 
 ## 3. Rate limiting / abuso de recursos — veredicto: **huecos serios**
 
-Bien pensado en papel (docs/11 §8, docs/06 §3-4, docs/10 §8, docs/03 §5) pero **casi
-nada construido**, y el schema M2 aún no tiene columnas de contador. Es el dominio
+Bien pensado en papel (docs/11 §8, docs/06 §3-4, docs/10 §8, docs/03 §5). Es el dominio
 donde el **dinero** se protege: el build cuesta **~$1.8** y el Run **<1¢** (corregido;
-ver §8 de docs/11). El genérico por IP/org es el más flaco: solo vive en prosa.
+ver §8 de docs/11). El genérico por IP/org sigue siendo el más flaco: solo vive en prosa.
+
+> **Actualización M3 (2026-07-21): el motor de cuotas está construido y probado**
+> (`core/src/billing/`, `verify:cuota:pg` 24/24). Corrección clave de su revisión
+> adversarial: el enforcement **vive en la BD, no en el código de la app** — con solo
+> RLS, el rol `automata_app` podía `UPDATE subscriptions SET plan='equipo'`
+> (auto-ascenso) o `UPDATE uso_periodo SET ejecuciones=0` (resetear el tope). Ahora los
+> límites viven en la tabla `planes`, el STOCK lo imponen **triggers con advisory lock
+> por-org** (TOCTOU-safe) y el FLUJO una función `app_consumir` **SECURITY DEFINER que
+> solo suma**; el rol de app pierde `UPDATE/DELETE` sobre billing. Probado: sin
+> oversell, sin auto-ascenso, sin reset, cancelado no consume. **Falta el cableado HTTP
+> + Stripe** (difiere al wrapping de Next).
 
 | Caso común | Crit | Defensa / postura | Capa | Milestone | Estado |
 |---|:--:|---|:--:|:--:|:--:|
