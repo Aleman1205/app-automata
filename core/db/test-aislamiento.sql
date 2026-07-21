@@ -2,19 +2,26 @@
 -- (no-dueño), que es el escenario real de runtime. Se siembra como superusuario
 -- (RLS lo bypassa) y se prueba como automata_app (RLS aplica). Todo en una
 -- transacción que se revierte, así el test es repetible.
+--
+-- Cubre lectura, INSERT (WITH CHECK), UPDATE/DELETE cross-org, re-etiquetado de
+-- org_id, fail-closed, y el ataque de enlace por FK compuesta (versión de A que
+-- intenta colgarse de una automatización de B).
 \set ON_ERROR_STOP on
 BEGIN;
 
 DO $$
 DECLARE
-  a uuid := '11111111-1111-1111-1111-111111111111';
-  b uuid := '22222222-2222-2222-2222-222222222222';
+  a  uuid := '11111111-1111-1111-1111-111111111111';
+  b  uuid := '22222222-2222-2222-2222-222222222222';
+  a1 uuid := 'a0000000-0000-0000-0000-000000000001';
+  a2 uuid := 'a0000000-0000-0000-0000-000000000002';
+  b1 uuid := 'b0000000-0000-0000-0000-000000000001';
   cnt int;
 BEGIN
   -- Semilla (como superusuario: RLS bypassed).
   INSERT INTO orgs (id, nombre) VALUES (a, 'Org A'), (b, 'Org B');
   INSERT INTO memberships (org_id, user_id, rol) VALUES (a, 'u_ana', 'admin'), (b, 'u_beto', 'admin');
-  INSERT INTO automatizaciones (org_id, nombre) VALUES (a, 'A1'), (a, 'A2'), (b, 'B1');
+  INSERT INTO automatizaciones (id, org_id, nombre) VALUES (a1, a, 'A1'), (a2, a, 'A2'), (b1, b, 'B1');
 
   -- A partir de aquí, corremos COMO el rol de aplicación: RLS aplica.
   SET LOCAL ROLE automata_app;
@@ -25,7 +32,7 @@ BEGIN
   IF cnt <> 2 THEN RAISE EXCEPTION 'FALLO: con org A esperaba 2 automatizaciones, vi %', cnt; END IF;
   RAISE NOTICE 'PASS · como app con contexto A: ve sus 2 automatizaciones';
 
-  -- Cross-tenant: aunque pida explícitamente las de B, ve 0.
+  -- Cross-tenant lectura: aunque pida explícitamente las de B, ve 0.
   SELECT count(*) INTO cnt FROM automatizaciones WHERE org_id = b;
   IF cnt <> 0 THEN RAISE EXCEPTION 'FALLO CROSS-TENANT: vi % filas de la org B', cnt; END IF;
   RAISE NOTICE 'PASS · cross-tenant: 0 filas de B aunque las pida por org_id';
@@ -43,11 +50,44 @@ BEGIN
     RAISE NOTICE 'PASS · WITH CHECK: no se puede escribir en otra org';
   END;
 
-  -- Cambiar de contexto a B: ahora ve solo la de B.
+  -- UPDATE cross-org: intenta renombrar la de B → 0 filas (invisible, no afecta).
+  UPDATE automatizaciones SET nombre = 'secuestrada' WHERE org_id = b;
+  GET DIAGNOSTICS cnt = ROW_COUNT;
+  IF cnt <> 0 THEN RAISE EXCEPTION 'FALLO: UPDATE cross-org afectó % filas de B', cnt; END IF;
+  RAISE NOTICE 'PASS · UPDATE cross-org: 0 filas afectadas';
+
+  -- DELETE cross-org: intenta borrar la de B → 0 filas.
+  DELETE FROM automatizaciones WHERE org_id = b;
+  GET DIAGNOSTICS cnt = ROW_COUNT;
+  IF cnt <> 0 THEN RAISE EXCEPTION 'FALLO: DELETE cross-org afectó % filas de B', cnt; END IF;
+  RAISE NOTICE 'PASS · DELETE cross-org: 0 filas afectadas';
+
+  -- Re-etiquetado: no puede mover una fila PROPIA (A) a la org B (WITH CHECK).
+  BEGIN
+    UPDATE automatizaciones SET org_id = b WHERE id = a1;
+    RAISE EXCEPTION 'FALLO: pudo reasignar org_id de A a B';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS · re-etiquetado bloqueado: no puede mover su fila a otra org';
+  END;
+
+  -- Ataque de enlace por FK: crear una versión org_id=A que apunte a la
+  -- automatización de B (id conocido/adivinado). La FK COMPUESTA lo rechaza porque
+  -- (b1, A) no existe como par (id, org_id) en automatizaciones.
+  BEGIN
+    INSERT INTO versiones (automatizacion_id, org_id, numero, estado)
+      VALUES (b1, a, 1, 'lista');
+    RAISE EXCEPTION 'FALLO: una versión de A pudo colgarse de la automatización de B';
+  EXCEPTION WHEN foreign_key_violation THEN
+    RAISE NOTICE 'PASS · FK compuesta: versión de A NO puede enlazar a automatización de B';
+  END;
+
+  -- Cambiar de contexto a B: ahora ve solo la de B (intacta, nada la secuestró).
   PERFORM set_config('app.current_org', b::text, true);
   SELECT count(*) INTO cnt FROM automatizaciones;
   IF cnt <> 1 THEN RAISE EXCEPTION 'FALLO: con org B esperaba 1, vi %', cnt; END IF;
-  RAISE NOTICE 'PASS · cambio de contexto a B: ve su 1 automatización';
+  SELECT count(*) INTO cnt FROM automatizaciones WHERE nombre = 'B1';
+  IF cnt <> 1 THEN RAISE EXCEPTION 'FALLO: la automatización de B fue alterada'; END IF;
+  RAISE NOTICE 'PASS · cambio de contexto a B: ve su 1 automatización, intacta';
 
   -- Sin contexto → fail-closed: 0 filas (no un leak).
   PERFORM set_config('app.current_org', NULL, true);
@@ -56,7 +96,7 @@ BEGIN
   RAISE NOTICE 'PASS · fail-closed: sin org en la sesión no ve nada';
 
   RESET ROLE;
-  RAISE NOTICE '── AISLAMIENTO CROSS-TENANT: 6/6 ✓ ──';
+  RAISE NOTICE '── AISLAMIENTO CROSS-TENANT: 10/10 ✓ ──';
 END $$;
 
 ROLLBACK;

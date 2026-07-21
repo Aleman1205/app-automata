@@ -3,7 +3,8 @@
 //   · RLS (db/schema.sql) = AISLAMIENTO por org_id.
 //   · assertCan (aquí)    = ROL (qué puede hacer el miembro en su org).
 // La membresía es la fuente de verdad del rol y se lee VIVA por request, no de un
-// claim horneado — así expulsar a alguien pega en el siguiente request.
+// claim horneado — así expulsar a alguien pega en el siguiente request. El helper
+// que la lee viva de la tabla vive en auth/membresia.ts (necesita la DB).
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type Rol = "admin" | "operador";
@@ -16,6 +17,7 @@ export type Accion =
   | "invitar"
   | "quitar_gente"
   | "facturacion"
+  | "exportar_codigo"
   | "borrar_org";
 
 // La matriz de docs/13 §2. operador solo ejecuta y descarga; admin todo.
@@ -27,11 +29,20 @@ const MATRIZ: Record<Accion, Rol[]> = {
   invitar: ["admin"],
   quitar_gente: ["admin"],
   facturacion: ["admin"],
+  exportar_codigo: ["admin"],
   borrar_org: ["admin"],
 };
 
-// Acciones peligrosas que exigen step-up MFA aunque la sesión esté viva (docs/13 §1).
-export const REQUIERE_STEPUP: ReadonlySet<Accion> = new Set<Accion>(["facturacion", "borrar_org", "quitar_gente"]);
+// Las CUATRO acciones peligrosas que exigen step-up MFA aunque la sesión esté viva
+// (docs/13 §1): cambiar facturación, borrar org, quitar miembros, exportar código.
+// 'exportar_codigo' = sacar el código FUENTE del artefacto (distinto de 'descargar',
+// que es el resultado de una ejecución y no es peligroso).
+export const REQUIERE_STEPUP: ReadonlySet<Accion> = new Set<Accion>([
+  "facturacion",
+  "borrar_org",
+  "quitar_gente",
+  "exportar_codigo",
+]);
 
 export interface Membresia {
   orgId: string;

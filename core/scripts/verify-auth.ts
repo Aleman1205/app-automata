@@ -44,11 +44,13 @@ console.log("\n2. Aislamiento a nivel de rol (cross-org / ex-miembro) — docs/1
 check("admin de A NO puede actuar sobre org B (cross-org)", deniega(() => assertCan(admin, "B", "ejecutar")));
 check("sin membresía (ex-miembro) → denegado", deniega(() => assertCan(undefined, "A", "ejecutar")));
 
-console.log("\n3. Step-up MFA para acciones peligrosas (docs/13 §1):");
+console.log("\n3. Step-up MFA para las CUATRO acciones peligrosas (docs/13 §1):");
 check("facturación exige step-up", necesitaStepUp("facturacion"));
 check("borrar_org exige step-up", necesitaStepUp("borrar_org"));
 check("quitar_gente exige step-up", necesitaStepUp("quitar_gente"));
+check("exportar_codigo exige step-up", necesitaStepUp("exportar_codigo"));
 check("ejecutar NO exige step-up", !necesitaStepUp("ejecutar"));
+check("descargar (resultado) NO exige step-up", !necesitaStepUp("descargar"));
 
 console.log(`\n${ok ? "✓ M2 (capa de ROL) PROBADA" : "✗ FALLÓ"} — assertCan correcto. (El aislamiento por org es RLS: db/test-aislamiento.sql.)`);
 process.exit(ok ? 0 : 1);
