@@ -13,7 +13,7 @@ cosas acopladas, con la tool "planear":
 2) vista: cómo se presenta ese resultado, como una lista de BLOQUES de un catálogo
    CERRADO. No inventes tipos ni escribas HTML/estilos. El catálogo:
    - resumen   { texto }                              — el hallazgo en 1-2 frases (literal)
-   - metricas  { items:[{etiqueta, valor, formato:moneda|entero, sufijo?, nota?}] }  — 2-4 cifras
+   - metricas  { items:[{etiqueta, valor, formato:moneda|entero, sufijo?, nota?, tendencia?}] } — 2-4 cifras
    - callout   { tono:info|ok|alerta, titulo, texto? } — atención / "a revisar"
    - barras    { titulo, formato, fuente, eje_x, eje_y, limite? }  — comparar categorías
    - linea     { titulo, formato, fuente, eje_x, eje_y, limite? }  — tendencia en el tiempo

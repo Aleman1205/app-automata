@@ -31,6 +31,14 @@ export class PlannerAgent {
         tool_choice: { type: "tool", name: "planear" },
       });
 
+      // Truncamiento: un plan grande puede pasarse de max_tokens y devolver un
+      // tool_use parcial que aparenta forma válida pero está incompleto.
+      if (resp.stop_reason === "max_tokens") {
+        if (ultimo) throw new PlannerError("El plan se truncó por longitud (max_tokens).");
+        feedback = "\n\nEl plan quedó incompleto. Hazlo más compacto (menos bloques/campos) y vuelve a planear.";
+        continue;
+      }
+
       const bloque = (resp.content ?? []).find((b: any) => b.type === "tool_use");
       if (!bloque) {
         if (ultimo) throw new PlannerError("El modelo no llamó la tool 'planear'.");

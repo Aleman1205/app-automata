@@ -58,6 +58,25 @@ check(
     contrato,
   ).ok,
 );
+// Regresión de la revisión (desajustes de TIPO, no solo existencia):
+check(
+  "gráfica con eje_y que es un campo TEXTO falla",
+  !validarCoherencia(
+    { ...vistaOk, bloques: [{ tipo: "barras", titulo: "T", formato: "moneda", fuente: "@resultado.familias", eje_x: "ingreso", eje_y: "familia" }] },
+    contrato,
+  ).ok,
+);
+check(
+  "métrica cuyo valor apunta a un campo TEXTO falla",
+  !validarCoherencia(
+    { ...vistaOk, bloques: [{ tipo: "metricas", items: [{ etiqueta: "P", valor: "@resultado.periodo", formato: "entero" }] }] },
+    { campos: [...contrato.campos, { ruta: "periodo", tipo: "texto", descripcion: "mes" }] },
+  ).ok,
+);
+check(
+  "bloque tabla sin 'columnas' NO crashea y falla",
+  !validarCoherencia({ ...vistaOk, bloques: [{ tipo: "tabla", fuente: "@resultado.familias" } as any] }, contrato).ok,
+);
 
 console.log("\n2. Resolve completo — vista del planner + resultado que cumple el contrato → Resultado:");
 const resultadoDatos = {

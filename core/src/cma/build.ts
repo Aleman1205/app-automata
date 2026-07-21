@@ -52,7 +52,7 @@ const costoDe = (u: any): number =>
     (u?.cache_creation_input_tokens || 0) * PRECIO.cacheWrite) /
   1_000_000;
 
-function rubricDesde(spec: Spec): string {
+function rubricDesde(spec: Spec, contratoTexto?: string): string {
   return [
     "# Criterios de aceptación\n",
     "La automatización está TERMINADA solo si TODOS estos criterios se cumplen,",
@@ -60,7 +60,12 @@ function rubricDesde(spec: Spec): string {
     spec.criterios_exito.map((c, i) => `${i + 1}. ${c}`).join("\n"),
     "\n# Reglas de negocio que el código debe respetar\n",
     spec.reglas.map((r) => `- ${r}`).join("\n"),
-  ].join("\n");
+    // La forma del resultado.json es criterio de aceptación: si no cumple el
+    // contrato, la vista no resuelve. El Verifier debe comprobarla.
+    contratoTexto ? `\n# Forma OBLIGATORIA del resultado.json (verifícala abriendo el archivo)\n\n${contratoTexto}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function instruccionesDesde(spec: Spec, rutaRemota: string, contratoTexto?: string): string {
@@ -136,7 +141,7 @@ export class CmaBuildClient implements BuildClient {
         {
           type: "user.define_outcome",
           description: instruccionesDesde(spec, rutaRemota, contratoTexto),
-          rubric: { type: "text", content: rubricDesde(spec) },
+          rubric: { type: "text", content: rubricDesde(spec, contratoTexto) },
           max_iterations: MAX_ITERACIONES,
         },
       ],
