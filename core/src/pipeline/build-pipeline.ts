@@ -78,19 +78,31 @@ export async function ejecutar(
   }
   const artefacto = JSON.parse(await deps.storage.getText(args.version.artefactoKey)) as Artefacto;
 
-  const { resultado: datos, ms, costoUsd, salidas } = await deps.run.run(artefacto, args.inputs);
-  void salidas;
+  // RESERVA→CORRE→CONFIRMA: el asiento en `ejecuciones` se crea ANTES de correr el
+  // código de IA. En Postgres ese INSERT dispara trg_kill_run (y con RLS lo hace en
+  // contexto de la org): si ejecuciones está congelado o la org suspendida, el run se
+  // ABORTA ANTES de ejecutar nada (docs/11 §10). Correr-primero-registrar-después
+  // dejaba el freno llegando tarde: el código peligroso ya había corrido (revisión).
+  const reserva = await deps.state.crearEjecucion({
+    versionId: args.version.id,
+    estado: "reservada",
+    ms: 0,
+    costoUsd: 0,
+    creada: deps.ahora(),
+  });
+
+  let datos: unknown, ms: number, costoUsd: number;
+  try {
+    ({ resultado: datos, ms, costoUsd } = await deps.run.run(artefacto, args.inputs));
+  } catch (e) {
+    await deps.state.actualizarEjecucion(reserva.id, { estado: "fallo" });
+    throw e;
+  }
 
   // La vista se aterriza sobre los datos crudos (aquí está la puerta de calidad).
   const resultado = resolverVista(artefacto.vista, datos);
 
-  const ejecucion = await deps.state.crearEjecucion({
-    versionId: args.version.id,
-    estado: "ok",
-    ms,
-    costoUsd,
-    creada: deps.ahora(),
-  });
+  const ejecucion = await deps.state.actualizarEjecucion(reserva.id, { estado: "ok", ms, costoUsd });
 
   return { resultado, datos, ejecucion, ms };
 }

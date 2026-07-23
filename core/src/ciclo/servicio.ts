@@ -1,6 +1,7 @@
 import { type PoolClient } from "pg";
 import { type Ciclo, type CicloEstado, type ResultadoRegresion, type TipoAjuste, ajustesRestantes, clasificar, puedeAjustar, trasAjuste } from "./estados.ts";
 import { consumirGeneracion } from "../billing/cuota.ts";
+import { comoSuspension } from "../ops/killswitch.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Aplicación del ciclo de vida en Postgres (docs/08). Patrón RESERVA→CONFIRMA:
@@ -91,10 +92,12 @@ export async function iniciarAjuste(c: PoolClient, autoId: string, regresion: Re
     [autoId],
   );
   const numero = num.rows[0]?.n ?? 1;
-  const ver = await c.query<{ id: string }>(
-    "INSERT INTO versiones (automatizacion_id, org_id, numero, estado) VALUES ($1, $2, $3, 'building') RETURNING id",
-    [autoId, f.org_id, numero],
-  );
+  const ver = await c
+    .query<{ id: string }>(
+      "INSERT INTO versiones (automatizacion_id, org_id, numero, estado) VALUES ($1, $2, $3, 'building') RETURNING id",
+      [autoId, f.org_id, numero],
+    )
+    .catch((e) => comoSuspension(e)); // kill-switch de builds / org suspendida → ServicioSuspendido
   return { tipo, versionId: ver.rows[0]!.id, numero, ciclo: aEstado(ciclo) };
 }
 
@@ -102,6 +105,14 @@ export async function iniciarAjuste(c: PoolClient, autoId: string, regresion: Re
  * Confirma un ajuste cuyo build llegó a `ready`. Idempotente: solo consume si la versión
  * transiciona building→lista (un webhook duplicado no doble-consume). Un CAMBIO consume el
  * ajuste (y una generación del mes) y quizá congela; una REPARACIÓN no consume.
+ *
+ * DECISIÓN de kill-switch (docs/14 §3): el freno de builds detiene builds NUEVOS
+ * (iniciarAjuste → trg_kill_build). Un build YA EN VUELO (versión 'building' creada
+ * antes de congelar, con su sesión CMA abierta) se DEJA terminar: (a) el costo de CMA
+ * ya se incurrió, (b) un trigger no puede matar la sesión remota, (c) bloquear el
+ * UPDATE building→lista solo dejaría la versión huérfana. Aceptado. Para cortar de
+ * verdad a un tenant abusivo en incidente se usa la suspensión por-org, que sí frena
+ * sus builds/runs nuevos.
  */
 export async function confirmarAjuste(c: PoolClient, autoId: string, versionId: string, tipo: TipoAjuste, periodo: string): Promise<EstadoCiclo> {
   const upd = await c.query(

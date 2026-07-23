@@ -154,7 +154,9 @@ export interface Version {
 export interface Ejecucion {
   id: string;
   versionId: string;
-  estado: "ok" | "fallo";
+  // 'reservada' = asiento creado ANTES de correr (dispara el freno/kill-switch en la
+  // BD antes de ejecutar el código de IA); pasa a 'ok'/'fallo' al terminar el run.
+  estado: "reservada" | "ok" | "fallo";
   resultadoKey?: string;
   ms: number;
   costoUsd: number; // costo del Run (session-hours); 0 si es pura ejecución local
@@ -177,6 +179,7 @@ export interface StateRepo {
   crearVersion(v: Omit<Version, "id">): Promise<Version>;
   actualizarVersion(id: string, cambios: Partial<Version>): Promise<Version>;
   crearEjecucion(e: Omit<Ejecucion, "id">): Promise<Ejecucion>;
+  actualizarEjecucion(id: string, cambios: Partial<Ejecucion>): Promise<Ejecucion>;
   obtenerVersion(id: string): Promise<Version | undefined>;
 }
 

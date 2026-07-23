@@ -1,4 +1,5 @@
 import { crearAutomatizacion, invitarMiembro, consumirEjecucion, periodoActual } from "../billing/cuota.ts";
+import { verificarFreno } from "../ops/killswitch.ts";
 import { type Rol } from "../auth/roles.ts";
 import { type Endpoint } from "./pipeline.ts";
 import { type Esquema, R } from "./tipos.ts";
@@ -87,16 +88,22 @@ export const quitarMiembroEP: Endpoint<{ userId: string }> = {
 };
 
 /** Ejecutar una automatización (admin y operador). Consume cuota de ejecuciones.
- *  STUB del wrapping: prueba el camino operador+cuota+conOrg. El endpoint de
- *  producción debe insertar la fila del ledger `ejecuciones` en la MISMA tx que
- *  consumirEjecucion (o consumir solo tras producir el resultado), para que el
- *  contador de facturación no diverja del ledger (hallazgo de la revisión). */
+ *  El kill-switch se consulta ANTES de consumir/correr (verificarFreno): si
+ *  ejecuciones está congelado o la org suspendida, ni se cobra cuota ni se corre
+ *  (docs/11 §10 — el freno debe morder ANTES del run, no registrar post-hoc).
+ *  STUB del wrapping: prueba el camino operador+cuota+conOrg+freno. El endpoint de
+ *  producción además inserta la fila del ledger `ejecuciones` (reserva→corre→confirma,
+ *  ver build-pipeline.ejecutar) en la MISMA tx, para que el contador de facturación
+ *  no diverja del ledger (hallazgo de la revisión). */
 export const ejecutarEP: Endpoint<Record<string, never>> = {
   nombre: "POST /orgs/:orgId/ejecutar",
   metodo: "POST",
   accion: "ejecutar",
   esquema: esquemaVacio,
-  handler: async ({ cliente }) => R.ok({ ejecucionesUsadas: await consumirEjecucion(cliente, periodoActual()) }),
+  handler: async ({ cliente }) => {
+    await verificarFreno(cliente, "ejecuciones"); // choke-point del freno, antes de todo
+    return R.ok({ ejecucionesUsadas: await consumirEjecucion(cliente, periodoActual()) });
+  },
 };
 
 // Registro central. NOTA (revisión): esto NO es la garantía anti-olvido completa —

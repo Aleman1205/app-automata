@@ -45,6 +45,14 @@ export class MemoryStateRepo implements StateRepo {
     return ejec;
   }
 
+  async actualizarEjecucion(id: string, cambios: Partial<Ejecucion>): Promise<Ejecucion> {
+    const actual = this.ejecuciones.get(id);
+    if (!actual) throw new Error(`Ejecución no encontrada: ${id}`);
+    const nueva = { ...actual, ...cambios, id };
+    this.ejecuciones.set(id, nueva);
+    return nueva;
+  }
+
   async obtenerVersion(id: string): Promise<Version | undefined> {
     return this.versiones.get(id);
   }

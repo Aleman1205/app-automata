@@ -131,6 +131,41 @@ CREATE TABLE IF NOT EXISTS uso_periodo (
 -- El count de activas (bajo el trigger de cuota) es un index-scan acotado a la org.
 CREATE INDEX IF NOT EXISTS idx_autom_org_activa ON automatizaciones (org_id) WHERE activa;
 
+-- ── Kill-switch (docs/14 §3 / docs/11 §10) ─────────────────────────────────
+-- Interruptores GLOBALES de incidente: congelan builds/ejecuciones "de verdad" (los
+-- imponen triggers, abajo), más la palanca separada de cobros de Stripe. Fila única.
+-- El rol de app NO puede escribirlos (revocado): un app comprometido no apaga el freno.
+CREATE TABLE IF NOT EXISTS interruptores (
+  id           boolean PRIMARY KEY DEFAULT true CHECK (id),  -- fila única
+  builds       boolean NOT NULL DEFAULT false,               -- true = congelados
+  ejecuciones  boolean NOT NULL DEFAULT false,
+  cobros       boolean NOT NULL DEFAULT false,               -- palanca separada (Stripe)
+  actualizado  timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO interruptores (id) VALUES (true) ON CONFLICT DO NOTHING;
+
+-- Suspensión por-org (freeze quirúrgico de un tenant abusivo, docs/11 §8). El app
+-- tampoco puede escribirla → una org no puede des-suspenderse a sí misma.
+CREATE TABLE IF NOT EXISTS suspensiones (
+  org_id      uuid PRIMARY KEY REFERENCES orgs(id) ON DELETE CASCADE,
+  motivo      text,
+  suspendida  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Bitácora APPEND-ONLY del kill-switch (docs/14 §3): quién operó el freno y cuándo.
+-- Un freno de incidente sin rastro de "quién congeló la plataforma a las 3am" es un
+-- hueco de auditoría (revisión). La escriben las palancas de ops (conexión de dueño);
+-- el app no la toca. reactivarOrg deja asiento aquí en vez de borrar la evidencia.
+CREATE TABLE IF NOT EXISTS bitacora_kill (
+  id       bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  actor    text,                       -- quién operó (ops/dueño); null si no se pasó
+  accion   text NOT NULL,              -- 'congelar' | 'descongelar' | 'suspender' | 'reactivar'
+  palanca  text,                       -- 'builds' | 'ejecuciones' | 'cobros' | 'org'
+  org_id   uuid,                       -- la org suspendida/reactivada (null para palancas globales)
+  motivo   text,
+  cuando   timestamptz NOT NULL DEFAULT now()
+);
+
 -- Dedupe de webhooks entrantes (docs/13 §4): nivel PLATAFORMA, sin org_id (no RLS).
 -- La lo escribe el receptor de webhooks con la conexión de DUEÑO (corre sin usuario);
 -- el rol de app no lo toca. El PK hace el dedupe atómico (INSERT ON CONFLICT DO NOTHING).
@@ -151,6 +186,11 @@ REVOKE INSERT, UPDATE, DELETE ON subscriptions FROM automata_app;
 REVOKE INSERT, UPDATE, DELETE ON uso_periodo   FROM automata_app;
 -- Los webhooks los procesa el rol de dueño (no el de app): dedupe + mutación de plan.
 REVOKE ALL ON webhook_events FROM automata_app;
+-- El kill-switch lo opera el DUEÑO/ops; el app solo lo LEE (los triggers lo consultan).
+REVOKE INSERT, UPDATE, DELETE ON interruptores FROM automata_app;
+REVOKE INSERT, UPDATE, DELETE ON suspensiones  FROM automata_app;
+-- La bitácora del freno es append-only del dueño; el app ni la lee ni la escribe.
+REVOKE ALL ON bitacora_kill FROM automata_app;
 
 -- Org viva de la sesión, robusta: '' o no-seteada → NULL → fail-closed (0 filas).
 CREATE OR REPLACE FUNCTION app_current_org() RETURNS uuid
@@ -194,6 +234,33 @@ BEGIN
 END $fn$;
 GRANT EXECUTE ON FUNCTION app_consumir(text, text) TO automata_app;
 
+-- Guard del kill-switch para llamar ANTES de trabajo caro/irreversible: correr el
+-- código de IA (docs/11 §10 — "ejecutar código de IA ES el producto"), abrir la
+-- sesión CMA, o cobrar en Stripe. El trigger sobre el ledger (versiones/ejecuciones)
+-- es el BACKSTOP; esto es el choke-point TEMPRANO. Sin él, el freno de ejecuciones
+-- llegaba tarde: el run corre y RECIÉN DESPUÉS inserta en `ejecuciones` (hallazgo
+-- ALTA de la revisión) — el código peligroso ya se ejecutó. SECURITY DEFINER: lee
+-- interruptores/suspensiones (revocados al app) y los hace cumplir para el rol de
+-- app. Fail-CLOSED (coalesce). Lanza el mismo 'SERVICIO_SUSPENDIDO:<motivo>'; el TS
+-- lo traduce con comoSuspension.
+CREATE OR REPLACE FUNCTION verificar_freno(p_op text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $fn$
+DECLARE v_org uuid := app_current_org(); v_congelado boolean;
+BEGIN
+  IF p_op NOT IN ('builds','ejecuciones','cobros') THEN
+    RAISE EXCEPTION 'operación de freno inválida: %', p_op;
+  END IF;
+  IF v_org IS NULL THEN RAISE EXCEPTION 'verificar_freno sin contexto de org'; END IF;
+  SELECT CASE p_op WHEN 'builds' THEN builds WHEN 'ejecuciones' THEN ejecuciones ELSE cobros END
+    INTO v_congelado FROM interruptores;
+  IF coalesce(v_congelado, true) THEN RAISE EXCEPTION 'SERVICIO_SUSPENDIDO:%', p_op; END IF;
+  -- La suspensión por-org frena build/run del tenant; los cobros son palanca global.
+  IF p_op <> 'cobros' AND EXISTS (SELECT 1 FROM suspensiones WHERE org_id = v_org) THEN
+    RAISE EXCEPTION 'SERVICIO_SUSPENDIDO:org';
+  END IF;
+END $fn$;
+GRANT EXECUTE ON FUNCTION verificar_freno(text) TO automata_app;
+
 -- Trigger de STOCK (espacios activos y usuarios): hace cumplir el tope en la BD, no
 -- depende de que la app llame a un helper. Advisory lock por-org (y por-recurso)
 -- para serializar inserciones concurrentes (anti-TOCTOU) sin bloquear otras orgs.
@@ -225,6 +292,33 @@ BEGIN
   IF v_estado <> 'activa' THEN RAISE EXCEPTION 'subscription en estado %: no puede invitar', v_estado; END IF;
   SELECT count(*) INTO v_miembros FROM memberships WHERE org_id = NEW.org_id;
   IF v_miembros >= v_lim THEN RAISE EXCEPTION 'CUOTA_EXCEDIDA:usuarios:%:%', v_lim, v_plan; END IF;
+  RETURN NEW;
+END $fn$;
+
+-- Kill-switch (docs/14 §3): congela la operación TG_ARGV[0] ('builds' o 'ejecuciones')
+-- si el interruptor global está encendido, o si la org está suspendida. Solo enforza los
+-- inserts EN-CONTEXTO de la propia org; el dueño (sin app.current_org) pasa, para poder
+-- remediar durante el incidente. Lanza 'SERVICIO_SUSPENDIDO:<motivo>' (el TS lo traduce).
+CREATE OR REPLACE FUNCTION verificar_kill_switch() RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE v_congelado boolean; v_op text := TG_ARGV[0]; v_org uuid := app_current_org();
+BEGIN
+  -- Sin contexto de org: el DUEÑO/ops opera para remediar durante el incidente
+  -- (bypass intencional). Pero el rol de app NUNCA corre sin contexto (conOrg lo
+  -- fija siempre); si un app llega aquí con contexto NULL es bug/ataque → fail-CLOSED,
+  -- no lo dejamos pasar "gratis" (defensa en profundidad; RLS ya lo bloquearía).
+  IF v_org IS NULL THEN
+    IF current_user = 'automata_app' THEN RAISE EXCEPTION 'SERVICIO_SUSPENDIDO:contexto'; END IF;
+    RETURN NEW;
+  END IF;
+  -- Fila de otra org: RLS (WITH CHECK) ya la habría rechazado; el skip es defensa extra.
+  IF NEW.org_id IS DISTINCT FROM v_org THEN RETURN NEW; END IF;
+  IF v_op = 'builds' THEN SELECT builds INTO v_congelado FROM interruptores;
+  ELSE                    SELECT ejecuciones INTO v_congelado FROM interruptores; END IF;
+  -- Fail-CLOSED: si la fila única desapareció (v_congelado NULL), CONGELA, no abras.
+  IF coalesce(v_congelado, true) THEN RAISE EXCEPTION 'SERVICIO_SUSPENDIDO:%', v_op; END IF;
+  IF EXISTS (SELECT 1 FROM suspensiones WHERE org_id = v_org) THEN
+    RAISE EXCEPTION 'SERVICIO_SUSPENDIDO:org';
+  END IF;
   RETURN NEW;
 END $fn$;
 
@@ -262,3 +356,11 @@ CREATE TRIGGER trg_cuota_espacio BEFORE INSERT OR UPDATE OF activa ON automatiza
 DROP TRIGGER IF EXISTS trg_cuota_usuario ON memberships;
 CREATE TRIGGER trg_cuota_usuario BEFORE INSERT ON memberships
   FOR EACH ROW EXECUTE FUNCTION verificar_cuota_usuario();
+
+-- Kill-switch: una versión nueva = un BUILD; una fila de ejecuciones = un RUN.
+DROP TRIGGER IF EXISTS trg_kill_build ON versiones;
+CREATE TRIGGER trg_kill_build BEFORE INSERT ON versiones
+  FOR EACH ROW EXECUTE FUNCTION verificar_kill_switch('builds');
+DROP TRIGGER IF EXISTS trg_kill_run ON ejecuciones;
+CREATE TRIGGER trg_kill_run BEFORE INSERT ON ejecuciones
+  FOR EACH ROW EXECUTE FUNCTION verificar_kill_switch('ejecuciones');
