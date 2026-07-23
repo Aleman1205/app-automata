@@ -164,9 +164,17 @@ consume el ajuste **y una generación del mes (M3)** solo para un CAMBIO y quiz�
 `fallarAjuste` no consume (docs/06 §4: los fallidos no cuentan). Probado: 3 cambios →
 frozen, **reparación gratis/ilimitada** (no consume, incluso sobre frozen), congelado
 voluntario, idempotencia de confirmar, TOCTOU sin oversell ni spam, y backstops de BD
-(`UNIQUE(automatizacion_id,numero)`, `CHECK ajustes_usados<=3`). **Diferido:** los
-**ajustes gratis de los primeros 30 días** (ventana temporal, docs/06) y la rutina de
-**downgrade** (`activa=false`) siguen pendientes.
+(`UNIQUE(automatizacion_id,numero)`, `CHECK ajustes_usados<=3`).
+
+**✅ Construido (rebanada de motor, probada — `core/src/billing/plan.ts`):** la **rutina
+de downgrade** (docs/06 §9, `verify:plan:pg` 22/22). `aplicarDowngrade` (dueño, atómico)
+cambia el plan y desactiva el **excedente conservando las más antiguas** (`activa=false`,
+solo lectura), tomando el **mismo advisory lock por-org** que el trigger de espacios de M3
+— corrección ALTA de la revisión: sin él, un `crearAutomatizacion` concurrente dejaba la
+org por encima del límite nuevo (oversell). `reactivar`/`desactivar` (conOrg, acción admin
+`gestionar_espacios`): reactivar lo corta el trigger de M3 con `CuotaExcedida` si no hay
+espacio (TOCTOU-safe, probado). **Diferido:** los **ajustes gratis de los primeros 30
+días** (ventana temporal, docs/06) siguen pendientes.
 
 **✅ Construido (rebanada de motor, probada — `core/src/entrada/`):** el **gate de
 validación de insumos** (dependency-free, `verify:entrada` 34/34). Clasifica en

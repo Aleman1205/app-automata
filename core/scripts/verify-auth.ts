@@ -39,6 +39,8 @@ check("operador NO puede facturación", deniega(() => assertCan(operador, "A", "
 check("operador SÍ puede ejecutar", permite(() => assertCan(operador, "A", "ejecutar")));
 check("operador SÍ puede descargar", permite(() => assertCan(operador, "A", "descargar")));
 check("admin puede borrar_org", permite(() => assertCan(admin, "A", "borrar_org")));
+check("admin puede gestionar_espacios (reactivar/desactivar)", permite(() => assertCan(admin, "A", "gestionar_espacios")));
+check("operador NO puede gestionar_espacios", deniega(() => assertCan(operador, "A", "gestionar_espacios")));
 
 console.log("\n2. Aislamiento a nivel de rol (cross-org / ex-miembro) — docs/11 §10:");
 check("admin de A NO puede actuar sobre org B (cross-org)", deniega(() => assertCan(admin, "B", "ejecutar")));

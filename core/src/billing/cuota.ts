@@ -45,7 +45,7 @@ function fila1<T>(r: { rows: T[] }): T {
 /** Traduce el 'CUOTA_EXCEDIDA:<recurso>:<limite>:<plan>' que lanza la BD a
  *  CuotaExcedida; re-lanza cualquier otro error (p.ej. 'sin subscription',
  *  'permission denied', estado ≠ activa) para que falle cerrado. */
-function comoCuota(e: unknown): never {
+export function comoCuota(e: unknown): never {
   const msg = (e as { message?: string })?.message ?? "";
   const m = /CUOTA_EXCEDIDA:(espacios|generaciones|ejecuciones|usuarios):(\d+):(\w+)/.exec(msg);
   if (m) throw new CuotaExcedida(m[1] as Recurso, Number(m[2]), m[3] as string);

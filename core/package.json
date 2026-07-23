@@ -16,6 +16,7 @@
     "verify:webhooks": "tsx scripts/verify-webhooks.ts",
     "verify:ciclo": "tsx scripts/verify-ciclo.ts",
     "verify:ciclo:pg": "tsx scripts/verify-ciclo-pg.ts",
+    "verify:plan:pg": "tsx scripts/verify-plan-pg.ts",
     "verify:pg": "tsx scripts/verify-pg.ts",
     "verify:cuota:pg": "tsx scripts/verify-cuota-pg.ts",
     "m0": "tsx scripts/run-m0.ts",

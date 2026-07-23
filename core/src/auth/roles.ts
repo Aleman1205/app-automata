@@ -18,6 +18,7 @@ export type Accion =
   | "quitar_gente"
   | "facturacion"
   | "exportar_codigo"
+  | "gestionar_espacios"
   | "borrar_org";
 
 // Política por acción: quién puede + si exige step-up MFA. UN SOLO lugar, como
@@ -43,6 +44,7 @@ const POLITICA: Record<Accion, Politica> = {
   quitar_gente: { roles: ["admin"], stepup: true },
   facturacion: { roles: ["admin"], stepup: true },
   exportar_codigo: { roles: ["admin"], stepup: true },
+  gestionar_espacios: { roles: ["admin"], stepup: false }, // reactivar/desactivar tras downgrade (docs/06 §9)
   borrar_org: { roles: ["admin"], stepup: true },
 };
 
