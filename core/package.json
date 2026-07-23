@@ -13,6 +13,7 @@
     "verify:cuota": "tsx scripts/verify-cuota.ts",
     "verify:entrada": "tsx scripts/verify-entrada.ts",
     "verify:http": "tsx scripts/verify-http.ts",
+    "verify:webhooks": "tsx scripts/verify-webhooks.ts",
     "verify:pg": "tsx scripts/verify-pg.ts",
     "verify:cuota:pg": "tsx scripts/verify-cuota-pg.ts",
     "m0": "tsx scripts/run-m0.ts",

@@ -79,5 +79,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ org
 - **Un solo camino con efecto.** Todo `route.ts` con efecto delega en `withEfecto`.
   Añade un test que escanee `app/api/**/route.ts` y falle si algún verbo mutante no
   pasa por el registro — la garantía anti-olvido (BFLA/BOLA) real de docs/14 §2.
-- **Webhooks (CMA/Stripe) van por OTRO camino**: se saltan 0-6 pero se autentican por
-  **firma HMAC** y derivan su org del recurso firmado (docs/13 §4), no del payload.
+- **Webhooks (CMA/Stripe) van por OTRO camino** (`core/src/webhooks/`): se saltan 0-6
+  pero se autentican por **firma HMAC** sobre el **cuerpo CRUDO** — el `route.ts` del
+  webhook DEBE leer `await req.text()` (nunca `req.json()` ni un body-parser antes: re-
+  serializar rompe el MAC). La org se deriva por **lookup del recurso firmado** en la DB
+  (session_id→org para CMA; `subscriptions.stripe_customer_id`→org para Stripe), **nunca**
+  del `organization_id` del payload (docs/13 §4). Corre con la conexión de **dueño** (no
+  `automata_app`), porque Stripe muta `subscriptions`, revocada al rol de app en M3.

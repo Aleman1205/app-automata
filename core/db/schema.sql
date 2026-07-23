@@ -124,6 +124,17 @@ CREATE TABLE IF NOT EXISTS uso_periodo (
 -- El count de activas (bajo el trigger de cuota) es un index-scan acotado a la org.
 CREATE INDEX IF NOT EXISTS idx_autom_org_activa ON automatizaciones (org_id) WHERE activa;
 
+-- Dedupe de webhooks entrantes (docs/13 §4): nivel PLATAFORMA, sin org_id (no RLS).
+-- La lo escribe el receptor de webhooks con la conexión de DUEÑO (corre sin usuario);
+-- el rol de app no lo toca. El PK hace el dedupe atómico (INSERT ON CONFLICT DO NOTHING).
+CREATE TABLE IF NOT EXISTS webhook_events (
+  id        text NOT NULL,                  -- id firmado del evento (webhook-id / evt de Stripe)
+  fuente    text NOT NULL CHECK (fuente IN ('cma','stripe')),
+  tipo      text NOT NULL,
+  recibido  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (fuente, id)                   -- dedupe POR FUENTE: CMA y Stripe no colisionan
+);
+
 GRANT USAGE ON SCHEMA public TO automata_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO automata_app;
 -- El rol de app NO muta su propio plan ni resetea sus contadores: solo lectura +
@@ -131,6 +142,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO automata_
 REVOKE INSERT, UPDATE, DELETE ON planes        FROM automata_app;
 REVOKE INSERT, UPDATE, DELETE ON subscriptions FROM automata_app;
 REVOKE INSERT, UPDATE, DELETE ON uso_periodo   FROM automata_app;
+-- Los webhooks los procesa el rol de dueño (no el de app): dedupe + mutación de plan.
+REVOKE ALL ON webhook_events FROM automata_app;
 
 -- Org viva de la sesión, robusta: '' o no-seteada → NULL → fail-closed (0 filas).
 CREATE OR REPLACE FUNCTION app_current_org() RETURNS uuid
