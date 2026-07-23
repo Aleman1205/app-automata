@@ -140,6 +140,19 @@ reparaciones, estados de error, y **el worker de validación de inputs aislado**
 ([docs/11](11-threat-model.md) §4 y §4bis: límites de recursos, XXE, zip-bomb,
 pixel-flood, sobre de lote, **magic bytes** vs content-type spoofing). El bucket
 "a revisar".
+
+**✅ Construido (rebanada de motor, probada — `core/src/entrada/`):** el **gate de
+validación de insumos** (dependency-free, `verify:entrada` 34/34). Clasifica en
+aceptado / a_revisar (cuarentena, nunca se inventa) / rechazado. Cubre: magic bytes
+vs extensión (ejecutable/imagen disfrazada), **XXE/billion-laughs/XInclude** (incl.
+sin prólogo, en UTF-16, y **dentro de un XLSX** — corrección de la revisión
+adversarial), **ZIP-bomb con inflación ACOTADA de verdad** (`node:zlib` +
+`maxOutputLength`, sin fiarse de los tamaños declarados), path traversal (`../`/UNC),
+exceso de entradas, ZIP64→cuarentena, pixel-flood (dimensiones sin decodificar), y el
+**sobre de lote agregado**. **Diferido (infra):** la **contención por PROCESO** (worker
+separado con rlimits de RAM/CPU + timeout duro) envuelve al gate — el algoritmo ya es
+acotado, falta el aislamiento de proceso; y **nested-zip / PDF-JS / OLE-macros** se
+delegan al extractor no-ejecutante aguas abajo ("parsear nunca ejecutar", docs/11 §4).
 - **`[SEG]` Contención del Run (docs/14 §3):** cgroups/límites de memoria/CPU/procesos
   del runner real (el M0 ejecuta sin ellos, aceptable solo aislado).
 - **`[SEG]` Kill-switch global** (docs/14 §3): flag que congela builds+ejecuciones ante

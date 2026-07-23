@@ -11,6 +11,7 @@
     "verify:planner": "tsx scripts/verify-planner.ts",
     "verify:auth": "tsx scripts/verify-auth.ts",
     "verify:cuota": "tsx scripts/verify-cuota.ts",
+    "verify:entrada": "tsx scripts/verify-entrada.ts",
     "verify:pg": "tsx scripts/verify-pg.ts",
     "verify:cuota:pg": "tsx scripts/verify-cuota-pg.ts",
     "m0": "tsx scripts/run-m0.ts",

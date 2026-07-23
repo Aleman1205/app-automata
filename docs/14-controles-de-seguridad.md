@@ -157,8 +157,18 @@ como `automata_app`; `verify-pg.ts` por el camino real Node→pg→RLS). Los hue
 La validación **de la capa de modelo** (intake + planner) está **construida y es
 determinista**: `validarSpec` (topes de longitud/reglas), `sanitizar` (strip `<>`),
 puerta de coherencia con reintentos, `resolverVista` como quality gate. Las queries
-son **parametrizadas**. La validación **de frontera HTTP** está bien documentada pero
+son **parametrizadas**. La validación **de frontera HTTP** (Zod en cada endpoint) sigue
 sin construir (no hay capa HTTP). Zod es hoy solo dep transitiva del SDK.
+
+> **Actualización M4 (2026-07-21): el gate de validación de INSUMOS está construido y
+> probado** (`core/src/entrada/`, `verify:entrada` 34/34). Dependency-free; nunca
+> infla/decodifica el input hostil salvo con tope duro. Corrección clave de su revisión
+> adversarial: la ZIP-bomb **no** se juzga por los tamaños DECLARADOS (que el atacante
+> controla) sino **inflando de verdad con `node:zlib` + `maxOutputLength`**; y el **XXE
+> dentro de un XLSX** (que el gate de solo-cabeceras dejaba pasar) ahora se escanea tras
+> inflar sus entradas XML. Cubre magic-bytes/spoofing, XXE/XInclude (incl. UTF-16 y sin
+> prólogo), traversal (`../`/UNC), pixel-flood y el sobre de lote agregado. **Falta la
+> contención por PROCESO** (worker con rlimits + timeout) — difiere a la infra.
 
 | Caso común | Crit | Defensa / postura | Capa | Milestone | Estado |
 |---|:--:|---|:--:|:--:|:--:|
