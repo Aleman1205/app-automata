@@ -20,29 +20,31 @@ export type Accion =
   | "exportar_codigo"
   | "borrar_org";
 
-// La matriz de docs/13 §2. operador solo ejecuta y descarga; admin todo.
-const MATRIZ: Record<Accion, Rol[]> = {
-  ejecutar: ["admin", "operador"],
-  descargar: ["admin", "operador"],
-  crear_build: ["admin"],
-  ajustar: ["admin"],
-  invitar: ["admin"],
-  quitar_gente: ["admin"],
-  facturacion: ["admin"],
-  exportar_codigo: ["admin"],
-  borrar_org: ["admin"],
+// Política por acción: quién puede + si exige step-up MFA. UN SOLO lugar, como
+// Record EXHAUSTIVO: agregar una Accion nueva NO compila hasta clasificar su rol Y su
+// step-up (deny-by-default para lo peligroso, corrección de la revisión — un allowlist
+// de step-up fallaba abierto al olvidar una acción nueva).
+//
+// step-up (docs/13 §1): las acciones peligrosas exigen re-verificar MFA aunque la
+// sesión esté viva: facturación, borrar org, **cambiar miembros (invitar o quitar)**,
+// exportar código. 'invitar' entra porque añadir un admin con una cookie robada (sin
+// poder pasar MFA) sería escalada/persistencia. 'exportar_codigo' = el FUENTE (≠
+// 'descargar', que es el resultado y no es peligroso).
+interface Politica {
+  roles: Rol[];
+  stepup: boolean;
+}
+const POLITICA: Record<Accion, Politica> = {
+  ejecutar: { roles: ["admin", "operador"], stepup: false },
+  descargar: { roles: ["admin", "operador"], stepup: false },
+  crear_build: { roles: ["admin"], stepup: false },
+  ajustar: { roles: ["admin"], stepup: false },
+  invitar: { roles: ["admin"], stepup: true },
+  quitar_gente: { roles: ["admin"], stepup: true },
+  facturacion: { roles: ["admin"], stepup: true },
+  exportar_codigo: { roles: ["admin"], stepup: true },
+  borrar_org: { roles: ["admin"], stepup: true },
 };
-
-// Las CUATRO acciones peligrosas que exigen step-up MFA aunque la sesión esté viva
-// (docs/13 §1): cambiar facturación, borrar org, quitar miembros, exportar código.
-// 'exportar_codigo' = sacar el código FUENTE del artefacto (distinto de 'descargar',
-// que es el resultado de una ejecución y no es peligroso).
-export const REQUIERE_STEPUP: ReadonlySet<Accion> = new Set<Accion>([
-  "facturacion",
-  "borrar_org",
-  "quitar_gente",
-  "exportar_codigo",
-]);
 
 export interface Membresia {
   orgId: string;
@@ -53,7 +55,7 @@ export interface Membresia {
 export class NoAutorizado extends Error {}
 
 export function puede(rol: Rol, accion: Accion): boolean {
-  return MATRIZ[accion].includes(rol);
+  return POLITICA[accion].roles.includes(rol);
 }
 
 /**
@@ -73,5 +75,5 @@ export function assertCan(membresia: Membresia | undefined, orgObjetivo: string,
 
 /** ¿Esta acción necesita re-verificación MFA además de la sesión viva? */
 export function necesitaStepUp(accion: Accion): boolean {
-  return REQUIERE_STEPUP.has(accion);
+  return POLITICA[accion].stepup;
 }

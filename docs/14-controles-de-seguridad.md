@@ -42,6 +42,14 @@ un bug en una no debe abrir la otra. La regla de oro: **el webhook entrante se s
 1–5 pero se autentica por firma HMAC** (§4 de docs/13) y deriva su org del **recurso
 firmado**, no del payload (evita el *confused deputy*).
 
+> **Construido: las 8 capas viven en `core/src/http` (`withEfecto`), probadas
+> end-to-end** (`verify:http` 24/24 contra Postgres) con puertos fake para Clerk/rate.
+> El orden real pone authz ANTES de step-up/validación (un no-miembro recibe 403
+> uniforme, sin enumerar esquemas). Fail-closed verificado tras su revisión adversarial:
+> CSRF niega si falta el Origin, step-up rechaza un MFA con timestamp futuro, `invitar`
+> exige step-up, e **IDOR cross-org por HTTP → 403**. Falta el cableado a Next + servicios
+> vivos: contrato en [`core/src/http/adaptador-next.md`](../core/src/http/adaptador-next.md).
+
 ---
 
 ## 1. Autenticación — veredicto: huecos menores

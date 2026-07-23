@@ -93,6 +93,19 @@ front con datos reales.
   pooler de Neon** (transaction-mode), no solo local; test anti tabla-futura sin RLS.
 - **`[SEG]` Rate limit (docs/14 §3):** elegir store (Upstash/Vercel WAF) y cablear el
   límite por IP/org en el middleware **antes** de exponer endpoints.
+
+**✅ Construido (el WRAPPING, rebanada de motor probada — `core/src/http/`):** el
+pipeline de **8 capas** de docs/13 §3 como `withEfecto` (el único camino para un
+handler con efecto): `rate → authn(JWT) → método → CSRF → org → [conOrg: membresía
+VIVA → assertCan → step-up → validación → handler]`, **fail-closed** en cada capa. Lo
+externo (Clerk, rate-limit) entra por PUERTOS → probado end-to-end SIN servicios reales
+(`verify:http` 24/24 contra Postgres): 401/429/403-CSRF/405/400/403-rol/403-step-up/
+**403-IDOR-cross-org**/402-cuota. Corrección de su revisión adversarial: CSRF fail-closed
+(Origin ausente niega), step-up de doble cota (timestamp futuro no evade), `invitar`
+pasó a step-up, y guard de "no dejar la org sin admin". **Falta (infra):** los
+`route.ts` de Next + config viva de Clerk/Neon/Upstash + el test que escanee `app/api`
+para la garantía anti-olvido — el contrato exacto está en
+[`core/src/http/adaptador-next.md`](../core/src/http/adaptador-next.md).
 **Prueba:** signup real; el test de **aislamiento cross-tenant** (docs/11 §10) —
 A no puede leer nada de B — ahora **contra Neon**; `A lee objeto de B por API → 404/403`.
 

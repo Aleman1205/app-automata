@@ -27,7 +27,7 @@
 | **Token de sesión** | Corto (~60 min), auto-refrescado por Clerk |
 | **Vida máxima de sesión** | 7 días con "recordarme"; sin él, termina al cerrar el navegador |
 | **Timeout por inactividad** | 24 h |
-| **Step-up MFA** (re-verificación dentro de una sesión viva) | Obligatorio para las acciones peligrosas: cambiar facturación, borrar org, quitar miembros, exportar código. La sesión estar viva NO basta para estas. |
+| **Step-up MFA** (re-verificación dentro de una sesión viva) | Obligatorio para las acciones peligrosas: cambiar facturación, borrar org, **cambiar miembros (invitar o quitar)**, exportar código. La sesión estar viva NO basta para estas. (`invitar` entró tras la revisión del wrapping: añadir un admin con una cookie robada sin poder pasar MFA sería escalada.) La política vive en un solo `Record` exhaustivo (`core/src/auth/roles.ts`): una acción nueva no compila sin clasificar su step-up. |
 
 **Expulsión de un usuario de una org (el caso que faltaba).** Un usuario puede
 pertenecer a varias orgs, así que expulsarlo de UNA no mata todas sus sesiones.
