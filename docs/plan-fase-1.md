@@ -154,6 +154,20 @@ reparaciones, estados de error, y **el worker de validación de inputs aislado**
 pixel-flood, sobre de lote, **magic bytes** vs content-type spoofing). El bucket
 "a revisar".
 
+**✅ Construido (rebanada de motor, probada — `core/src/ciclo/`):** el **ciclo de vida
+de 3 ajustes** (`verify:ciclo` 21/21 + `verify:ciclo:pg` 25/25). Modelo **reserva→
+confirma**: `iniciarAjuste` **deriva el tipo de la REGRESIÓN** (cambio si el ejemplo
+original pasa, reparación si falla, cambio-fail-safe si indeterminado — nunca lo elige
+el llamador, corrección ALTA de la revisión), guarda `activa`+cross-org+un-build-en-
+vuelo, y crea la versión `building` **sin consumir**; `confirmarAjuste` (al `ready`)
+consume el ajuste **y una generación del mes (M3)** solo para un CAMBIO y quizá congela;
+`fallarAjuste` no consume (docs/06 §4: los fallidos no cuentan). Probado: 3 cambios →
+frozen, **reparación gratis/ilimitada** (no consume, incluso sobre frozen), congelado
+voluntario, idempotencia de confirmar, TOCTOU sin oversell ni spam, y backstops de BD
+(`UNIQUE(automatizacion_id,numero)`, `CHECK ajustes_usados<=3`). **Diferido:** los
+**ajustes gratis de los primeros 30 días** (ventana temporal, docs/06) y la rutina de
+**downgrade** (`activa=false`) siguen pendientes.
+
 **✅ Construido (rebanada de motor, probada — `core/src/entrada/`):** el **gate de
 validación de insumos** (dependency-free, `verify:entrada` 34/34). Clasifica en
 aceptado / a_revisar (cuarentena, nunca se inventa) / rechazado. Cubre: magic bytes

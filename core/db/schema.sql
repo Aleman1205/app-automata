@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS automatizaciones (
   -- activa = cuenta contra el stock de espacios del plan. Al bajar de plan, las
   -- sobrantes quedan activa=false (solo lectura), no se borran (docs/06 §9).
   activa  boolean NOT NULL DEFAULT true,
+  -- Ciclo de vida (docs/08): ready = acepta ajustes; frozen = definitiva. 3 ajustes
+  -- (cambios) incluidos; al agotarlos o congelar voluntariamente → frozen.
+  ciclo_estado   text NOT NULL DEFAULT 'ready' CHECK (ciclo_estado IN ('ready','frozen')),
+  ajustes_usados int  NOT NULL DEFAULT 0 CHECK (ajustes_usados >= 0 AND ajustes_usados <= 3),
   creada  timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (id),
   UNIQUE (id, org_id)                                   -- ancla para FK compuesta
@@ -57,6 +61,9 @@ CREATE TABLE IF NOT EXISTS versiones (
   creada            timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (id),
   UNIQUE (id, org_id),
+  -- Nº de versión único por automatización (v1..v4): backstop de integridad en la BD,
+  -- no solo en la disciplina de FOR UPDATE del servicio de ciclo (docs/08).
+  UNIQUE (automatizacion_id, numero),
   -- FK COMPUESTA: el org_id denormalizado DEBE ser el de la automatización padre.
   -- Sin esto, conOrg(A) podía colgar una versión org_id=A de la automatización de B.
   FOREIGN KEY (automatizacion_id, org_id) REFERENCES automatizaciones (id, org_id) ON DELETE CASCADE
