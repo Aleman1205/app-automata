@@ -66,8 +66,9 @@ const aEstado = (c: Ciclo, gratis = false, hasta: string | null = null, enRevisi
 /** Traduce el 'AJUSTE_NO_PERMITIDO:<motivo>' de la BD; re-lanza cualquier otro error. */
 function comoAjuste(e: unknown): never {
   const msg = (e as { message?: string })?.message ?? "";
-  const m = /AJUSTE_NO_PERMITIDO:(frozen|ajustes_agotados|en_revision|suscripcion|no_existe)/.exec(msg);
+  const m = /AJUSTE_NO_PERMITIDO:(frozen|ajustes_agotados|en_revision|suscripcion|build_en_vuelo|no_existe)/.exec(msg);
   if (m?.[1] === "no_existe") throw new AutomatizacionNoDisponible();
+  if (m?.[1] === "build_en_vuelo") throw new AjusteEnCurso(); // no se puede congelar con un build en vuelo
   if (m) throw new AjusteNoPermitido(m[1] as "frozen" | "ajustes_agotados" | "en_revision" | "suscripcion");
   throw e;
 }
@@ -153,13 +154,15 @@ export async function iniciarAjuste(c: PoolClient, autoId: string, regresion: Re
  * regresión), así el llamador no puede declarar 'reparacion' y no pagar. La generación
  * tampoco se consume aquí — se cobró al ARRANCAR el build.
  *
- * DECISIÓN de kill-switch (docs/14 §3): el freno de builds detiene builds NUEVOS
- * (iniciarAjuste → trg_kill_build). Un build YA EN VUELO (versión 'building' creada
- * antes de congelar, con su sesión CMA abierta) se DEJA terminar: (a) el costo de CMA
- * ya se incurrió, (b) un trigger no puede matar la sesión remota, (c) bloquear el
- * UPDATE building→lista solo dejaría la versión huérfana. Aceptado. Para cortar de
- * verdad a un tenant abusivo en incidente se usa la suspensión por-org, que sí frena
- * sus builds/runs nuevos.
+ * ENTREGA GARANTIZADA (docs/08): el build ya llegó a `ready` y ya se pagó (la
+ * generación se cobró al ARRANCAR). Así que la versión se ENTREGA (building→lista) pase
+ * lo que pase con el conteo del ciclo. El consumo del ajuste va tras un SAVEPOINT: si
+ * falla (p.ej. la automatización quedó frozen mientras el build estaba en vuelo), NO se
+ * tira la transacción — eso devolvería la versión a 'building' y la guarda anti-spam de
+ * iniciarAjuste ladrillaría la automatización PARA SIEMPRE (incluidas las reparaciones,
+ * que docs/08 §2 promete incondicionales). Se entrega igual y se registra el incidente;
+ * el cliente siempre recibe el build que pagó. Idempotente: un webhook duplicado no
+ * re-consume (el UPDATE building→lista solo pega una vez).
  */
 export async function confirmarAjuste(c: PoolClient, autoId: string, versionId: string): Promise<EstadoCiclo> {
   const upd = await c.query(
@@ -171,16 +174,26 @@ export async function confirmarAjuste(c: PoolClient, autoId: string, versionId: 
   //  arranca la ventana de 30 días.)
 
   // El contador lo lleva la BD y decide POR EL TIPO PERSISTIDO en la versión: una
-  // reparación no consume; un cambio sí, salvo dentro de la ventana de 30 días. El
-  // app ya no puede escribir ajustes_usados NI elegir el tipo al confirmar.
-  // (La generación NO se consume aquí: se cobró al ARRANCAR el build — docs/10 §8,
-  //  "tope de builds INICIADOS" — para que el dinero no se gaste sin presupuesto.)
-  await c
-    .query<{ estado: CicloEstado; usados: number; gratis: boolean; tipo: string }>(
-      "SELECT estado, usados, gratis, tipo FROM app_consumir_ajuste($1)",
-      [versionId],
-    )
-    .catch((e) => comoAjuste(e));
+  // reparación no consume; un cambio sí, salvo dentro de la ventana de 30 días. El app
+  // ya no puede escribir ajustes_usados NI elegir el tipo al confirmar. El SAVEPOINT hace
+  // que un fallo aquí NO revierta la entrega ya hecha (la versión queda 'lista').
+  await c.query("SAVEPOINT tras_entrega");
+  try {
+    await c.query("SELECT estado, usados, gratis, tipo FROM app_consumir_ajuste($1)", [versionId]);
+  } catch (e) {
+    const msg = (e as { message?: string })?.message ?? "";
+    // Solo se traga-y-entrega cuando el conteo no procede por REGLA DE NEGOCIO (la
+    // automatización quedó frozen a mitad de vuelo, etc.): reintentar no ayudaría y el
+    // build ya se pagó. Un error TÉCNICO (deadlock/serialization/lock/desconexión) se
+    // RE-LANZA: conOrg hace rollback total y el webhook reintenta confirmarAjuste limpio
+    // (re-entrega desde 'building' y esta vez SÍ cuenta) — sin brick (el reintento
+    // re-entrega) y sin perder el conteo de un cambio de pago en silencio.
+    if (!/AJUSTE_NO_PERMITIDO:(frozen|ajustes_agotados|no_existe)/.test(msg)) throw e;
+    await c.query("ROLLBACK TO SAVEPOINT tras_entrega"); // preserva building→lista
+    // La versión queda entregada; el ciclo no avanza. En producción esto es una alerta
+    // durable a ops (build entregado sin contabilizar); aquí, log del incidente.
+    console.error(`[ciclo] versión ${versionId} entregada sin contar el ajuste (${msg})`);
+  }
   return estadoDelCiclo(c, autoId);
 }
 

@@ -394,9 +394,25 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_org uuid := app_current_org(); v_usados int;
 BEGIN
   IF v_org IS NULL THEN RAISE EXCEPTION 'app_congelar sin contexto de org'; END IF;
-  UPDATE automatizaciones SET ciclo_estado = 'frozen'
-    WHERE id = p_auto AND org_id = v_org RETURNING ajustes_usados INTO v_usados;
+  -- Lock + ownership PRIMERO (esta función es SECURITY DEFINER → bypasa RLS, así que hay
+  -- que scopear a mano por org). Dos motivos: (1) toma el MISMO FOR UPDATE por-fila que
+  -- iniciarAjuste → serializa con él (cierra el TOCTOU del guard); (2) un p_auto AJENO
+  -- devuelve no_existe UNIFORME, sin revelar si otra org tiene un build en vuelo (oracle
+  -- cross-tenant).
+  PERFORM 1 FROM automatizaciones WHERE id = p_auto AND org_id = v_org FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'AJUSTE_NO_PERMITIDO:no_existe'; END IF;
+  -- No congelar con un CAMBIO en vuelo (de ESTA org): al confirmar vería frozen y sin el
+  -- savepoint de confirmarAjuste devolvería la versión a 'building' → automatización
+  -- ladrillada. Que el cliente espere a que ese build termine. Una REPARACIÓN en vuelo sí
+  -- coexiste con el congelado (docs/08 §2: confirma sobre frozen sin problema).
+  IF EXISTS (SELECT 1 FROM versiones v
+             WHERE v.automatizacion_id = p_auto AND v.org_id = v_org
+               AND v.estado = 'building' AND v.tipo = 'cambio') THEN
+    RAISE EXCEPTION 'AJUSTE_NO_PERMITIDO:build_en_vuelo';
+  END IF;
+  -- Idempotente: si YA está frozen, el UPDATE es un no-op.
+  UPDATE automatizaciones SET ciclo_estado = 'frozen' WHERE id = p_auto AND org_id = v_org
+    RETURNING ajustes_usados INTO v_usados;
   RETURN QUERY SELECT 'frozen'::text, v_usados;
 END $fn$;
 GRANT EXECUTE ON FUNCTION app_congelar(uuid) TO automata_app;

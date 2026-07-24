@@ -182,6 +182,18 @@ obligó a tres correcciones que van **más allá de la feature**:
 El rol de app perdió `UPDATE` sobre el ciclo (solo `nombre`/`activa`) y `DELETE` sobre
 `automatizaciones`/`versiones`/`ejecuciones`.
 
+**✅ Construido — brick de `confirmarAjuste` cerrado** (`verify:ciclo:pg` §11). Si el conteo
+del ciclo fallaba al confirmar (p.ej. congelado voluntario a mitad de vuelo), `conOrg` revertía
+el `building→lista` → la versión quedaba `building` → `iniciarAjuste` la rechazaba con
+`AjusteEnCurso` **para siempre** (automatización ladrillada, incluidas reparaciones). Dos capas:
+`confirmarAjuste` **entrega garantizada** (savepoint: un error de conteo no revierte la entrega;
+solo se traga y entrega ante regla de negocio —frozen— y **re-lanza los errores técnicos** para
+que el webhook reintente), y `app_congelar` **rechaza congelar con un cambio en vuelo**
+(`FOR UPDATE`+ownership primero → sin TOCTOU ni oracle cross-tenant, correcciones de su revisión).
+**Abierto (→ wiring):** el brick por versión `building` **huérfana** (build que nunca
+confirma/falla) exige cablear `fallarAjuste` al webhook de fallo de CMA + reaper; y las entregas
+sin contar necesitan reconciliación durable (hoy `console.error`). Ver docs/14 §3.
+
 **✅ Construido — circuit breaker de reparaciones** (`verify:reparaciones:pg` 24/24,
 docs/08 §2). Las reparaciones siguen gratis e ilimitadas para el cliente sano, pero un
 **latch persistente** (`automatizaciones.en_revision`) las corta al superar la tasa

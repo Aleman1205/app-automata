@@ -20,6 +20,7 @@ const OTRA = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const PER = "2026-07";
 const id = (n: number) => `c1000000-0000-0000-0000-00000000000${n}`;
 const CICLO = id(1), INFLIGHT = id(2), FAIL = id(3), CONGELA = id(4), RACE = id(5), INACTIVA = id(6), AJENA = id(7);
+const BRICK_GUARD = id(8), BRICK_ROBUST = id(9), TOCTOU_C = id(0);
 
 let ok = true;
 const check = (n: string, p: boolean) => { console.log(`  ${p ? "✓" : "✗"} ${n}`); ok = ok && p; };
@@ -63,7 +64,7 @@ async function main() {
     // cuota a media prueba — el tope de generaciones lo cubre verify-cuota-pg.ts.
     for (const o of [A, OTRA]) { await admin.query("INSERT INTO orgs (id,nombre) VALUES ($1,'o')", [o]); await admin.query("INSERT INTO subscriptions (org_id,plan) VALUES ($1,'equipo')", [o]); }
     await seedAuto(CICLO); await seedAuto(INFLIGHT); await seedAuto(FAIL); await seedAuto(CONGELA);
-    await seedAuto(RACE); await seedAuto(INACTIVA, false);
+    await seedAuto(RACE); await seedAuto(INACTIVA, false); await seedAuto(BRICK_GUARD); await seedAuto(BRICK_ROBUST); await seedAuto(TOCTOU_C);
     await admin.query("INSERT INTO automatizaciones (id,org_id,nombre) VALUES ($1,$2,'ajena')", [AJENA, OTRA]);
 
     console.log("1. Reserva→confirma: 3 cambios consumen ajuste + generación → frozen:");
@@ -129,6 +130,39 @@ async function main() {
     await cerrar(t2, "ROLLBACK");
     check("el 2º iniciar BLOQUEA hasta el commit del 1º", pendiente === true);
     check("y luego es rechazado (AjusteEnCurso), sin doble build", r2 instanceof AjusteEnCurso && (await cuentaBuilding(RACE)) === 1);
+
+    console.log("\n11. Brick de confirmarAjuste cerrado (hallazgo de la revisión de la ventana):");
+    // (a) GUARD: no se puede congelar con un CAMBIO en vuelo (evita el brick en origen).
+    const iG = await conOrg(app, A, (c) => iniciarAjuste(c, BRICK_GUARD, "pasa")); // cambio building
+    check("congelar con un cambio en vuelo → AjusteEnCurso (no ladrilla)", await (async () => {
+      try { await conOrg(app, A, (c) => congelar(c, BRICK_GUARD)); return false; } catch (e) { return e instanceof AjusteEnCurso; }
+    })());
+    const eg = await conOrg(app, A, (c) => confirmarAjuste(c, BRICK_GUARD, iG.versionId));
+    check("el cambio en vuelo se confirma normal (ready, 1 usado)", eg.estado === "ready" && eg.ajustesUsados === 1);
+
+    // (b) RED DE SEGURIDAD: aunque quede frozen a mitad de vuelo (forzado como dueño,
+    //     saltando el guard), confirmarAjuste ENTREGA la versión en vez de dejarla building.
+    const iR = await conOrg(app, A, (c) => iniciarAjuste(c, BRICK_ROBUST, "pasa")); // cambio building
+    await admin.query("UPDATE automatizaciones SET ciclo_estado='frozen' WHERE id=$1", [BRICK_ROBUST]); // peor caso
+    await conOrg(app, A, (c) => confirmarAjuste(c, BRICK_ROBUST, iR.versionId)); // (loguea el incidente, no lanza)
+    check("frozen a mitad de vuelo: la versión se ENTREGA (0 building, no revertida)", (await cuentaBuilding(BRICK_ROBUST)) === 0);
+    check("la versión quedó 'lista'", (await admin.query<{ n: number }>("SELECT count(*)::int AS n FROM versiones WHERE id=$1 AND estado='lista'", [iR.versionId])).rows[0]?.n === 1);
+    check("NO quedó ladrillada: una reparación posterior procede (docs/08 §2)", await conOrg(app, A, (c) => iniciarAjuste(c, BRICK_ROBUST, "falla")).then(() => true).catch(() => false));
+
+    // (c) NO filtra entre orgs: congelar un auto AJENO (con cambio building) → no_existe
+    //     uniforme, no 'build_en_vuelo' (que revelaría el estado de otra org).
+    await admin.query("INSERT INTO versiones (automatizacion_id,org_id,numero,estado,tipo) VALUES ($1,$2,2,'building','cambio')", [AJENA, OTRA]);
+    check("congelar un auto AJENO (con cambio en vuelo) → no_existe, NO build_en_vuelo (sin oracle cross-tenant)", await lanza(() => conOrg(app, A, (c) => congelar(c, AJENA)), AutomatizacionNoDisponible));
+
+    // (d) TOCTOU: congelar toma FOR UPDATE → serializa con iniciarAjuste concurrente.
+    const g1 = await abrirTx(app, A);
+    await iniciarAjuste(g1, TOCTOU_C, "pasa"); // cambio building, cerrojo tomado, sin commit
+    const pc = conOrg(app, A, (c) => congelar(c, TOCTOU_C)).then(() => "ok").catch((e) => e); // conexión nueva; BLOQUEA en FOR UPDATE
+    const bloqueo = await Promise.race([pc.then(() => false), new Promise<boolean>((r) => setTimeout(() => r(true), 150))]);
+    await cerrar(g1, "COMMIT"); // libera → congelar ve el cambio building committeado
+    const rc = await pc;
+    check("congelar BLOQUEA hasta el commit del iniciar concurrente (FOR UPDATE)", bloqueo === true);
+    check("y luego lo rechaza (AjusteEnCurso), sin frozen+building coexistiendo", rc instanceof AjusteEnCurso);
 
     console.log("\n10. Backstops de integridad en la BD:");
     check("UNIQUE(automatizacion_id, numero): numero duplicado → error 23505", await (async () => {
