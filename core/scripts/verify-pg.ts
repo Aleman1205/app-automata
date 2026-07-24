@@ -91,11 +91,15 @@ async function main() {
     });
     check("conOrg(A) UPDATE sobre filas de B afecta 0 filas", upd === 0);
 
+    // El DELETE dejó de existir para el rol de app (REVOKE, anti-"reciclador" de
+    // docs/06 §3: borrar y recrear reseteaba contador y ventana gratis). Es una
+    // garantía MÁS FUERTE que la de RLS: no son "0 filas afectadas", es que no puede
+    // borrar en absoluto — ni las suyas ni las de otra org. Archivar es activa=false.
     const del = await conOrg(app, A, async (c) => {
-      const r = await c.query("DELETE FROM automatizaciones WHERE org_id = $1", [B]);
-      return r.rowCount ?? 0;
+      try { await c.query("DELETE FROM automatizaciones WHERE org_id = $1", [B]); return "permitido"; }
+      catch (e) { return (e as { code?: string }).code; }
     });
-    check("conOrg(A) DELETE sobre filas de B afecta 0 filas", del === 0);
+    check("el app NO puede borrar automatizaciones (revocado, 42501)", del === "42501");
 
     let fkBloqueado = false;
     try {

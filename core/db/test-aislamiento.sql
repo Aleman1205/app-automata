@@ -20,6 +20,9 @@ DECLARE
 BEGIN
   -- Semilla (como superusuario: RLS bypassed).
   INSERT INTO orgs (id, nombre) VALUES (a, 'Org A'), (b, 'Org B');
+  -- Toda org real tiene subscription: crear una versión (= arrancar un build) ahora
+  -- cobra una generación (trigger cobrar_build) y exige la suscripción activa.
+  INSERT INTO subscriptions (org_id, plan) VALUES (a, 'equipo'), (b, 'equipo');
   INSERT INTO memberships (org_id, user_id, rol) VALUES (a, 'u_ana', 'admin'), (b, 'u_beto', 'admin');
   INSERT INTO automatizaciones (id, org_id, nombre) VALUES (a1, a, 'A1'), (a2, a, 'A2'), (b1, b, 'B1');
 
@@ -56,11 +59,15 @@ BEGIN
   IF cnt <> 0 THEN RAISE EXCEPTION 'FALLO: UPDATE cross-org afectó % filas de B', cnt; END IF;
   RAISE NOTICE 'PASS · UPDATE cross-org: 0 filas afectadas';
 
-  -- DELETE cross-org: intenta borrar la de B → 0 filas.
-  DELETE FROM automatizaciones WHERE org_id = b;
-  GET DIAGNOSTICS cnt = ROW_COUNT;
-  IF cnt <> 0 THEN RAISE EXCEPTION 'FALLO: DELETE cross-org afectó % filas de B', cnt; END IF;
-  RAISE NOTICE 'PASS · DELETE cross-org: 0 filas afectadas';
+  -- DELETE: el rol de app ya NO puede borrar automatizaciones (REVOKE, anti-"reciclador"
+  -- de docs/06 §3: borrar y recrear reseteaba contador de ajustes y ventana gratis).
+  -- Garantía MÁS FUERTE que la de RLS: no es "0 filas", es que no puede borrar nada.
+  BEGIN
+    DELETE FROM automatizaciones WHERE org_id = b;
+    RAISE EXCEPTION 'FALLO: el rol de app pudo ejecutar DELETE (debía estar revocado)';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS · DELETE revocado para el rol de app (42501), ni propio ni cross-org';
+  END;
 
   -- Re-etiquetado: no puede mover una fila PROPIA (A) a la org B (WITH CHECK).
   BEGIN

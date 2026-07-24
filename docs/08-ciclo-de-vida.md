@@ -79,6 +79,19 @@ artefacto. Corre el ejemplo original contra la versión actual.
 Se decide con datos, no con criterio. Y se puede automatizar: al recibir una
 queja, el sistema corre la regresión y clasifica solo.
 
+**Cómo está construido** (2026-07-24): el tipo lo **deriva** el sistema de la
+regresión y se **persiste en la versión** al iniciar el ajuste. No es un parámetro
+que el llamador elija al confirmar — cuando lo era, bastaba declarar `reparacion`
+para saltarse el cobro entero (hallazgo de la revisión adversarial). El
+`indeterminado` (sin ejemplo, no ejecutable, timeout) clasifica como **cambio**:
+si no, ensuciar el ejemplo volvería gratis cualquier cambio.
+
+> **Deuda abierta — las reparaciones no tienen tope.** Son gratis e ilimitadas por
+> diseño (y así quedaron en el código: exentas incluso del contador de
+> generaciones), pero cada una es un build real de ~$1.8 USD y **el cliente influye
+> en si la regresión falla**. Hoy es el único canal de gasto sin ninguna cota. Falta
+> decidir: ¿tope técnico separado, alerta al superar N/mes, o se deja abierto?
+
 ---
 
 ## 3. Estados
@@ -203,9 +216,15 @@ creado muchas automatizaciones este mes — escríbenos si necesitas más".
 Plan Base — $30/mes (ilustrativo; real: $499 MXN)
   3 automatizaciones activas
   Cada una: 1 construcción + hasta 3 ajustes
+  Los primeros 30 días: los ajustes no gastan los 3
   Reparaciones: gratis e ilimitadas
   Ejecuciones: sin límite
 ```
+
+**La ventana de 30 días** ([docs/06](06-pricing.md) §4) se cruza con este modelo:
+durante los primeros 30 días **desde la entrega**, un cambio no gasta uno de los 3
+ajustes (sí gasta una generación del tope interno). El contador de 3 empieza a
+correr, de hecho, cuando termina la ventana. Los 3 ajustes **no caducan** (§9.2).
 
 Un solo mensaje, sin contadores mensuales. Mucho más fácil de explicar.
 

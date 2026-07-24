@@ -39,21 +39,29 @@ const cerrar = async (c: PoolClient, cmd: "COMMIT" | "ROLLBACK") => { await c.qu
 async function main() {
   const admin = crearPool(ADMIN_URL);
   const app = crearPool(APP_URL);
+  // La v1 'lista' SELLA la entrega (trigger) → la automatización quedaría dentro de la
+  // ventana de 30 días gratis, donde los cambios NO consumen ajuste. Este script prueba
+  // la ruta DE PAGO (post-ventana), así que se retrasa la entrega 60 días. La ventana en
+  // sí la cubre verify-ventana-pg.ts.
   const seedAuto = async (autoId: string, activa = true, ajustes = 0, estado = "ready") => {
     await admin.query("INSERT INTO automatizaciones (id, org_id, nombre, activa, ciclo_estado, ajustes_usados) VALUES ($1,$2,'a',$3,$4,$5)", [autoId, A, activa, estado, ajustes]);
     await admin.query("INSERT INTO versiones (automatizacion_id, org_id, numero, estado) VALUES ($1,$2,1,'lista')", [autoId, A]);
+    await admin.query("UPDATE automatizaciones SET entregada = now() - interval '60 days' WHERE id = $1", [autoId]);
   };
   const generaciones = () => admin.query<{ n: number }>("SELECT coalesce(sum(generaciones),0)::int AS n FROM uso_periodo WHERE org_id=$1", [A]).then((r) => r.rows[0]?.n ?? 0);
   const cuentaBuilding = (autoId: string) => admin.query<{ n: number }>("SELECT count(*)::int AS n FROM versiones WHERE automatizacion_id=$1 AND estado='building'", [autoId]).then((r) => r.rows[0]?.n ?? 0);
   // Un cambio completo = iniciar (regresión pasa) + confirmar al ready.
   const cambioCompleto = (autoId: string) => conOrg(app, A, async (c) => {
     const i = await iniciarAjuste(c, autoId, "pasa");
-    return confirmarAjuste(c, autoId, i.versionId, i.tipo, PER);
+    return confirmarAjuste(c, autoId, i.versionId);
   });
 
   try {
     await admin.query("DELETE FROM orgs WHERE id = ANY($1)", [[A, OTRA]]);
-    for (const o of [A, OTRA]) { await admin.query("INSERT INTO orgs (id,nombre) VALUES ($1,'o')", [o]); await admin.query("INSERT INTO subscriptions (org_id,plan) VALUES ($1,'base')", [o]); }
+    // Plan 'equipo' (20 generaciones): ahora CADA build cobra una generación al arrancar
+    // (trigger cobrar_build), y este script hace ~8 builds. Con 'base' (6) se agotaría la
+    // cuota a media prueba — el tope de generaciones lo cubre verify-cuota-pg.ts.
+    for (const o of [A, OTRA]) { await admin.query("INSERT INTO orgs (id,nombre) VALUES ($1,'o')", [o]); await admin.query("INSERT INTO subscriptions (org_id,plan) VALUES ($1,'equipo')", [o]); }
     await seedAuto(CICLO); await seedAuto(INFLIGHT); await seedAuto(FAIL); await seedAuto(CONGELA);
     await seedAuto(RACE); await seedAuto(INACTIVA, false);
     await admin.query("INSERT INTO automatizaciones (id,org_id,nombre) VALUES ($1,$2,'ajena')", [AJENA, OTRA]);
@@ -66,8 +74,10 @@ async function main() {
     check("un 4º cambio → AjusteNoPermitido('frozen')", await (async () => { try { await cambioCompleto(CICLO); return false; } catch (e) { return e instanceof AjusteNoPermitido && e.motivo === "frozen"; } })());
 
     console.log("\n2. Reparación: gratis, no consume ajuste NI generación, incluso sobre frozen:");
-    const rep = await conOrg(app, A, async (c) => { const i = await iniciarAjuste(c, CICLO, "falla"); check("  regresión falla → tipo reparación", i.tipo === "reparacion"); return confirmarAjuste(c, CICLO, i.versionId, i.tipo, PER); });
+    const rep = await conOrg(app, A, async (c) => { const i = await iniciarAjuste(c, CICLO, "falla"); check("  regresión falla → tipo reparación", i.tipo === "reparacion"); return confirmarAjuste(c, CICLO, i.versionId); });
     check("reparación sobre frozen → no consume (sigue frozen, 3 usados)", rep.estado === "frozen" && rep.ajustesUsados === 3);
+    // docs/08 §2: la reparación es gratis e ILIMITADA ("es tu obligación, no un favor"),
+    // así que queda exenta también del tope de generaciones (trigger cobrar_build).
     check("no consumió generación (siguen 3, no 4)", (await generaciones()) === 3);
 
     console.log("\n3. INDETERMINADO → cambio (fail-safe: cobra):");
@@ -77,11 +87,16 @@ async function main() {
     // (INFLIGHT ya tiene una versión 'building' del paso 3, sin confirmar)
     check("2º ajuste mientras hay uno building → AjusteEnCurso", await lanza(() => conOrg(app, A, (c) => iniciarAjuste(c, INFLIGHT, "falla")), AjusteEnCurso));
 
-    console.log("\n5. Build FALLIDO no consume (docs/06 §4: los fallidos no cuentan):");
+    console.log("\n5. Build FALLIDO no gasta AJUSTE (pero sí la generación: tope de builds INICIADOS):");
+    // CAMBIO de comportamiento (revisión adversarial): la generación se cobra al ARRANCAR
+    // el build (docs/10 §8 "builds INICIADOS"), no al confirmarlo. Antes, iniciar+fallar en
+    // bucle quemaba sesiones de CMA reales con el contador en 0 ("el que falla mucho",
+    // docs/06 §3). El AJUSTE de los 3 sigue sin gastarse si el build falla.
     const gAntes = await generaciones();
     const iF = await conOrg(app, A, (c) => iniciarAjuste(c, FAIL, "pasa"));
     await conOrg(app, A, (c) => fallarAjuste(c, FAIL, iF.versionId));
-    check("tras fallar: 0 ajustes usados, ninguna generación gastada", (await conOrg(app, A, (c) => estadoDelCiclo(c, FAIL))).ajustesUsados === 0 && (await generaciones()) === gAntes);
+    check("tras fallar: 0 ajustes usados (el ajuste no se gasta)", (await conOrg(app, A, (c) => estadoDelCiclo(c, FAIL))).ajustesUsados === 0);
+    check("pero la generación se cobró al INICIAR (no se gasta dinero sin presupuesto)", (await generaciones()) === gAntes + 1);
     check("el 'en vuelo' quedó libre (0 building) → se puede reintentar", (await cuentaBuilding(FAIL)) === 0);
     const reintento = await cambioCompleto(FAIL);
     check("el reintento sí consume (ajuste 1)", reintento.ajustesUsados === 1);
@@ -89,8 +104,8 @@ async function main() {
     console.log("\n6. Idempotencia de confirmar (webhook duplicado no doble-consume):");
     const dup = await conOrg(app, A, async (c) => {
       const i = await iniciarAjuste(c, CONGELA, "pasa");
-      await confirmarAjuste(c, CONGELA, i.versionId, i.tipo, PER);
-      return confirmarAjuste(c, CONGELA, i.versionId, i.tipo, PER); // 2ª vez
+      await confirmarAjuste(c, CONGELA, i.versionId);
+      return confirmarAjuste(c, CONGELA, i.versionId); // 2ª vez
     });
     check("confirmar dos veces → un solo consumo (1 usado, no 2)", dup.ajustesUsados === 1);
 

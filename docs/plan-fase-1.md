@@ -159,12 +159,29 @@ de 3 ajustes** (`verify:ciclo` 21/21 + `verify:ciclo:pg` 25/25). Modelo **reserv
 confirma**: `iniciarAjuste` **deriva el tipo de la REGRESIÓN** (cambio si el ejemplo
 original pasa, reparación si falla, cambio-fail-safe si indeterminado — nunca lo elige
 el llamador, corrección ALTA de la revisión), guarda `activa`+cross-org+un-build-en-
-vuelo, y crea la versión `building` **sin consumir**; `confirmarAjuste` (al `ready`)
-consume el ajuste **y una generación del mes (M3)** solo para un CAMBIO y quizá congela;
-`fallarAjuste` no consume (docs/06 §4: los fallidos no cuentan). Probado: 3 cambios →
-frozen, **reparación gratis/ilimitada** (no consume, incluso sobre frozen), congelado
-voluntario, idempotencia de confirmar, TOCTOU sin oversell ni spam, y backstops de BD
+vuelo, y crea la versión `building`; `confirmarAjuste` (al `ready`) consume el ajuste solo
+para un CAMBIO y quizá congela. Probado: 3 cambios → frozen, **reparación
+gratis/ilimitada** (no consume, incluso sobre frozen), congelado voluntario, idempotencia
+de confirmar, TOCTOU sin oversell ni spam, y backstops de BD
 (`UNIQUE(automatizacion_id,numero)`, `CHECK ajustes_usados<=3`).
+
+**✅ Construido — ventana de 30 días + enforcement del ciclo en la BD** (`verify:ventana:pg`
+29/29, docs/06 §4). Un cambio dentro de los **30 días desde la ENTREGA** (columna
+`entregada`, sellada **once-only** por trigger al quedar lista la v1) **no gasta uno de
+los 3 ajustes**; sí gasta generación. Su revisión adversarial (36 hallazgos, 12 ALTA)
+obligó a tres correcciones que van **más allá de la feature**:
+1. **`pg_temp` hijack** — `SET search_path = public` no basta: una `TEMP TABLE` homónima
+   falseaba **todas** las funciones `SECURITY DEFINER` (ajustes y cuota infinitos,
+   kill-switch inerte). Ver el recuadro en [docs/14](14-controles-de-seguridad.md) §4.
+2. **La generación se cobra al ARRANCAR el build** (trigger sobre el INSERT de
+   `versiones`), no al confirmarlo — mata al «reciclador» (medido: de 40 builds con el
+   contador en 0, a corte en el 7º) y a «el que falla mucho». **Corrige docs/06 §4**: un
+   build fallido sí consume generación. Además una org **morosa** ya no arranca builds.
+3. **El `tipo` se persiste** en `versiones.tipo` al iniciar: antes el llamador podía
+   declarar `reparacion` al confirmar y saltarse el enforcement entero.
+El rol de app perdió `UPDATE` sobre el ciclo (solo `nombre`/`activa`) y `DELETE` sobre
+`automatizaciones`/`versiones`/`ejecuciones`. **Abierto:** las reparaciones siguen sin
+tope, y un `confirmarAjuste` que falla deja la versión clavada en `building`.
 
 **✅ Construido (rebanada de motor, probada — `core/src/billing/plan.ts`):** la **rutina
 de downgrade** (docs/06 §9, `verify:plan:pg` 22/22). `aplicarDowngrade` (dueño, atómico)
@@ -173,8 +190,8 @@ solo lectura), tomando el **mismo advisory lock por-org** que el trigger de espa
 — corrección ALTA de la revisión: sin él, un `crearAutomatizacion` concurrente dejaba la
 org por encima del límite nuevo (oversell). `reactivar`/`desactivar` (conOrg, acción admin
 `gestionar_espacios`): reactivar lo corta el trigger de M3 con `CuotaExcedida` si no hay
-espacio (TOCTOU-safe, probado). **Diferido:** los **ajustes gratis de los primeros 30
-días** (ventana temporal, docs/06) siguen pendientes.
+espacio (TOCTOU-safe, probado). Los **ajustes gratis de los primeros 30 días** ya no
+están diferidos: se construyeron (ver arriba).
 
 **✅ Construido (rebanada de motor, probada — `core/src/entrada/`):** el **gate de
 validación de insumos** (dependency-free, `verify:entrada` 34/34). Clasifica en

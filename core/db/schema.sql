@@ -47,9 +47,18 @@ CREATE TABLE IF NOT EXISTS automatizaciones (
   ciclo_estado   text NOT NULL DEFAULT 'ready' CHECK (ciclo_estado IN ('ready','frozen')),
   ajustes_usados int  NOT NULL DEFAULT 0 CHECK (ajustes_usados >= 0 AND ajustes_usados <= 3),
   creada  timestamptz NOT NULL DEFAULT now(),
+  -- ENTREGA: cuándo el cliente RECIBIÓ la automatización (primera versión 'lista').
+  -- Ancla la ventana de 30 días de ajustes gratis (docs/06 §4: "los ajustes durante
+  -- los primeros 30 días no cuentan" — es cuando afina lo que acaba de recibir).
+  -- La sella un trigger UNA sola vez; el rol de app no puede escribirla (moverla al
+  -- futuro = ajustes gratis infinitos).
+  entregada timestamptz,
   PRIMARY KEY (id),
   UNIQUE (id, org_id)                                   -- ancla para FK compuesta
 );
+-- Idempotente: para BDs creadas antes de la ventana de 30 días (el CREATE TABLE de
+-- arriba solo aplica en instalaciones nuevas).
+ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS entregada timestamptz;
 
 CREATE TABLE IF NOT EXISTS versiones (
   id                uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -57,6 +66,11 @@ CREATE TABLE IF NOT EXISTS versiones (
   org_id            uuid NOT NULL,
   numero            int  NOT NULL,
   estado            text NOT NULL,
+  -- TIPO del ajuste que produjo esta versión, DERIVADO de la regresión al iniciar
+  -- (docs/08 §2) y persistido aquí. Antes viajaba como parámetro hasta confirmar:
+  -- el llamador podía decir 'reparacion' y saltarse el consumo entero (ALTA de la
+  -- revisión). NULL = build inicial (v1), que no es un ajuste.
+  tipo              text CHECK (tipo IN ('cambio','reparacion')),
   artefacto_key     text,
   creada            timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (id),
@@ -68,6 +82,10 @@ CREATE TABLE IF NOT EXISTS versiones (
   -- Sin esto, conOrg(A) podía colgar una versión org_id=A de la automatización de B.
   FOREIGN KEY (automatizacion_id, org_id) REFERENCES automatizaciones (id, org_id) ON DELETE CASCADE
 );
+ALTER TABLE versiones ADD COLUMN IF NOT EXISTS tipo text;
+DO $$ BEGIN
+  ALTER TABLE versiones ADD CONSTRAINT versiones_tipo_chk CHECK (tipo IN ('cambio','reparacion'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 CREATE TABLE IF NOT EXISTS ejecuciones (
   id          uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -177,6 +195,21 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   PRIMARY KEY (fuente, id)                   -- dedupe POR FUENTE: CMA y Stripe no colisionan
 );
 
+-- ── Blindaje de search_path (hallazgo ALTA de la revisión de la ventana) ────
+-- `SET search_path = public` NO basta: Postgres busca pg_temp ANTES que public para
+-- RELACIONES (solo lo omite para funciones/operadores). Un `CREATE TEMP TABLE
+-- automatizaciones` del rol de app hacía que las funciones SECURITY DEFINER leyeran
+-- la tabla FALSA → ajustes infinitos, cuota infinita y kill-switch inerte. Se probó
+-- en vivo. Doble defensa: (1) todas las funciones nombran pg_temp AL FINAL, y
+-- (2) el app pierde TEMPORARY (no crea temp tables) y CREATE sobre public (no crea
+-- objetos que puedan ensombrecer a los reales).
+DO $$ BEGIN
+  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', current_database());
+  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM automata_app', current_database());
+END $$;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM automata_app;
+
 GRANT USAGE ON SCHEMA public TO automata_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO automata_app;
 -- El rol de app NO muta su propio plan ni resetea sus contadores: solo lectura +
@@ -191,10 +224,17 @@ REVOKE INSERT, UPDATE, DELETE ON interruptores FROM automata_app;
 REVOKE INSERT, UPDATE, DELETE ON suspensiones  FROM automata_app;
 -- La bitácora del freno es append-only del dueño; el app ni la lee ni la escribe.
 REVOKE ALL ON bitacora_kill FROM automata_app;
+-- EL RECICLADOR (docs/06 §3, hallazgo ALTA de la revisión): el REVOKE UPDATE protege
+-- la fila, pero NO su existencia — borrar y recrear reseteaba entregada, ajustes_usados
+-- y ciclo_estado (ventana gratis + 3 ajustes nuevos, en bucle, con builds reales de
+-- ~$52 MXN cada uno). El app no borra nunca: archivar es activa=false (docs/06 §9).
+REVOKE DELETE ON automatizaciones FROM automata_app;
+REVOKE DELETE ON versiones        FROM automata_app;  -- el ledger de builds no se borra
+REVOKE DELETE ON ejecuciones      FROM automata_app;  -- ni el de runs (facturación)
 
 -- Org viva de la sesión, robusta: '' o no-seteada → NULL → fail-closed (0 filas).
 CREATE OR REPLACE FUNCTION app_current_org() RETURNS uuid
-  LANGUAGE sql STABLE AS $fn$
+  LANGUAGE sql STABLE SET search_path = public, pg_temp AS $fn$
     SELECT NULLIF(current_setting('app.current_org', true), '')::uuid
   $fn$;
 GRANT EXECUTE ON FUNCTION app_current_org() TO automata_app;
@@ -206,7 +246,7 @@ GRANT EXECUTE ON FUNCTION app_current_org() TO automata_app;
 -- consume sin tener UPDATE directo sobre uso_periodo (no puede resetear). Lanza
 -- 'CUOTA_EXCEDIDA:<recurso>:<limite>:<plan>' al tope; el TS lo traduce.
 CREATE OR REPLACE FUNCTION app_consumir(p_periodo text, p_recurso text)
-RETURNS int LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $fn$
+RETURNS int LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_org uuid := app_current_org(); v_lim int; v_plan text; v_estado text; v_val int;
 BEGIN
   IF v_org IS NULL THEN RAISE EXCEPTION 'app_consumir sin contexto de org'; END IF;
@@ -244,7 +284,7 @@ GRANT EXECUTE ON FUNCTION app_consumir(text, text) TO automata_app;
 -- app. Fail-CLOSED (coalesce). Lanza el mismo 'SERVICIO_SUSPENDIDO:<motivo>'; el TS
 -- lo traduce con comoSuspension.
 CREATE OR REPLACE FUNCTION verificar_freno(p_op text)
-RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $fn$
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_org uuid := app_current_org(); v_congelado boolean;
 BEGIN
   IF p_op NOT IN ('builds','ejecuciones','cobros') THEN
@@ -261,10 +301,146 @@ BEGIN
 END $fn$;
 GRANT EXECUTE ON FUNCTION verificar_freno(text) TO automata_app;
 
+-- ── Ciclo de vida: enforcement en la BD (docs/08 + ventana de docs/06 §4) ────
+-- MISMO principio que la cuota: el contador de ajustes NO puede depender de que la
+-- app "se acuerde". Antes `ajustes_usados` solo tenía un CHECK y el app hacía UPDATE
+-- directo → podía resetearlo a 0 y regalarse ajustes (builds) INFINITOS. Ahora el
+-- app no puede escribir ajustes_usados/ciclo_estado/entregada (revocados abajo);
+-- solo consume por esta función, que únicamente INCREMENTA.
+
+-- ¿La automatización está dentro de la ventana de 30 días desde la ENTREGA?
+-- Fail-CLOSED: sin entrega (aún no recibe nada) o sin fila → false = el ajuste SÍ cuenta.
+CREATE OR REPLACE FUNCTION en_ventana_gratis(p_auto uuid) RETURNS boolean
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $fn$
+  SELECT coalesce(
+    (SELECT entregada IS NOT NULL AND now() < entregada + interval '30 days'
+       FROM automatizaciones WHERE id = p_auto),
+    false)
+$fn$;
+GRANT EXECUTE ON FUNCTION en_ventana_gratis(uuid) TO automata_app;
+
+-- Consume un AJUSTE por un CAMBIO confirmado. Dentro de la ventana de 30 días NO
+-- gasta ajuste (docs/06 §4) — pero el llamador SÍ consume una generación del tope
+-- interno (2× espacios/mes, docs/08 §7), que es lo que acota al "ajustador infinito".
+-- Fuera de la ventana: incrementa, y al llegar a MAX (3) congela (v4 es la última).
+-- Devuelve el estado resultante y si el ajuste fue gratis.
+-- Toma la VERSIÓN, no la automatización: el tipo (cambio/reparación) se lee de la
+-- fila, donde lo dejó iniciarAjuste derivándolo de la regresión. Antes el llamador lo
+-- pasaba como argumento y bastaba decir 'reparacion' para saltarse TODO el enforcement
+-- (ALTA de la revisión: la protección de columnas es irrelevante si la app nunca llama
+-- a la función). Ahora la BD decide si el ajuste consume.
+CREATE OR REPLACE FUNCTION app_consumir_ajuste(p_version uuid)
+RETURNS TABLE (estado text, usados int, gratis boolean, tipo text)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_org uuid := app_current_org(); v_estado text; v_usados int; v_gratis boolean;
+        v_auto uuid; v_tipo text;
+BEGIN
+  IF v_org IS NULL THEN RAISE EXCEPTION 'app_consumir_ajuste sin contexto de org'; END IF;
+  SELECT v.automatizacion_id, v.tipo INTO v_auto, v_tipo
+    FROM versiones v WHERE v.id = p_version AND v.org_id = v_org;
+  IF NOT FOUND THEN RAISE EXCEPTION 'AJUSTE_NO_PERMITIDO:no_existe'; END IF;
+
+  SELECT a.ciclo_estado, a.ajustes_usados INTO v_estado, v_usados
+    FROM automatizaciones a WHERE a.id = v_auto AND a.org_id = v_org FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'AJUSTE_NO_PERMITIDO:no_existe'; END IF;
+
+  -- Una REPARACIÓN es gratis e ilimitada, incluso sobre frozen (docs/08 §2: "es tu
+  -- obligación, no un favor"). Solo el CAMBIO pasa por las guardas y el contador.
+  IF v_tipo IS DISTINCT FROM 'cambio' THEN
+    RETURN QUERY SELECT v_estado, v_usados, false, coalesce(v_tipo, 'inicial'); RETURN;
+  END IF;
+  IF v_estado = 'frozen' THEN RAISE EXCEPTION 'AJUSTE_NO_PERMITIDO:frozen'; END IF;
+
+  v_gratis := en_ventana_gratis(v_auto);
+  IF NOT v_gratis THEN
+    IF v_usados >= 3 THEN RAISE EXCEPTION 'AJUSTE_NO_PERMITIDO:ajustes_agotados'; END IF;
+    v_usados := v_usados + 1;
+    IF v_usados >= 3 THEN v_estado := 'frozen'; END IF;   -- al tope, congela
+    UPDATE automatizaciones SET ajustes_usados = v_usados, ciclo_estado = v_estado
+      WHERE id = v_auto;
+  END IF;
+  RETURN QUERY SELECT v_estado, v_usados, v_gratis, v_tipo;
+END $fn$;
+GRANT EXECUTE ON FUNCTION app_consumir_ajuste(uuid) TO automata_app;
+
+-- Congelado VOLUNTARIO ("esta ya quedó", docs/08 §3). Va por función porque el app
+-- perdió el UPDATE sobre ciclo_estado (si lo tuviera, podría des-congelarse y
+-- seguir ajustando). Idempotente.
+CREATE OR REPLACE FUNCTION app_congelar(p_auto uuid)
+RETURNS TABLE (estado text, usados int)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_org uuid := app_current_org(); v_usados int;
+BEGIN
+  IF v_org IS NULL THEN RAISE EXCEPTION 'app_congelar sin contexto de org'; END IF;
+  UPDATE automatizaciones SET ciclo_estado = 'frozen'
+    WHERE id = p_auto AND org_id = v_org RETURNING ajustes_usados INTO v_usados;
+  IF NOT FOUND THEN RAISE EXCEPTION 'AJUSTE_NO_PERMITIDO:no_existe'; END IF;
+  RETURN QUERY SELECT 'frozen'::text, v_usados;
+END $fn$;
+GRANT EXECUTE ON FUNCTION app_congelar(uuid) TO automata_app;
+
+-- Un BUILD ARRANCA cuando nace una versión: este es el ÚNICO choke-point que cruzan
+-- el build inicial (v1), los ajustes y cualquier ruta futura. Cobrar aquí —y no al
+-- confirmar— arregla tres agujeros ALTA verificados por la revisión:
+--   · el tope era de builds TERMINADOS, no INICIADOS (docs/10 §8): 5 iniciar+fallar
+--     dejaban el contador en 0 con 5 sesiones de CMA reales quemadas ("el que falla
+--     mucho", docs/06 §3);
+--   · el v1 no consumía NADA (crear→build→borrar→repetir: 40 builds, contador en 0,
+--     −$120 USD sobre $28.5 de ingreso);
+--   · el dinero se gastaba ANTES de saber si había presupuesto — al revés que el
+--     patrón reserva→corre→confirma que ya usan las ejecuciones.
+-- app_consumir además exige subscription 'activa', así que una org MOROSA o CANCELADA
+-- deja de poder arrancar builds (otro ALTA), y el periodo lo deriva la BD (el app ya
+-- no puede pasar una llave de periodo inventada para resetear su contador).
+CREATE OR REPLACE FUNCTION cobrar_build() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
+BEGIN
+  IF NEW.org_id IS DISTINCT FROM app_current_org() THEN RETURN NEW; END IF;
+  -- La REPARACIÓN queda exenta: docs/08 §2 la promete "gratis e ILIMITADA, es tu
+  -- obligación, no un favor", y cobrarla significaría negarle un arreglo a un cliente
+  -- que ya topó su mes. PENDIENTE (decisión de negocio): ese canal no tiene ningún
+  -- tope hoy y cada reparación es un build real (~$1.8) — el cliente influye en si la
+  -- regresión "falla". Conviene un tope técnico separado o una alerta, no dejarlo abierto.
+  IF NEW.tipo IS DISTINCT FROM 'reparacion' THEN
+    PERFORM app_consumir(to_char(now(), 'YYYY-MM'), 'generaciones');
+  END IF;
+  RETURN NEW;
+END $fn$;
+
+-- Sella la ENTREGA la PRIMERA vez que una versión queda 'lista' (el cliente ya
+-- recibió algo). `entregada IS NULL` la hace once-only: ni un re-listado ni una
+-- versión posterior mueven la fecha (mover = extender la ventana gratis).
+CREATE OR REPLACE FUNCTION marcar_entrega() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+BEGIN
+  UPDATE automatizaciones SET entregada = now()
+    WHERE id = NEW.automatizacion_id AND entregada IS NULL;
+  RETURN NULL;  -- AFTER trigger
+END $fn$;
+
+-- El app no escribe el ciclo: solo `nombre` y `activa`. ajustes_usados/ciclo_estado
+-- van por app_consumir_ajuste/app_congelar; `entregada` solo por el trigger.
+REVOKE UPDATE ON automatizaciones FROM automata_app;
+GRANT  UPDATE (nombre, activa) ON automatizaciones TO automata_app;
+
+-- Y en el INSERT tampoco: una automatización nueva creada por el app nace siempre
+-- ready/0/sin entregar. Sin esto, el app podía INSERTAR con entregada en el futuro
+-- (ventana gratis eterna) o con el contador ya "gastado". El dueño (contexto NULL)
+-- conserva control total: seeds, migraciones y remediación.
+CREATE OR REPLACE FUNCTION normalizar_ciclo_nuevo() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
+BEGIN
+  IF NEW.org_id IS DISTINCT FROM app_current_org() THEN RETURN NEW; END IF;
+  NEW.ciclo_estado   := 'ready';
+  NEW.ajustes_usados := 0;
+  NEW.entregada      := NULL;
+  RETURN NEW;
+END $fn$;
+
 -- Trigger de STOCK (espacios activos y usuarios): hace cumplir el tope en la BD, no
 -- depende de que la app llame a un helper. Advisory lock por-org (y por-recurso)
 -- para serializar inserciones concurrentes (anti-TOCTOU) sin bloquear otras orgs.
-CREATE OR REPLACE FUNCTION verificar_cuota_espacio() RETURNS trigger LANGUAGE plpgsql AS $fn$
+CREATE OR REPLACE FUNCTION verificar_cuota_espacio() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
 DECLARE v_lim int; v_plan text; v_estado text; v_activas int;
 BEGIN
   -- Solo enforza la cuota del PROPIO org en-contexto. Los inserts cross-org o sin
@@ -281,7 +457,7 @@ BEGIN
   IF v_activas >= v_lim THEN RAISE EXCEPTION 'CUOTA_EXCEDIDA:espacios:%:%', v_lim, v_plan; END IF;
   RETURN NEW;
 END $fn$;
-CREATE OR REPLACE FUNCTION verificar_cuota_usuario() RETURNS trigger LANGUAGE plpgsql AS $fn$
+CREATE OR REPLACE FUNCTION verificar_cuota_usuario() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
 DECLARE v_lim int; v_plan text; v_estado text; v_miembros int;
 BEGIN
   IF NEW.org_id IS DISTINCT FROM app_current_org() THEN RETURN NEW; END IF;
@@ -299,7 +475,7 @@ END $fn$;
 -- si el interruptor global está encendido, o si la org está suspendida. Solo enforza los
 -- inserts EN-CONTEXTO de la propia org; el dueño (sin app.current_org) pasa, para poder
 -- remediar durante el incidente. Lanza 'SERVICIO_SUSPENDIDO:<motivo>' (el TS lo traduce).
-CREATE OR REPLACE FUNCTION verificar_kill_switch() RETURNS trigger LANGUAGE plpgsql AS $fn$
+CREATE OR REPLACE FUNCTION verificar_kill_switch() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
 DECLARE v_congelado boolean; v_op text := TG_ARGV[0]; v_org uuid := app_current_org();
 BEGIN
   -- Sin contexto de org: el DUEÑO/ops opera para remediar durante el incidente
@@ -357,10 +533,29 @@ DROP TRIGGER IF EXISTS trg_cuota_usuario ON memberships;
 CREATE TRIGGER trg_cuota_usuario BEFORE INSERT ON memberships
   FOR EACH ROW EXECUTE FUNCTION verificar_cuota_usuario();
 
+-- Ciclo de vida: normaliza el ciclo al crear (app) y sella la entrega al publicar.
+DROP TRIGGER IF EXISTS trg_ciclo_nuevo ON automatizaciones;
+CREATE TRIGGER trg_ciclo_nuevo BEFORE INSERT ON automatizaciones
+  FOR EACH ROW EXECUTE FUNCTION normalizar_ciclo_nuevo();
+-- 'lista' y 'ready' son ambos "el cliente ya la puede usar": el ciclo (servicio.ts)
+-- escribe 'lista'; el pipeline M0 escribe 'ready'. Se aceptan los dos a propósito —
+-- si un StateRepo de Postgres usara 'ready', con solo 'lista' la entrega no se
+-- sellaría NUNCA y la ventana de 30 días desaparecería en silencio.
+DROP TRIGGER IF EXISTS trg_marcar_entrega ON versiones;
+CREATE TRIGGER trg_marcar_entrega AFTER INSERT OR UPDATE OF estado ON versiones
+  FOR EACH ROW WHEN (NEW.estado IN ('lista','ready')) EXECUTE FUNCTION marcar_entrega();
+
 -- Kill-switch: una versión nueva = un BUILD; una fila de ejecuciones = un RUN.
 DROP TRIGGER IF EXISTS trg_kill_build ON versiones;
 CREATE TRIGGER trg_kill_build BEFORE INSERT ON versiones
   FOR EACH ROW EXECUTE FUNCTION verificar_kill_switch('builds');
+-- Nombre a propósito: los BEFORE triggers del mismo evento corren en orden alfabético,
+-- así que trg_kill_build ('k') va ANTES que trg_presupuesto_build ('p') — si el
+-- servicio está congelado no se consume cuota.
+DROP TRIGGER IF EXISTS trg_presupuesto_build ON versiones;
+CREATE TRIGGER trg_presupuesto_build BEFORE INSERT ON versiones
+  FOR EACH ROW EXECUTE FUNCTION cobrar_build();
+
 DROP TRIGGER IF EXISTS trg_kill_run ON ejecuciones;
 CREATE TRIGGER trg_kill_run BEFORE INSERT ON ejecuciones
   FOR EACH ROW EXECUTE FUNCTION verificar_kill_switch('ejecuciones');

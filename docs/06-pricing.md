@@ -100,6 +100,17 @@ Plan Equipo — $100/mes
 Una **generación** es cualquier build que termina en `ready`: una automatización
 nueva o el ajuste de una existente. Los builds fallidos no cuentan.
 
+> **⚠️ Corregido al construirlo (2026-07-24).** Esta definición se implementó y la
+> revisión adversarial la tumbó: cobrar por builds que *terminan bien* deja «el que
+> falla mucho» sin ningún freno (5 × iniciar+fallar = 5 sesiones de CMA reales con el
+> contador en 0), y descubre que no hay presupuesto **después** de gastar el dinero.
+> **La generación se cobra ahora al ARRANCAR el build**, no al terminarlo — que es lo
+> que [docs/08](08-ciclo-de-vida.md) §7 y [docs/10](10-intake.md) §8 ya pedían
+> («builds **iniciados**»). Consecuencia: **un build fallido sí consume generación.**
+> Lo hace un trigger sobre el INSERT de `versiones`, el único punto que cruzan el
+> build inicial, los ajustes y cualquier ruta futura. Excepción: las **reparaciones**
+> están exentas, para no romper la promesa de docs/08 §2 (gratis e *ilimitadas*).
+
 El límite de generaciones = **el doble de los espacios**. Eso deja margen de
 sobra para crear todo y ajustarlo un par de veces, y corta en seco a los tres
 casos de arriba. Peor escenario del plan Base: 6 × $3 = **$18 sobre $30**. El
@@ -119,6 +130,28 @@ Es cuando ocurre la mayoría de los ajustes —el cliente está afinando lo que
 acaba de recibir— y comunica exactamente lo correcto: *hasta que quede bien, no
 te cobramos por corregirlo*. El costo extra es pequeño porque está acotado en
 tiempo.
+
+**Qué significa exactamente «no cuentan»** (decidido al construirlo, 2026-07-24).
+La frase se escribió cuando «contar» era contra el contador *mensual* de
+generaciones; ese contador dejó de ser visible ([docs/08](08-ciclo-de-vida.md) §7),
+así que había que fijar la regla:
+
+| | Dentro de los 30 días | Fuera |
+|---|---|---|
+| Gasta uno de los **3 ajustes** | **No** | Sí |
+| Gasta una **generación** (tope interno) | Sí | Sí |
+| Reparaciones | Gratis | Gratis |
+
+El cambio dentro de la ventana **no gasta ajuste, pero sí generación**. Esa
+segunda mitad no es un detalle: es lo único que impide que «el ajustador
+infinito» de §3 vuelva por la puerta de atrás con builds ilimitados durante 30
+días. La ventana es *generosa*, no *infinita*.
+
+**Se ancla a la ENTREGA**, no a la creación: los 30 días corren desde que la
+primera versión queda lista, que es cuando el cliente recibe algo que afinar. Si
+el primer build falla o tarda, no se le come la ventana. La fecha se sella **una
+sola vez** (una versión posterior no la mueve) y el rol de aplicación no puede
+escribirla — moverla al futuro sería ventana gratis eterna.
 
 ---
 

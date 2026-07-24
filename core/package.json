@@ -18,6 +18,7 @@
     "verify:ciclo:pg": "tsx scripts/verify-ciclo-pg.ts",
     "verify:plan:pg": "tsx scripts/verify-plan-pg.ts",
     "verify:killswitch:pg": "tsx scripts/verify-killswitch-pg.ts",
+    "verify:ventana:pg": "tsx scripts/verify-ventana-pg.ts",
     "verify:pg": "tsx scripts/verify-pg.ts",
     "verify:cuota:pg": "tsx scripts/verify-cuota-pg.ts",
     "m0": "tsx scripts/run-m0.ts",

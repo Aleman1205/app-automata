@@ -120,7 +120,11 @@ ver §8 de docs/11). El genérico por IP/org sigue siendo el más flaco: solo vi
 | Caso común | Crit | Defensa / postura | Capa | Milestone | Estado |
 |---|:--:|---|:--:|:--:|:--:|
 | **Rate-limit por IP/usuario/org en endpoints** (API4) | alta | **elegir store** (Upstash Ratelimit / Vercel WAF) y cablear en middleware **antes** de exponer cualquier endpoint | 0 | M2 | 📝 |
-| **Wallet-DoS por disparo de builds** (~$1.8 c/u) | alta | cap **2× espacios/mes** por org; **construir tabla `intakes` + contador mensual** y aplicarlo en la tx de aprobación | 0 | M3 | 🟡 |
+| **Wallet-DoS por disparo de builds** (~$1.8 c/u) | alta | **cobro al ARRANCAR** el build: trigger sobre el INSERT de `versiones` → `app_consumir(...,'generaciones')`. Único choke-point que cruzan v1, ajustes y rutas futuras | 7 | **ventana-30d** | ✅ |
+| **«El reciclador»** (docs/06 §3): borrar y recrear resetea contador, ventana y espacio | alta | `REVOKE DELETE` sobre `automatizaciones`/`versiones`/`ejecuciones` (archivar es `activa=false`) + el v1 ya cobra generación. Medido: de 40 builds con contador en 0, a corte en el 7º | 7 | **ventana-30d** | ✅ |
+| **«El que falla mucho»** (docs/06 §3): iniciar+fallar en bucle | alta | al cobrar al arrancar, un build fallido **sí** consume generación (corrige docs/06 §4) | 7 | **ventana-30d** | ✅ |
+| Org **morosa/cancelada** sigue arrancando builds | alta | `app_consumir` exige `subscription.estado='activa'`; al cobrarse en el INSERT, el corte llega **antes** de gastar | 7 | **ventana-30d** | ✅ |
+| **Reparaciones sin tope** (gratis e ilimitadas por diseño, docs/08 §2) | media | **abierto**: exentas del contador; cada una es un build real y el cliente influye en la regresión. Decidir tope técnico o alerta | 7 | — | 📝 |
 | **Corte de gasto por build $10** + presupuesto acumulado entre reintentos | alta | `task_budget` en la sesión CMA + contador USD acumulado que **corte** | 7 | M3 | 🟡 |
 | **Tope de ejecuciones del Run que CORTE** (no solo alarme) | alta | contador mensual por org + corte duro con opción de subir plan (decisión #3 de §8) | 0 | M3 | 🟡 |
 | **Cuota por plan / entitlements** (espacios + generaciones) | alta | tabla `subscriptions` + helper `assertCuota` paralelo a `assertCan` | 4 | M3 | 🟡 |
@@ -156,7 +160,29 @@ como `automata_app`; `verify-pg.ts` por el camino real Node→pg→RLS). Los hue
 | Separación rol de migración (dueño) vs rol de app | media | cubierto por el mismo wiring del rol no-dueño | 7 | M2 | 🟡 |
 | Inyección/tampering de `app.current_org` | media | parametrizado + cast; el `orgId` lo pone el **servidor** desde la membresía, nunca un header | 3/7 | M2 | ✅ |
 | Cobertura de tests (SELECT/INSERT/UPDATE/DELETE/re-etiquetado) | media | 10/10 local; **falta correrlos en CI contra Neon** | — | M2 | 🟡 |
-| Hijack de función RLS vía `search_path`/`SECURITY DEFINER` | baja | opcional: fijar `search_path` si la función pasa a `SECURITY DEFINER` | 7 | — | ✅ |
+| **Hijack de `SECURITY DEFINER` vía `pg_temp`** (era "baja/opcional" — **se demostró explotable**) | **alta** | `SET search_path = public, pg_temp` (pg_temp **nombrado al final**) en las 11 funciones + `REVOKE TEMPORARY`/`CREATE` al rol de app | 7 | **ventana-30d** | ✅ |
+
+> ### ⚠️ El ataque `pg_temp` (2026-07-24): por qué `SET search_path = public` NO basta
+>
+> Se dio por bueno durante cuatro milestones y **rompía el enforcement de todos**.
+> Postgres omite `pg_temp` del `search_path` implícito **solo para funciones y
+> operadores**; para **relaciones** lo sigue buscando, y **primero**. Así que un
+> `CREATE TEMP TABLE automatizaciones (...)` hace que una función `SECURITY DEFINER`
+> —que corre como el dueño— lea la tabla **falsa** del atacante.
+>
+> Verificado en vivo con el rol de aplicación: `app_consumir_ajuste` devolvió
+> `ready/0/gratis` sobre una automatización realmente `frozen` con 3 ajustes usados;
+> `verificar_freno` dejó pasar builds con el **kill-switch encendido**; y una tabla
+> `planes` falsa con límites de 99999 saltó el tope de cuota. Es decir: ajustes
+> infinitos, cuota infinita y freno de incidente inerte. Basta una inyección SQL que
+> logre ejecutar un `CREATE TEMP TABLE` — y como el pool **reutiliza conexiones**, la
+> tabla temporal sobrevive a la request y contamina las siguientes del mismo backend.
+>
+> **Regla, sin excepciones:** toda función —`SECURITY DEFINER` *o* `INVOKER`, incluidas
+> las de trigger— lleva `SET search_path = public, pg_temp`, con `pg_temp` **nombrado
+> explícitamente al final** para que pierda la prioridad. Doble defensa: al rol de app
+> se le revocan `TEMPORARY` (no crea tablas temporales) y `CREATE ON SCHEMA public`.
+> Ambas capas se prueban por separado en `verify-ventana-pg.ts`.
 
 ---
 
