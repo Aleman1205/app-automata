@@ -1,4 +1,4 @@
-import { type PoolClient } from "pg";
+import { type Pool, type PoolClient } from "pg";
 import { type Ciclo, type CicloEstado, type ResultadoRegresion, type TipoAjuste, ajustesRestantes, clasificar, puedeAjustar } from "./estados.ts";
 import { comoCuota } from "../billing/cuota.ts";
 import { comoSuspension } from "../ops/killswitch.ts";
@@ -18,7 +18,14 @@ import { comoSuspension } from "../ops/killswitch.ts";
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class AjusteNoPermitido extends Error {
-  constructor(public readonly motivo: "frozen" | "ajustes_agotados") {
+  // 'en_revision' = circuit breaker de reparaciones ENGANCHADO: la automatización superó
+  //   su tasa de reparaciones y quedó latcheada hasta que ops la rearme (docs/08 §2). NO
+  //   es un cobro: es un detector de avería. Copy honesto para la UI mientras el push a
+  //   ops no esté cableado: "pausamos el auto-arreglo de esta automatización" — NO "un
+  //   humano ya está revisando" (nadie lo está hasta que se cablee la alerta).
+  // 'suscripcion' = la org no tiene subscription activa (morosa/cancelada): no dispara
+  //   builds hasta regularizar el pago (simétrico con los cambios).
+  constructor(public readonly motivo: "frozen" | "ajustes_agotados" | "en_revision" | "suscripcion") {
     super(`Ajuste no permitido: ${motivo}`);
     this.name = "AjusteNoPermitido";
   }
@@ -38,26 +45,30 @@ export interface EstadoCiclo {
   // gastan ajuste. La UI dice "gratis hasta el <fecha>" en vez de "2 de 3".
   ventanaGratis: boolean;
   ventanaHasta: string | null; // ISO; null si aún no se entrega
+  // Circuit breaker de reparaciones enganchado (docs/08 §2): la UI muestra "pausamos el
+  // auto-arreglo" en vez de ofrecer más reparaciones.
+  enRevision: boolean;
 }
 
 function fila1<T>(r: { rows: T[] }): T | undefined {
   return r.rows[0];
 }
 
-const aEstado = (c: Ciclo, gratis = false, hasta: string | null = null): EstadoCiclo => ({
+const aEstado = (c: Ciclo, gratis = false, hasta: string | null = null, enRevision = false): EstadoCiclo => ({
   estado: c.estado,
   ajustesUsados: c.ajustesUsados,
   ajustesRestantes: c.estado === "frozen" ? 0 : ajustesRestantes(c),
   ventanaGratis: gratis,
   ventanaHasta: hasta,
+  enRevision,
 });
 
 /** Traduce el 'AJUSTE_NO_PERMITIDO:<motivo>' de la BD; re-lanza cualquier otro error. */
 function comoAjuste(e: unknown): never {
   const msg = (e as { message?: string })?.message ?? "";
-  const m = /AJUSTE_NO_PERMITIDO:(frozen|ajustes_agotados|no_existe)/.exec(msg);
+  const m = /AJUSTE_NO_PERMITIDO:(frozen|ajustes_agotados|en_revision|suscripcion|no_existe)/.exec(msg);
   if (m?.[1] === "no_existe") throw new AutomatizacionNoDisponible();
-  if (m) throw new AjusteNoPermitido(m[1] as "frozen" | "ajustes_agotados");
+  if (m) throw new AjusteNoPermitido(m[1] as "frozen" | "ajustes_agotados" | "en_revision" | "suscripcion");
   throw e;
 }
 
@@ -66,9 +77,11 @@ interface FilaCiclo {
   ajustes_usados: number;
   gratis: boolean;
   hasta: string | null;
+  en_revision: boolean;
 }
 const SELECT_CICLO = `SELECT ciclo_estado, ajustes_usados, en_ventana_gratis(id) AS gratis,
-    to_char(entregada + interval '30 days', 'YYYY-MM-DD"T"HH24:MI:SSOF') AS hasta
+    to_char(entregada + interval '30 days', 'YYYY-MM-DD"T"HH24:MI:SSOF') AS hasta,
+    (en_revision IS NOT NULL) AS en_revision
   FROM automatizaciones WHERE id = $1`;
 
 /** El ciclo actual (para la UI: "● ● ○  2 de 3", o "ajustes gratis hasta el X").
@@ -77,7 +90,7 @@ export async function estadoDelCiclo(c: PoolClient, autoId: string): Promise<Est
   const r = await c.query<FilaCiclo>(SELECT_CICLO, [autoId]);
   const f = fila1(r);
   if (!f) throw new AutomatizacionNoDisponible();
-  return aEstado({ estado: f.ciclo_estado, ajustesUsados: f.ajustes_usados }, f.gratis, f.hasta);
+  return aEstado({ estado: f.ciclo_estado, ajustesUsados: f.ajustes_usados }, f.gratis, f.hasta, f.en_revision);
 }
 
 export interface Iniciado {
@@ -96,7 +109,8 @@ export async function iniciarAjuste(c: PoolClient, autoId: string, regresion: Re
   // Solo automatizaciones ACTIVAS y de ESTA org (RLS). activa=false = solo lectura (docs/06 §9).
   const r = await c.query<FilaCiclo & { org_id: string }>(
     `SELECT ciclo_estado, ajustes_usados, org_id, en_ventana_gratis(id) AS gratis,
-            to_char(entregada + interval '30 days', 'YYYY-MM-DD"T"HH24:MI:SSOF') AS hasta
+            to_char(entregada + interval '30 days', 'YYYY-MM-DD"T"HH24:MI:SSOF') AS hasta,
+            (en_revision IS NOT NULL) AS en_revision
        FROM automatizaciones WHERE id = $1 AND activa FOR UPDATE`,
     [autoId],
   );
@@ -126,9 +140,10 @@ export async function iniciarAjuste(c: PoolClient, autoId: string, regresion: Re
       "INSERT INTO versiones (automatizacion_id, org_id, numero, estado, tipo) VALUES ($1, $2, $3, 'building', $4) RETURNING id",
       [autoId, f.org_id, numero, tipo],
     )
-    .catch((e) => comoCuota(e))
+    .catch((e) => comoCuota(e)) // CUOTA_EXCEDIDA (generación al arrancar) → CuotaExcedida
+    .catch((e) => comoAjuste(e)) // circuit breaker de reparaciones → AjusteNoPermitido('en_revision')
     .catch((e) => comoSuspension(e)); // kill-switch de builds / org suspendida → ServicioSuspendido
-  return { tipo, versionId: ver.rows[0]!.id, numero, ciclo: aEstado(ciclo, f.gratis, f.hasta) };
+  return { tipo, versionId: ver.rows[0]!.id, numero, ciclo: aEstado(ciclo, f.gratis, f.hasta, f.en_revision) };
 }
 
 /**
@@ -179,4 +194,35 @@ export async function fallarAjuste(c: PoolClient, autoId: string, versionId: str
 export async function congelar(c: PoolClient, autoId: string): Promise<EstadoCiclo> {
   await c.query("SELECT estado, usados FROM app_congelar($1)", [autoId]).catch((e) => comoAjuste(e));
   return estadoDelCiclo(c, autoId);
+}
+
+export interface EnRevision {
+  autoId: string;
+  orgId: string;
+  desde: string; // cuándo enganchó el latch (ISO)
+}
+/**
+ * Ops (dueño): automatizaciones con el circuit breaker ENGANCHADO (latch), esperando
+ * revisión humana (el "escalar" de la decisión). Lee el latch persistente en_revision —
+ * NO recomputa un conteo mensual, así que sigue apareciendo aunque cambie el mes. Corre
+ * con la conexión de DUEÑO (ve todas las orgs). Pull-based; el push (alerta) se cablea
+ * con el resto de servicios — hasta entonces el copy de la UI no debe afirmar que un
+ * humano ya está revisando (ver AjusteNoPermitido).
+ */
+export async function automatizacionesEnRevision(owner: Pool): Promise<EnRevision[]> {
+  const r = await owner.query<{ auto_id: string; org_id: string; desde: string }>(
+    `SELECT id AS auto_id, org_id, en_revision::text AS desde
+       FROM automatizaciones WHERE en_revision IS NOT NULL ORDER BY en_revision`,
+  );
+  return r.rows.map((x) => ({ autoId: x.auto_id, orgId: x.org_id, desde: x.desde }));
+}
+
+/**
+ * Ops (dueño) REARMA el breaker tras revisar/arreglar: quita el latch. La automatización
+ * vuelve a aceptar reparaciones; si sigue rota (regresión sigue fallando) volverá a
+ * enganchar rápido — señal correcta. El app no puede rearmarlo (REVOKE UPDATE sobre
+ * automatizaciones; en_revision no está en el GRANT de columnas).
+ */
+export async function limpiarRevision(owner: Pool, autoId: string): Promise<void> {
+  await owner.query("UPDATE automatizaciones SET en_revision = NULL WHERE id = $1", [autoId]);
 }

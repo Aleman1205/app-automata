@@ -17,12 +17,13 @@ export interface Entitlements {
   ejecucionesMes: number; // corte  — ejecuciones por mes (tope duro)
   usuarios: number; // miembros de la org (admin + operador)
   exportarCodigo: boolean; // sacar el código fuente del artefacto (solo Equipo)
+  reparacionesMes: number; // circuit breaker: reparaciones/mes/automatización antes de escalar a revisión (docs/08 §2)
 }
 
 export const PLANES: Record<Plan, Entitlements> = {
-  base: { espaciosActivos: 3, generacionesMes: 6, ejecucionesMes: 500, usuarios: 1, exportarCodigo: false },
-  pro: { espaciosActivos: 6, generacionesMes: 12, ejecucionesMes: 2000, usuarios: 3, exportarCodigo: false },
-  equipo: { espaciosActivos: 10, generacionesMes: 20, ejecucionesMes: 10000, usuarios: 10, exportarCodigo: true },
+  base: { espaciosActivos: 3, generacionesMes: 6, ejecucionesMes: 500, usuarios: 1, exportarCodigo: false, reparacionesMes: 10 },
+  pro: { espaciosActivos: 6, generacionesMes: 12, ejecucionesMes: 2000, usuarios: 3, exportarCodigo: false, reparacionesMes: 10 },
+  equipo: { espaciosActivos: 10, generacionesMes: 20, ejecucionesMes: 10000, usuarios: 10, exportarCodigo: true, reparacionesMes: 10 },
 };
 
 export function esPlan(x: unknown): x is Plan {

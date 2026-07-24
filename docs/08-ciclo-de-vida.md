@@ -86,11 +86,30 @@ para saltarse el cobro entero (hallazgo de la revisión adversarial). El
 `indeterminado` (sin ejemplo, no ejecutable, timeout) clasifica como **cambio**:
 si no, ensuciar el ejemplo volvería gratis cualquier cambio.
 
-> **Deuda abierta — las reparaciones no tienen tope.** Son gratis e ilimitadas por
-> diseño (y así quedaron en el código: exentas incluso del contador de
-> generaciones), pero cada una es un build real de ~$1.8 USD y **el cliente influye
-> en si la regresión falla**. Hoy es el único canal de gasto sin ninguna cota. Falta
-> decidir: ¿tope técnico separado, alerta al superar N/mes, o se deja abierto?
+**Las reparaciones tienen un circuit breaker** (construido 2026-07-24, decisión del
+fundador). Siguen siendo **gratis e ilimitadas** para el cliente sano —exentas del
+contador de generaciones—, pero cada una es un build real de ~$1.8 USD y **el cliente
+influye en si la regresión falla**, así que el canal se acota con un **detector de
+avería**, no con un cobro:
+
+- Se cuentan las reparaciones de la automatización en una **ventana rodante de 30 días**
+  (el ledger de `versiones` es el contador → los builds **fallidos cuentan**, que es "el
+  que falla mucho" de [docs/06](06-pricing.md) §3). Cap configurable en `planes`
+  (`reparaciones`, default **10**).
+- Al tope **engancha un latch** (`automatizaciones.en_revision`) que **persiste** hasta
+  que **ops lo rearma** — no se auto-resetea con el cambio de mes (un rate-limit mensual
+  sí lo hacía, y una automatización rota volvía a tener 10 builds gratis cada mes).
+- No es un paywall: el cliente sano nunca lo nota (0-2 reparaciones en su vida); al
+  cruzarlo se **pausa el auto-arreglo y se escala a revisión humana** (seguir
+  auto-reparando no la arregla). El dueño puede forzar una reparación tras revisar.
+
+> **Abierto:** (1) el "escalar" es hoy **pull** (`automatizacionesEnRevision`); falta
+> cablear el **push/alerta a ops** — hasta entonces la UI no debe afirmar que un humano
+> ya está revisando, solo "pausamos el auto-arreglo". (2) El cap es **uniforme (10)** en
+> los tres planes; una fuente legítimamente volátil (un restaurante que cambia su menú
+> varias veces al mes) podría engancharse siendo sana — evaluar cap por plan u override
+> por-automatización. Enforcement en la BD (triggers + `REVOKE`): ver
+> [docs/14](14-controles-de-seguridad.md) §3.
 
 ---
 

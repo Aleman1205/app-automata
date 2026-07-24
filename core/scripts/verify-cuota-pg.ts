@@ -63,13 +63,14 @@ async function main() {
     await admin.query("INSERT INTO orgs (id, nombre) VALUES ($1, 'sin sub')", [D]); // D sin subscription
 
     console.log("1. Los límites de la BD == PLANES (TS) (anti-deriva):");
-    const db = await admin.query<{ plan: string; espacios: number; generaciones: number; ejecuciones: number; usuarios: number; exportar_codigo: boolean }>(
-      "SELECT plan, espacios, generaciones, ejecuciones, usuarios, exportar_codigo FROM planes");
+    const db = await admin.query<{ plan: string; espacios: number; generaciones: number; ejecuciones: number; usuarios: number; exportar_codigo: boolean; reparaciones: number }>(
+      "SELECT plan, espacios, generaciones, ejecuciones, usuarios, exportar_codigo, reparaciones FROM planes");
     let driftOk = db.rows.length === 3;
     for (const row of db.rows) {
       const t = PLANES[row.plan as Plan];
       driftOk &&= !!t && t.espaciosActivos === row.espacios && t.generacionesMes === row.generaciones &&
-        t.ejecucionesMes === row.ejecuciones && t.usuarios === row.usuarios && t.exportarCodigo === row.exportar_codigo;
+        t.ejecucionesMes === row.ejecuciones && t.usuarios === row.usuarios && t.exportarCodigo === row.exportar_codigo &&
+        t.reparacionesMes === row.reparaciones;
     }
     check("tabla planes coincide con PLANES en los 3 planes", driftOk);
 

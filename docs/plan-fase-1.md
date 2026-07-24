@@ -180,8 +180,20 @@ obligó a tres correcciones que van **más allá de la feature**:
 3. **El `tipo` se persiste** en `versiones.tipo` al iniciar: antes el llamador podía
    declarar `reparacion` al confirmar y saltarse el enforcement entero.
 El rol de app perdió `UPDATE` sobre el ciclo (solo `nombre`/`activa`) y `DELETE` sobre
-`automatizaciones`/`versiones`/`ejecuciones`. **Abierto:** las reparaciones siguen sin
-tope, y un `confirmarAjuste` que falla deja la versión clavada en `building`.
+`automatizaciones`/`versiones`/`ejecuciones`.
+
+**✅ Construido — circuit breaker de reparaciones** (`verify:reparaciones:pg` 24/24,
+docs/08 §2). Las reparaciones siguen gratis e ilimitadas para el cliente sano, pero un
+**latch persistente** (`automatizaciones.en_revision`) las corta al superar la tasa
+(ventana rodante 30d, cap en `planes.reparaciones`=10) y escala a revisión humana; ops
+lo rearma con `limpiarRevision`. Su revisión adversarial (17 hallazgos, 6 ALTA que
+colapsan en 3) obligó a blindar el **ledger `versiones`**: `REVOKE UPDATE` + `GRANT
+UPDATE (estado)` y `creada` normalizada en el trigger — sin eso el app reseteaba el
+contador con `UPDATE versiones SET tipo=…`/backdate (reparaciones gratis ilimitadas,
+misma clase que el "reciclador"). Y el breaker se rediseñó de rate-limit mensual (se
+auto-rearmaba el día 1) a **latch** que persiste hasta que ops lo rearma. Morosa/cancelada
+no dispara reparaciones. **Abierto:** falta el **push/alerta** a ops (hoy pull), el cap es
+uniforme, y un `confirmarAjuste` que falla deja la versión clavada en `building`.
 
 **✅ Construido (rebanada de motor, probada — `core/src/billing/plan.ts`):** la **rutina
 de downgrade** (docs/06 §9, `verify:plan:pg` 22/22). `aplicarDowngrade` (dueño, atómico)

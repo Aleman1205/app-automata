@@ -53,12 +53,19 @@ CREATE TABLE IF NOT EXISTS automatizaciones (
   -- La sella un trigger UNA sola vez; el rol de app no puede escribirla (moverla al
   -- futuro = ajustes gratis infinitos).
   entregada timestamptz,
+  -- LATCH del circuit breaker de reparaciones (docs/08 §2). NULL = operando; no-NULL =
+  -- enganchado (superó el cap de reparaciones) y esperando revisión humana. Es un LATCH,
+  -- no un contador mensual: una vez que salta, PERSISTE entre meses hasta que ops lo
+  -- rearma (limpiarRevision). Un rate-limit por mes calendario se auto-rearmaba el día 1
+  -- y una automatización rota volvía a tener N builds gratis cada mes (hallazgo ALTA).
+  en_revision timestamptz,
   PRIMARY KEY (id),
   UNIQUE (id, org_id)                                   -- ancla para FK compuesta
 );
--- Idempotente: para BDs creadas antes de la ventana de 30 días (el CREATE TABLE de
--- arriba solo aplica en instalaciones nuevas).
-ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS entregada timestamptz;
+-- Idempotente: para BDs creadas antes de estas columnas (el CREATE TABLE de arriba
+-- solo aplica en instalaciones nuevas).
+ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS entregada   timestamptz;
+ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS en_revision timestamptz;
 
 CREATE TABLE IF NOT EXISTS versiones (
   id                uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -116,16 +123,25 @@ CREATE TABLE IF NOT EXISTS planes (
   generaciones    int  NOT NULL,
   ejecuciones     int  NOT NULL,
   usuarios        int  NOT NULL,
-  exportar_codigo boolean NOT NULL
+  exportar_codigo boolean NOT NULL,
+  -- Circuit breaker de reparaciones (docs/08 §2): las reparaciones son gratis e
+  -- ILIMITADAS para el cliente, pero cada una es un build real (~$1.8) y una
+  -- automatización que falla en bucle es un pozo de dinero. Este NO es un límite de
+  -- facturación: es un DETECTOR DE AVERÍA. Una automatización sana necesita 0-2
+  -- reparaciones en su vida; >N/mes significa que está rota de verdad → se corta el
+  -- auto-reparo y se escala a revisión humana (seguir tirando builds no la arregla).
+  -- Por automatización y por mes. Ajustable con un UPDATE (los límites viven en la BD).
+  reparaciones    int  NOT NULL DEFAULT 10
 );
-INSERT INTO planes (plan, espacios, generaciones, ejecuciones, usuarios, exportar_codigo) VALUES
-  ('base',   3,  6,   500,   1,  false),
-  ('pro',    6,  12,  2000,  3,  false),
-  ('equipo', 10, 20,  10000, 10, true)
+ALTER TABLE planes ADD COLUMN IF NOT EXISTS reparaciones int NOT NULL DEFAULT 10;
+INSERT INTO planes (plan, espacios, generaciones, ejecuciones, usuarios, exportar_codigo, reparaciones) VALUES
+  ('base',   3,  6,   500,   1,  false, 10),
+  ('pro',    6,  12,  2000,  3,  false, 10),
+  ('equipo', 10, 20,  10000, 10, true,  10)
 ON CONFLICT (plan) DO UPDATE SET
   espacios = EXCLUDED.espacios, generaciones = EXCLUDED.generaciones,
   ejecuciones = EXCLUDED.ejecuciones, usuarios = EXCLUDED.usuarios,
-  exportar_codigo = EXCLUDED.exportar_codigo;
+  exportar_codigo = EXCLUDED.exportar_codigo, reparaciones = EXCLUDED.reparaciones;
 
 -- Fuente de verdad del plan/estado de facturación de una org (una fila por org).
 CREATE TABLE IF NOT EXISTS subscriptions (
@@ -230,6 +246,12 @@ REVOKE ALL ON bitacora_kill FROM automata_app;
 -- ~$52 MXN cada uno). El app no borra nunca: archivar es activa=false (docs/06 §9).
 REVOKE DELETE ON automatizaciones FROM automata_app;
 REVOKE DELETE ON versiones        FROM automata_app;  -- el ledger de builds no se borra
+-- El app NO reescribe el ledger de versiones: solo transiciona `estado` (building→lista/
+-- failed). Con UPDATE abierto podía `SET tipo='cambio'` o `SET creada=<mes pasado>` para
+-- resetear el contador del circuit breaker → reparaciones gratis ilimitadas (ALTA). Mismo
+-- patrón column-scoped que automatizaciones (nombre/activa).
+REVOKE UPDATE ON versiones FROM automata_app;
+GRANT  UPDATE (estado) ON versiones TO automata_app;
 REVOKE DELETE ON ejecuciones      FROM automata_app;  -- ni el de runs (facturación)
 
 -- Org viva de la sesión, robusta: '' o no-seteada → NULL → fail-closed (0 filas).
@@ -392,18 +414,60 @@ GRANT EXECUTE ON FUNCTION app_congelar(uuid) TO automata_app;
 -- app_consumir además exige subscription 'activa', así que una org MOROSA o CANCELADA
 -- deja de poder arrancar builds (otro ALTA), y el periodo lo deriva la BD (el app ya
 -- no puede pasar una llave de periodo inventada para resetear su contador).
+-- SECURITY DEFINER: escribe automatizaciones.en_revision (el latch) y normaliza creada,
+-- cosas que el rol de app NO puede hacer directo (REVOKE UPDATE). search_path fijado con
+-- pg_temp al final (no evadible por temp tables).
 CREATE OR REPLACE FUNCTION cobrar_build() RETURNS trigger
-LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_cap int; v_reps int; v_estado text; v_latch timestamptz;
 BEGIN
-  IF NEW.org_id IS DISTINCT FROM app_current_org() THEN RETURN NEW; END IF;
-  -- La REPARACIÓN queda exenta: docs/08 §2 la promete "gratis e ILIMITADA, es tu
-  -- obligación, no un favor", y cobrarla significaría negarle un arreglo a un cliente
-  -- que ya topó su mes. PENDIENTE (decisión de negocio): ese canal no tiene ningún
-  -- tope hoy y cada reparación es un build real (~$1.8) — el cliente influye en si la
-  -- regresión "falla". Conviene un tope técnico separado o una alerta, no dejarlo abierto.
-  IF NEW.tipo IS DISTINCT FROM 'reparacion' THEN
-    PERFORM app_consumir(to_char(now(), 'YYYY-MM'), 'generaciones');
+  IF NEW.org_id IS DISTINCT FROM app_current_org() THEN RETURN NEW; END IF;  -- dueño: bypass
+
+  -- El app puede especificar `creada` en el INSERT; la NORMALIZAMOS a now() para que no
+  -- pueda backdatear una reparación fuera de la ventana y evadir el breaker (ALTA). El
+  -- dueño (arriba) conserva creada libre para seeds/migraciones.
+  NEW.creada := now();
+
+  IF NEW.tipo = 'reparacion' THEN
+    -- La REPARACIÓN no gasta generación: docs/08 §2 la promete "gratis e ILIMITADA, es
+    -- tu obligación, no un favor". Pero el canal se acota con un CIRCUIT BREAKER: un
+    -- detector de avería, no un cobro. Lock por-automatización (anti-TOCTOU, como el
+    -- trigger de espacios) para serializar reparaciones concurrentes.
+    PERFORM pg_advisory_xact_lock(hashtext('reparacion:' || NEW.automatizacion_id::text));
+
+    -- (1) ¿ya enganchada? El latch PERSISTE entre meses hasta que ops la rearme: un
+    --     circuit breaker no se auto-resetea con el cambio de mes (ALTA "no engancha").
+    SELECT en_revision INTO v_latch FROM automatizaciones WHERE id = NEW.automatizacion_id;
+    IF v_latch IS NOT NULL THEN RAISE EXCEPTION 'AJUSTE_NO_PERMITIDO:en_revision'; END IF;
+
+    -- (2) subscription activa: una org morosa/cancelada no dispara builds de ~$1.8
+    --     (simétrico con los cambios, que pasan por app_consumir).
+    SELECT s.estado, p.reparaciones INTO v_estado, v_cap
+      FROM subscriptions s JOIN planes p ON p.plan = s.plan WHERE s.org_id = NEW.org_id;
+    IF v_estado IS DISTINCT FROM 'activa' THEN RAISE EXCEPTION 'AJUSTE_NO_PERMITIDO:suscripcion'; END IF;
+    v_cap := coalesce(v_cap, 0);
+
+    -- (3) tasa reciente: reparaciones de ESTA automatización en los últimos 30 días
+    --     (ventana RODANTE, no mes calendario → no se auto-rearma en el borde del mes ni
+    --     depende de la zona horaria de la sesión). El ledger ES el contador: los builds
+    --     FALLIDOS cuentan ("el que falla mucho", docs/06 §3).
+    SELECT count(*) INTO v_reps FROM versiones
+      WHERE automatizacion_id = NEW.automatizacion_id AND tipo = 'reparacion'
+        AND creada >= now() - interval '30 days';
+
+    IF v_reps >= v_cap THEN                    -- ya en/más allá del cap → engancha y bloquea
+      UPDATE automatizaciones SET en_revision = now() WHERE id = NEW.automatizacion_id;
+      RAISE EXCEPTION 'AJUSTE_NO_PERMITIDO:en_revision';
+    END IF;
+    IF v_reps + 1 >= v_cap THEN                -- ESTA reparación alcanza el cap → permítela y engancha
+      UPDATE automatizaciones SET en_revision = now() WHERE id = NEW.automatizacion_id;
+    END IF;
+    RETURN NEW;
   END IF;
+
+  -- Cambio o build inicial (tipo NULL): cobra una generación al ARRANCAR el build
+  -- (app_consumir exige además subscription 'activa' → una org morosa no arranca).
+  PERFORM app_consumir(to_char(now(), 'YYYY-MM'), 'generaciones');
   RETURN NEW;
 END $fn$;
 
@@ -434,6 +498,7 @@ BEGIN
   NEW.ciclo_estado   := 'ready';
   NEW.ajustes_usados := 0;
   NEW.entregada      := NULL;
+  NEW.en_revision    := NULL;   -- una automatización nueva nace sin latch de revisión
   RETURN NEW;
 END $fn$;
 
