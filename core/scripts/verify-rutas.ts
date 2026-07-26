@@ -41,12 +41,15 @@ function main() {
     const rel = relative(API, f);
     const src = readFileSync(f, "utf8");
     const esWebhook = /(^|\/)webhooks?(\/|$)/.test(rel);
+    // Los crons son OTRO camino sancionado (a2/a3): auth por CRON_SECRET + pool DUEÑO, no por
+    // withEfecto (no hay sesión de usuario). Como los webhooks, se exige que NO usen ruta().
+    const esCron = /(^|\/)cron(\/|$)/.test(rel);
     for (const m of MUTANTES) {
       const exporta = new RegExp(`export\\s+(?:const|async\\s+function|function)\\s+${m}\\b`).test(src);
       if (!exporta) continue;
-      if (esWebhook) {
-        // Webhooks NO usan ruta (cuerpo crudo + firma); solo se exige que NO la usen aquí.
-        check(`${rel}: ${m} (webhook) NO usa ruta() — va por firma HMAC`, !new RegExp(`${m}\\s*=\\s*ruta`).test(src));
+      if (esWebhook || esCron) {
+        // Webhooks (firma HMAC) y crons (CRON_SECRET) NO usan ruta(); solo se exige que no la usen.
+        check(`${rel}: ${m} (${esWebhook ? "webhook" : "cron"}) NO usa ruta() — camino sancionado aparte`, !new RegExp(`${m}\\s*=\\s*ruta`).test(src));
         continue;
       }
       const viaRuta = new RegExp(`export\\s+const\\s+${m}\\s*=\\s*ruta\\s*\\(`).test(src);
