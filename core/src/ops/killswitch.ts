@@ -90,6 +90,34 @@ export async function reactivarOrg(owner: Pool, orgId: string, actor?: string): 
   await anota(owner, "reactivar", "org", orgId, null, actor);
 }
 
+/**
+ * Baja DEFINITIVA de un tenant (offboarding / GDPR). ÚNICO camino de borrado de una org:
+ * el rol de app tiene REVOKE DELETE, INSERT ON orgs (a1), así que solo el DUEÑO puede.
+ * El asiento 'purgar' se escribe ANTES del DELETE y en la MISMA tx; bitacora_kill NO tiene
+ * FK a orgs, así que el ON DELETE CASCADE (que arrasa memberships/automatizaciones/versiones/
+ * ejecuciones/subscriptions/uso_periodo/suspensiones) NO borra la evidencia. Este es el
+ * ÚLTIMO paso: R2 y las sesiones de CMA de la org se limpian ANTES, por el orquestador de
+ * offboarding (si no, quedarían huérfanas). Lanza si la org no existe (rowCount != 1).
+ */
+export async function purgarOrg(owner: Pool, orgId: string, actor?: string, motivo = "offboarding/GDPR"): Promise<void> {
+  const c = await owner.connect();
+  try {
+    await c.query("BEGIN");
+    await c.query(
+      "INSERT INTO bitacora_kill (actor, accion, palanca, org_id, motivo) VALUES ($1,'purgar','org',$2,$3)",
+      [actor ?? null, orgId, motivo],
+    );
+    const r = await c.query("DELETE FROM orgs WHERE id = $1", [orgId]); // CASCADE arrasa los hijos
+    if (r.rowCount !== 1) throw new Error(`purgarOrg: org ${orgId} inexistente (rowCount ${r.rowCount})`);
+    await c.query("COMMIT");
+  } catch (e) {
+    await c.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
 export interface EstadoInterruptores {
   builds: boolean;
   ejecuciones: boolean;

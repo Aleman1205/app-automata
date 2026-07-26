@@ -30,6 +30,7 @@
     "verify:ciclo:pg": "tsx scripts/verify-ciclo-pg.ts",
     "verify:plan:pg": "tsx scripts/verify-plan-pg.ts",
     "verify:killswitch:pg": "tsx scripts/verify-killswitch-pg.ts",
+    "verify:offboarding:pg": "tsx scripts/verify-offboarding-pg.ts",
     "verify:ventana:pg": "tsx scripts/verify-ventana-pg.ts",
     "verify:reparaciones:pg": "tsx scripts/verify-reparaciones-pg.ts",
     "verify:pgstate:pg": "tsx scripts/verify-pgstate-pg.ts",

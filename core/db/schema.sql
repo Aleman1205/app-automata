@@ -210,12 +210,16 @@ CREATE TABLE IF NOT EXISTS suspensiones (
 -- Un freno de incidente sin rastro de "quién congeló la plataforma a las 3am" es un
 -- hueco de auditoría (revisión). La escriben las palancas de ops (conexión de dueño);
 -- el app no la toca. reactivarOrg deja asiento aquí en vez de borrar la evidencia.
+-- INVARIANTE (a1): org_id es NULLABLE y SIN FK a orgs A PROPÓSITO. purgarOrg (offboarding/
+-- GDPR) escribe un asiento 'purgar' ANTES de borrar la org; como no hay FK, el ON DELETE
+-- CASCADE no lo arrastra y la evidencia de la baja SOBREVIVE. No agregar FK aquí.
+-- accion/palanca no tienen CHECK: 'purgar'/'org' entran sin migración.
 CREATE TABLE IF NOT EXISTS bitacora_kill (
   id       bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   actor    text,                       -- quién operó (ops/dueño); null si no se pasó
-  accion   text NOT NULL,              -- 'congelar' | 'descongelar' | 'suspender' | 'reactivar'
+  accion   text NOT NULL,              -- 'congelar'|'descongelar'|'suspender'|'reactivar'|'purgar'
   palanca  text,                       -- 'builds' | 'ejecuciones' | 'cobros' | 'org'
-  org_id   uuid,                       -- la org suspendida/reactivada (null para palancas globales)
+  org_id   uuid,                       -- la org suspendida/reactivada/purgada (null = palanca global)
   motivo   text,
   cuando   timestamptz NOT NULL DEFAULT now()
 );
