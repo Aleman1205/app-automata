@@ -11,7 +11,8 @@
     "./http/tipos": "./src/http/tipos.ts",
     "./db/pg": "./src/db/pg.ts",
     "./webhooks/receptor": "./src/webhooks/receptor.ts",
-    "./webhooks/firma": "./src/webhooks/firma.ts"
+    "./webhooks/firma": "./src/webhooks/firma.ts",
+    "./webhooks/handlers": "./src/webhooks/handlers.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -32,6 +33,7 @@
     "verify:pgstate:pg": "tsx scripts/verify-pgstate-pg.ts",
     "verify:adaptador:pg": "tsx scripts/verify-adaptador-pg.ts",
     "verify:rutas": "tsx scripts/verify-rutas.ts",
+    "verify:webhooks:handlers:pg": "tsx scripts/verify-webhooks-handlers-pg.ts",
     "verify:pg": "tsx scripts/verify-pg.ts",
     "verify:cuota:pg": "tsx scripts/verify-cuota-pg.ts",
     "m0": "tsx scripts/run-m0.ts",

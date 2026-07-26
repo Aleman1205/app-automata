@@ -79,6 +79,11 @@ CREATE TABLE IF NOT EXISTS versiones (
   -- revisión). NULL = build inicial (v1), que no es un ajuste.
   tipo              text CHECK (tipo IN ('cambio','reparacion')),
   artefacto_key     text,
+  -- Sesión de CMA que construye esta versión. La graba el build-start (PgStateRepo) y la
+  -- USA el webhook de fin-de-build para mapear sesión→versión SIN confiar en el payload
+  -- (docs/13 §4: la org se deriva por lookup del recurso firmado). UNIQUE (una sesión =
+  -- una versión); nullable (builds sin sesión / seeds).
+  cma_session_id    text UNIQUE,
   creada            timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (id),
   UNIQUE (id, org_id),
@@ -90,6 +95,10 @@ CREATE TABLE IF NOT EXISTS versiones (
   FOREIGN KEY (automatizacion_id, org_id) REFERENCES automatizaciones (id, org_id) ON DELETE CASCADE
 );
 ALTER TABLE versiones ADD COLUMN IF NOT EXISTS tipo text;
+ALTER TABLE versiones ADD COLUMN IF NOT EXISTS cma_session_id text;
+DO $$ BEGIN
+  ALTER TABLE versiones ADD CONSTRAINT versiones_cma_session_key UNIQUE (cma_session_id);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN
   ALTER TABLE versiones ADD CONSTRAINT versiones_tipo_chk CHECK (tipo IN ('cambio','reparacion'));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -253,7 +262,7 @@ REVOKE DELETE ON versiones        FROM automata_app;  -- el ledger de builds no 
 -- (ALTA). tipo/creada/automatizacion_id/numero/org_id NO son escribibles: eso blinda el
 -- contador. Mismo patrón column-scoped que automatizaciones (nombre/activa).
 REVOKE UPDATE ON versiones FROM automata_app;
-GRANT  UPDATE (estado, artefacto_key) ON versiones TO automata_app;
+GRANT  UPDATE (estado, artefacto_key, cma_session_id) ON versiones TO automata_app;
 REVOKE DELETE ON ejecuciones      FROM automata_app;  -- ni el de runs (facturación)
 
 -- Org viva de la sesión, robusta: '' o no-seteada → NULL → fail-closed (0 filas).
