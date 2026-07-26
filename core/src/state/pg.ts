@@ -20,14 +20,17 @@ import { comoSuspension } from "../ops/killswitch.ts";
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface AutoRow { id: string; org_id: string; nombre: string }
-interface VerRow { id: string; automatizacion_id: string; numero: number; estado: EstadoBuild; artefacto_key: string | null; creada: Date | string }
+interface VerRow { id: string; automatizacion_id: string; numero: number; estado: EstadoBuild; artefacto_key: string | null; vista: unknown; cma_session_id: string | null; creada: Date | string }
 interface EjecRow { id: string; version_id: string; estado: string; ms: number; costo_usd: string | number; creada: Date | string }
 
 const iso = (v: Date | string): string => (v instanceof Date ? v.toISOString() : String(v));
 const aAutomatizacion = (r: AutoRow): Automatizacion => ({ id: r.id, orgId: r.org_id, nombre: r.nombre });
 const aVersion = (r: VerRow): Version => ({
   id: r.id, automatizacionId: r.automatizacion_id, numero: r.numero, estado: r.estado,
-  artefactoKey: r.artefacto_key ?? undefined, creada: iso(r.creada),
+  artefactoKey: r.artefacto_key ?? undefined,
+  vista: (r.vista as Version["vista"]) ?? undefined,
+  cmaSessionId: r.cma_session_id ?? undefined,
+  creada: iso(r.creada),
 });
 const aEjecucion = (r: EjecRow): Ejecucion => ({
   id: r.id, versionId: r.version_id, estado: r.estado as Ejecucion["estado"],
@@ -74,8 +77,8 @@ export class PgStateRepo implements StateRepo {
     // generación al arrancar (cobrar_build) y respeta el kill-switch (trg_kill_build).
     const r = await conOrg(this.pool, this.orgId, (c) =>
       c.query<VerRow>(
-        "INSERT INTO versiones (automatizacion_id, org_id, numero, estado) VALUES ($1, app_current_org(), $2, $3) RETURNING id, automatizacion_id, numero, estado, artefacto_key, creada",
-        [v.automatizacionId, v.numero, v.estado],
+        "INSERT INTO versiones (automatizacion_id, org_id, numero, estado, vista) VALUES ($1, app_current_org(), $2, $3, $4) RETURNING id, automatizacion_id, numero, estado, artefacto_key, vista, cma_session_id, creada",
+        [v.automatizacionId, v.numero, v.estado, v.vista ? JSON.stringify(v.vista) : null],
       ),
     ).catch(traducirBuild);
     const row = r.rows[0];
@@ -95,11 +98,17 @@ export class PgStateRepo implements StateRepo {
     }
     // El UPDATE de estado a ready/lista dispara trg_marcar_entrega (sella la entrega).
     const r = await conOrg(this.pool, this.orgId, (c) =>
-      c.query<VerRow>(`UPDATE versiones SET ${sets.join(", ")} WHERE id = $1 RETURNING id, automatizacion_id, numero, estado, artefacto_key, creada`, vals),
+      c.query<VerRow>(`UPDATE versiones SET ${sets.join(", ")} WHERE id = $1 RETURNING id, automatizacion_id, numero, estado, artefacto_key, vista, cma_session_id, creada`, vals),
     );
     const row = r.rows[0];
     if (!row) throw new Error(`Versión no encontrada: ${id}`); // RLS: ajena/inexistente
     return aVersion(row);
+  }
+
+  async fijarSesionCma(versionId: string, sessionId: string): Promise<void> {
+    // cma_session_id NO está en el GRANT del app: se fija SOLO por este SD (write-once,
+    // org-scoped, solo 'building'). Lanza SESION_CMA_NO_FIJABLE si ya tiene sesión / no es suya.
+    await conOrg(this.pool, this.orgId, (c) => c.query("SELECT app_fijar_sesion_cma($1, $2)", [versionId, sessionId]));
   }
 
   async crearEjecucion(e: Omit<Ejecucion, "id">): Promise<Ejecucion> {
@@ -133,7 +142,7 @@ export class PgStateRepo implements StateRepo {
 
   async obtenerVersion(id: string): Promise<Version | undefined> {
     const r = await conOrg(this.pool, this.orgId, (c) =>
-      c.query<VerRow>("SELECT id, automatizacion_id, numero, estado, artefacto_key, creada FROM versiones WHERE id = $1", [id]),
+      c.query<VerRow>("SELECT id, automatizacion_id, numero, estado, artefacto_key, vista, cma_session_id, creada FROM versiones WHERE id = $1", [id]),
     );
     const row = r.rows[0];
     return row ? aVersion(row) : undefined;

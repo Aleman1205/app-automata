@@ -43,6 +43,7 @@ class StubStorage implements Storage {
   async put(k: string, d: Buffer | string) { this.m.set(k, typeof d === "string" ? d : d.toString("utf8")); }
   async get(k: string) { return Buffer.from(this.m.get(k) ?? ""); }
   async getText(k: string) { const v = this.m.get(k); if (v === undefined) throw new Error(`sin clave: ${k}`); return v; }
+  async existe(k: string) { return this.m.has(k); }
   async list(p: string) { return [...this.m.keys()].filter((k) => k.startsWith(p)); }
 }
 const stubBuild: BuildClient = {

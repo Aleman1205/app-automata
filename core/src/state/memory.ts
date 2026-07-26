@@ -43,6 +43,12 @@ export class MemoryStateRepo implements StateRepo {
     return nueva;
   }
 
+  async fijarSesionCma(versionId: string, sessionId: string): Promise<void> {
+    const actual = this.versiones.get(versionId);
+    if (!actual || actual.estado !== "building" || actual.cmaSessionId) throw new Error("SESION_CMA_NO_FIJABLE");
+    this.versiones.set(versionId, { ...actual, cmaSessionId: sessionId });
+  }
+
   async crearEjecucion(e: Omit<Ejecucion, "id">): Promise<Ejecucion> {
     const ejec: Ejecucion = { ...e, id: this.id("run") };
     this.ejecuciones.set(ejec.id, ejec);

@@ -150,6 +150,8 @@ export interface Version {
   numero: number;
   estado: EstadoBuild;
   artefactoKey?: string; // clave en Storage
+  vista?: Vista; // a3: persistida al ARRANCAR, para ensamblar el Artefacto en la cosecha
+  cmaSessionId?: string; // a3: sesión de CMA (write-once vía app_fijar_sesion_cma)
   creada: string;
 }
 
@@ -173,6 +175,9 @@ export interface Storage {
   get(key: string): Promise<Buffer>;
   getText(key: string): Promise<string>;
   list(prefix: string): Promise<string[]>;
+  /** ¿Existen los bytes? (a3) La cosecha lo usa como guard: NO marcar una versión 'lista'
+   *  si el artefacto no subió a storage (evita una versión no ejecutable). */
+  existe(key: string): Promise<boolean>;
 }
 
 /** Estado. Memoria/archivo en M0; Postgres/Neon con RLS en M2. */
@@ -183,6 +188,9 @@ export interface StateRepo {
   desactivarAutomatizacion(id: string): Promise<void>;
   crearVersion(v: Omit<Version, "id">): Promise<Version>;
   actualizarVersion(id: string, cambios: Partial<Version>): Promise<Version>;
+  /** Graba la sesión de CMA en la versión (build-start async, a3). Write-once vía el SD
+   *  app_fijar_sesion_cma: lanza si la versión no está 'building' o ya tiene sesión. */
+  fijarSesionCma(versionId: string, sessionId: string): Promise<void>;
   crearEjecucion(e: Omit<Ejecucion, "id">): Promise<Ejecucion>;
   actualizarEjecucion(id: string, cambios: Partial<Ejecucion>): Promise<Ejecucion>;
   obtenerVersion(id: string): Promise<Version | undefined>;

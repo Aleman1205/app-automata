@@ -99,6 +99,10 @@ CREATE TABLE IF NOT EXISTS versiones (
 );
 ALTER TABLE versiones ADD COLUMN IF NOT EXISTS tipo text;
 ALTER TABLE versiones ADD COLUMN IF NOT EXISTS cma_session_id text;
+-- vista del planner (a3): se persiste al ARRANCAR el build para poder ensamblar el Artefacto
+-- en la COSECHA (el webhook es thin y el run es un step aparte). El app la INSERTA (build-start)
+-- pero su GRANT UPDATE sigue acotado a (estado, artefacto_key) → de-facto write-once.
+ALTER TABLE versiones ADD COLUMN IF NOT EXISTS vista jsonb;
 -- Idempotente de verdad: una constraint UNIQUE se respalda con un índice homónimo, así que
 -- re-agregarla lanza `duplicate_table` (42P07), NO `duplicate_object` (42710) — el guard por
 -- excepción no la cazaba y abortaba TODO el resto del schema. Chequear pg_constraint sí.
@@ -313,6 +317,15 @@ REVOKE UPDATE ON versiones FROM automata_app;
 -- de otra org y secuestrar el despacho del webhook (hallazgo de la revisión). Lo graba el
 -- build-start por un camino de confianza con el id que devuelve CMA (no elegible por el app).
 GRANT  UPDATE (estado, artefacto_key) ON versiones TO automata_app;
+-- a3: el INSERT sobre versiones NO estaba acotado por columna (solo UPDATE/DELETE lo estaban),
+-- así que el REVOKE UPDATE(cma_session_id) protegía el post-hoc pero NO el INSERT-time: el app
+-- podía pre-reclamar la sesión de otra org al insertar. Se acota el INSERT a las columnas que
+-- el build-start sí escribe (cma_session_id lo fija SOLO el SD app_fijar_sesion_cma).
+REVOKE INSERT ON versiones FROM automata_app;
+-- Se excluye cma_session_id (pre-claim) y artefacto_key (lo fija el build via UPDATE). `creada`
+-- SÍ se incluye: el trigger la normaliza a now() (anti-backdate ya probado); revocarla rompería
+-- ese test sin ganar nada (el trigger igual la sobrescribe).
+GRANT  INSERT (automatizacion_id, org_id, numero, estado, tipo, vista, creada) ON versiones TO automata_app;
 REVOKE DELETE ON ejecuciones      FROM automata_app;  -- ni el de runs (facturación)
 
 -- Org viva de la sesión, robusta: '' o no-seteada → NULL → fail-closed (0 filas).
@@ -499,6 +512,20 @@ BEGIN
   VALUES (p_tipo, coalesce(p_severidad, 'media'), coalesce(app_current_org(), p_org), p_auto, p_version, p_detalle, session_user);
 END $fn$;
 GRANT EXECUTE ON FUNCTION app_registrar_incidente(text, text, uuid, uuid, uuid, text) TO automata_app, automata_webhook;
+
+-- Fijar la sesión de CMA en la versión (a3, build-start). cma_session_id es UNIQUE global y
+-- NO está en el GRANT INSERT/UPDATE del app: solo este SD la escribe, y WRITE-ONCE + org-scoped
+-- + solo sobre 'building'. Así el app no puede pre-reclamar la sesión de otra org ni re-apuntarla.
+CREATE OR REPLACE FUNCTION app_fijar_sesion_cma(p_version uuid, p_sid text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_org uuid := app_current_org();
+BEGIN
+  IF v_org IS NULL THEN RAISE EXCEPTION 'app_fijar_sesion_cma sin contexto de org'; END IF;
+  UPDATE versiones SET cma_session_id = p_sid
+    WHERE id = p_version AND org_id = v_org AND estado = 'building' AND cma_session_id IS NULL;
+  IF NOT FOUND THEN RAISE EXCEPTION 'SESION_CMA_NO_FIJABLE'; END IF;
+END $fn$;
+GRANT EXECUTE ON FUNCTION app_fijar_sesion_cma(uuid, text) TO automata_app;
 
 -- Congelado VOLUNTARIO ("esta ya quedó", docs/08 §3). Va por función porque el app
 -- perdió el UPDATE sobre ciclo_estado (si lo tuviera, podría des-congelarse y

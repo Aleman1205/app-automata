@@ -30,6 +30,15 @@ export class LocalStorage implements Storage {
     return fs.readFile(this.ruta(key), "utf8");
   }
 
+  async existe(key: string): Promise<boolean> {
+    try {
+      await fs.access(this.ruta(key));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async list(prefix: string): Promise<string[]> {
     const base = this.ruta(prefix);
     try {
