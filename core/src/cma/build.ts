@@ -1,7 +1,14 @@
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
-import type { BuildClient, CodigoConstruido, Manifiesto, Spec } from "../types.ts";
+import type {
+  ArranqueBuild,
+  BuildClientAsync,
+  CodigoConstruido,
+  Manifiesto,
+  ResultadoCosecha,
+  Spec,
+} from "../types.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Builder en Managed Agents (CMA). Lifteado del spike/run.js YA PROBADO
@@ -11,17 +18,35 @@ import type { BuildClient, CodigoConstruido, Manifiesto, Spec } from "../types.t
 // (docs/decisiones-runtime.md #2). Así se cierra la exfiltración-en-build sin
 // runner propio.
 //
-// OJO: este módulo gasta dinero y tarda ~10 min. No se corre en la verificación
-// gratis de M0; el loop se prueba con el artefacto ya construido del spike.
+// DOS caminos:
+//   · build()  — SÍNCRONO. Abre el stream, espera ~10 min, cosecha. Para M0 y
+//                pruebas locales (run-m0). Gasta dinero y tarda; NO va en la ruta HTTP.
+//   · arrancar() + cosechar() — ASÍNCRONO, para PRODUCCIÓN. arrancar() crea la
+//     sesión y devuelve su id (se graba en versiones.cma_session_id) sin esperar.
+//     Cuando CMA notifica por webhook (thin: solo el id de sesión), la orquestación
+//     llama cosechar(sessionId), que RE-CONSULTA la sesión para saber el desenlace
+//     real y descarga el código.
+//
+// El webhook de CMA es THIN y se registra en la CONSOLA (no hay API para darlo de
+// alta por código). Sus data.type reales — `session.status_idled`,
+// `session.status_terminated`, `session.outcome_evaluation_ended` — NO dicen si el
+// build pasó: eso solo se sabe re-consultando la sesión (outcome_evaluations[].result
+// === "satisfied"). Por eso la decisión de éxito vive en cosechar(), no en el handler.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MODELO = "claude-opus-4-8";
 const MAX_ITERACIONES = 4;
 const TIMEOUT_MIN = 15;
 const PRECIO = { in: 5, out: 25, cacheRead: 0.5, cacheWrite: 6.25 } as const;
+const NOMBRE_ENV = "automata-core";
 
 // Lista blanca de paquetes (pre-horneados; el build no necesita pip en runtime).
 const PAQUETES_PIP = ["openpyxl", "pandas", "python-dateutil"];
+
+// Resultados TERMINALES del grader (docs/managed-agents-outcomes.md). `satisfied` es
+// el único aprobado; el resto son terminaciones sin código.
+const OUTCOME_OK = "satisfied";
+const OUTCOME_FALLO = new Set(["max_iterations_reached", "failed", "interrupted"]);
 
 const SYSTEM = `
 Eres un ingeniero que construye automatizaciones para clientes que no programan.
@@ -83,20 +108,53 @@ function instruccionesDesde(spec: Spec, rutaRemota: string, contratoTexto?: stri
     .join("\n");
 }
 
-export class CmaBuildClient implements BuildClient {
+// Forma (mínima, defensiva) de la sesión re-consultada. El SDK beta la tipa flojo;
+// solo leemos lo que necesitamos para clasificar el desenlace.
+export interface SesionCma {
+  id: string;
+  status?: string;
+  stop_reason?: { type?: string } | null;
+  outcome_evaluations?: Array<{ result?: string; iteration?: number }>;
+}
+
+export interface Clasificacion {
+  estado: "satisfecho" | "fallido" | "en_curso";
+  iteraciones: number;
+  motivo?: string;
+}
+
+/** Del estado de una sesión re-consultada, decide si el build pasó, falló o sigue.
+ *  El webhook es thin: esta es la ÚNICA fuente de verdad del desenlace. Exportada
+ *  para probarla sin credenciales (es lógica pura). */
+export function clasificarSesion(s: SesionCma): Clasificacion {
+  const evals = s.outcome_evaluations ?? [];
+  const ult = evals[evals.length - 1];
+  const iteraciones = evals.length ? (ult?.iteration ?? 0) + 1 : 0;
+
+  // Terminación con error de la sesión (no del grader) → fallo, haya o no evals.
+  if (s.status === "terminated") return { estado: "fallido", iteraciones, motivo: "sesión terminada con error" };
+  if (!ult?.result) return { estado: "en_curso", iteraciones }; // aún sin veredicto
+
+  if (ult.result === OUTCOME_OK) {
+    // Guard: idle bloqueado esperando una acción (tool/confirmación) NO es "listo".
+    if (s.stop_reason?.type === "requires_action") return { estado: "en_curso", iteraciones };
+    return { estado: "satisfecho", iteraciones };
+  }
+  if (OUTCOME_FALLO.has(ult.result)) return { estado: "fallido", iteraciones, motivo: `grader: ${ult.result}` };
+  return { estado: "en_curso", iteraciones }; // needs_revision / en progreso
+}
+
+export class CmaBuildClient implements BuildClientAsync {
   private client = new Anthropic();
   private log = (m: string) => console.log(`  [cma] ${m}`);
 
-  async build(spec: Spec, ejemploPath: string, contratoTexto?: string) {
-    const NOMBRE_ENV = "automata-core";
-
+  // ── Setup compartido: environment blindado + agente + subir ejemplo + crear
+  //    sesión. NO envía el outcome ni abre stream (cada camino lo hace a su modo). ──
+  private async prepararSesion(ejemploPath: string): Promise<{ sessionId: string; rutaRemota: string }> {
     // 1. Environment con la config de la decisión (b): deps pre-horneadas + sin red.
     let env: any;
     for await (const e of this.client.beta.environments.list()) {
-      if ((e as any).name === NOMBRE_ENV) {
-        env = e;
-        break;
-      }
+      if ((e as any).name === NOMBRE_ENV) { env = e; break; }
     }
     if (!env) {
       env = await this.client.beta.environments.create({
@@ -115,6 +173,9 @@ export class CmaBuildClient implements BuildClient {
       this.log(`environment reutilizado: ${env.id}`);
     }
 
+    // NOTA (deploy): el SDK recomienda crear el agente UNA vez y referenciarlo por id
+    // (no en la ruta caliente). Aquí se crea por build por simplicidad; en producción
+    // conviene provisionar agente+environment fuera de banda (CLI `ant`) y guardar el id.
     const agent = await this.client.beta.agents.create({
       name: "Builder (core)",
       model: MODELO,
@@ -122,7 +183,6 @@ export class CmaBuildClient implements BuildClient {
       tools: [{ type: "agent_toolset_20260401" } as any],
     } as any);
 
-    // 2. Subir el ejemplo y arrancar la sesión.
     const subido = await this.client.beta.files.upload({
       file: createReadStream(ejemploPath),
       purpose: "agent",
@@ -134,9 +194,11 @@ export class CmaBuildClient implements BuildClient {
       resources: [{ type: "file", file_id: (subido as any).id, mount_path: rutaRemota }],
     } as any);
     this.log(`sesión: ${session.id}`);
+    return { sessionId: session.id, rutaRemota };
+  }
 
-    const stream = await this.client.beta.sessions.events.stream(session.id);
-    await this.client.beta.sessions.events.send(session.id, {
+  private eventoOutcome(spec: Spec, rutaRemota: string, contratoTexto?: string) {
+    return {
       events: [
         {
           type: "user.define_outcome",
@@ -145,9 +207,50 @@ export class CmaBuildClient implements BuildClient {
           max_iterations: MAX_ITERACIONES,
         },
       ],
-    } as any);
+    } as any;
+  }
 
-    // 3. Escuchar hasta idle terminal; acumular costo e iteraciones.
+  // ── Descarga los entregables de /mnt/session/outputs/ (indexado tras idle). ──
+  private async descargarCodigo(sessionId: string): Promise<CodigoConstruido> {
+    await new Promise((r) => setTimeout(r, 3000)); // los outputs tardan en indexarse
+    const lista = await this.client.beta.files.list({
+      scope_id: sessionId,
+      betas: ["managed-agents-2026-04-01"],
+    } as any);
+    const archivos = new Map<string, string>();
+    for (const f of (lista as any).data ?? []) {
+      const nombre = path.basename((f as any).filename);
+      if (nombre === "automatizacion.py" || nombre === "manifiesto.json" || nombre === "requirements.txt") {
+        try {
+          const resp = await this.client.beta.files.download((f as any).id);
+          archivos.set(nombre, Buffer.from(await (resp as any).arrayBuffer()).toString("utf8"));
+        } catch {
+          /* algunos archivos no son descargables; se omiten */
+        }
+      }
+    }
+    const automatizacionPy = archivos.get("automatizacion.py");
+    if (!automatizacionPy) throw new Error("El build no produjo automatizacion.py.");
+    let manifiesto: Manifiesto = { entradas: [] };
+    const manifiestoRaw = archivos.get("manifiesto.json");
+    if (manifiestoRaw) {
+      try {
+        manifiesto = JSON.parse(manifiestoRaw) as Manifiesto;
+      } catch {
+        /* manifiesto malformado: se deja vacío, la puerta de calidad lo marca */
+      }
+    }
+    return { automatizacionPy, manifiesto, requirements: archivos.get("requirements.txt") };
+  }
+
+  // ── Camino SÍNCRONO (M0): arranca, escucha hasta idle terminal, cosecha. ──
+  async build(spec: Spec, ejemploPath: string, contratoTexto?: string) {
+    const { sessionId, rutaRemota } = await this.prepararSesion(ejemploPath);
+
+    // Abrir el stream ANTES de enviar el outcome, para no perder eventos tempranos.
+    const stream = await this.client.beta.sessions.events.stream(sessionId);
+    await this.client.beta.sessions.events.send(sessionId, this.eventoOutcome(spec, rutaRemota, contratoTexto));
+
     let costoUsd = 0;
     let iteraciones = 0;
     let aprobado = false;
@@ -167,42 +270,28 @@ export class CmaBuildClient implements BuildClient {
       clearTimeout(limite);
     }
 
-    // 4. Extraer el código construido de las salidas.
-    await new Promise((r) => setTimeout(r, 3000)); // los outputs tardan en indexarse
-    const lista = await this.client.beta.files.list({
-      scope_id: session.id,
-      betas: ["managed-agents-2026-04-01"],
-    } as any);
-    const archivos = new Map<string, string>();
-    for (const f of (lista as any).data ?? []) {
-      const nombre = path.basename((f as any).filename);
-      if (nombre === "automatizacion.py" || nombre === "manifiesto.json" || nombre === "requirements.txt") {
-        try {
-          const resp = await this.client.beta.files.download((f as any).id);
-          archivos.set(nombre, Buffer.from(await (resp as any).arrayBuffer()).toString("utf8"));
-        } catch {
-          /* algunos archivos no son descargables; se omiten */
-        }
-      }
-    }
-
-    const automatizacionPy = archivos.get("automatizacion.py");
-    if (!automatizacionPy) throw new Error("El build no produjo automatizacion.py.");
-    let manifiesto: Manifiesto = { entradas: [] };
-    const manifiestoRaw = archivos.get("manifiesto.json");
-    if (manifiestoRaw) {
-      try {
-        manifiesto = JSON.parse(manifiestoRaw) as Manifiesto;
-      } catch {
-        /* manifiesto malformado: se deja vacío, la puerta de calidad lo marca */
-      }
-    }
-
-    const codigo: CodigoConstruido = {
-      automatizacionPy,
-      manifiesto,
-      requirements: archivos.get("requirements.txt"),
-    };
+    const codigo = await this.descargarCodigo(sessionId);
     return { codigo, costoUsd, iteraciones, aprobado };
+  }
+
+  // ── Camino ASÍNCRONO (producción): arranca y NO espera. ──
+  async arrancar(spec: Spec, ejemploPath: string, contratoTexto?: string): Promise<ArranqueBuild> {
+    const { sessionId, rutaRemota } = await this.prepararSesion(ejemploPath);
+    await this.client.beta.sessions.events.send(sessionId, this.eventoOutcome(spec, rutaRemota, contratoTexto));
+    this.log(`build arrancado (asíncrono): ${sessionId}`);
+    return { sessionId };
+  }
+
+  // ── Cosecha: el webhook (thin) avisó; re-consultamos para el desenlace real. ──
+  async cosechar(sessionId: string): Promise<ResultadoCosecha> {
+    const s = (await this.client.beta.sessions.retrieve(sessionId)) as unknown as SesionCma;
+    const c = clasificarSesion(s);
+    if (c.estado === "en_curso") return { estado: "en_curso" };
+    if (c.estado === "fallido") return { estado: "fallido", motivo: c.motivo ?? "desconocido", iteraciones: c.iteraciones };
+    // satisfecho: descargar el código. El costo real del build asíncrono NO se
+    // reconstruye aquí (no hubo stream); la fuente autoritativa es la consola / la
+    // API de uso — mismo caveat que el spike (run.js subcuenta ~1.4×).
+    const codigo = await this.descargarCodigo(sessionId);
+    return { estado: "satisfecho", codigo, costoUsd: 0, iteraciones: c.iteraciones };
   }
 }

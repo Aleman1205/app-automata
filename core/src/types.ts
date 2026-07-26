@@ -207,6 +207,34 @@ export interface BuildClient {
   ): Promise<{ codigo: CodigoConstruido; costoUsd: number; iteraciones: number; aprobado: boolean }>;
 }
 
+/** Lo que el arranque asíncrono devuelve: el id de la sesión de build, que se graba
+ *  como `versiones.cma_session_id`. El webhook de fin-de-sesión (thin) trae ese id;
+ *  por ahí se mapea de vuelta a la versión. NO se espera a que termine. */
+export interface ArranqueBuild {
+  sessionId: string;
+}
+
+/** Resultado de cosechar una sesión de build ya terminada. Es un tipo DISCRIMINADO:
+ *  - `satisfecho`: el grader aprobó → hay `codigo` para subir a storage.
+ *  - `fallido`: el grader agotó iteraciones / falló / se interrumpió, o la sesión
+ *    terminó con error → NO hay código; `motivo` explica.
+ *  - `en_curso`: la sesión NO está en un estado terminal (p.ej. idle esperando una
+ *    acción). El llamador NO debe confirmar ni fallar todavía; reintenta luego. */
+export type ResultadoCosecha =
+  | { estado: "satisfecho"; codigo: CodigoConstruido; costoUsd: number; iteraciones: number }
+  | { estado: "fallido"; motivo: string; iteraciones: number }
+  | { estado: "en_curso" };
+
+/** BuildClient de PRODUCCIÓN: el build es asíncrono (arranca → webhook → cosecha),
+ *  no un bloqueo de ~10 min. `build()` (síncrono) se conserva para M0/pruebas. La
+ *  cosecha vive aquí (y no en la orquestación) porque es específica del SDK de CMA:
+ *  hay que RE-CONSULTAR la sesión para saber el desenlace real (el webhook es thin) y
+ *  descargar los archivos de salida. */
+export interface BuildClientAsync extends BuildClient {
+  arrancar(spec: Spec, ejemploPath: string, contratoTexto?: string): Promise<ArranqueBuild>;
+  cosechar(sessionId: string): Promise<ResultadoCosecha>;
+}
+
 /** Ejecuta el artefacto sobre insumos. Codigo puro, SIN modelo. */
 export interface RunExecutor {
   run(

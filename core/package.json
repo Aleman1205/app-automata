@@ -10,6 +10,8 @@
     "./http/endpoints": "./src/http/endpoints.ts",
     "./http/tipos": "./src/http/tipos.ts",
     "./db/pg": "./src/db/pg.ts",
+    "./storage/r2": "./src/storage/r2.ts",
+    "./storage/local": "./src/storage/local.ts",
     "./webhooks/receptor": "./src/webhooks/receptor.ts",
     "./webhooks/firma": "./src/webhooks/firma.ts",
     "./webhooks/handlers": "./src/webhooks/handlers.ts"
@@ -33,6 +35,8 @@
     "verify:pgstate:pg": "tsx scripts/verify-pgstate-pg.ts",
     "verify:adaptador:pg": "tsx scripts/verify-adaptador-pg.ts",
     "verify:rutas": "tsx scripts/verify-rutas.ts",
+    "verify:storage": "tsx scripts/verify-storage.ts",
+    "verify:cma": "tsx scripts/verify-cma-clasificar.ts",
     "verify:webhooks:handlers:pg": "tsx scripts/verify-webhooks-handlers-pg.ts",
     "verify:pg": "tsx scripts/verify-pg.ts",
     "verify:cuota:pg": "tsx scripts/verify-cuota-pg.ts",
@@ -42,6 +46,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",
+    "@aws-sdk/client-s3": "^3.717.0",
     "pg": "^8.13.0"
   },
   "devDependencies": {

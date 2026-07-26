@@ -10,9 +10,19 @@ import { confirmarAjuste, fallarAjuste } from "../ciclo/servicio.ts";
 // el rol no-super veía/mutaba 0 filas → no-op permanente (hallazgo ALTA de la revisión).
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ⚠️ CABLEAR: confirmar los `data.type` EXACTOS de CMA contra los docs de Managed Agents.
-// Allowlist explícita; un tipo desconocido NO se actúa (seguro) pero se ALERTA (para que un
-// string mal cableado se detecte en minutos, no a las 6h del reaper).
+// HALLAZGO (docs Managed Agents §webhooks): el webhook de CMA es THIN y sus data.type
+// REALES son `session.status_idled` (agente terminó/espera), `session.status_terminated`
+// (error terminal) y `session.outcome_evaluation_ended` (grader terminó una iteración).
+// NINGUNO dice si el build PASÓ: eso solo se sabe re-consultando la sesión
+// (outcome_evaluations[].result === "satisfied") — eso vive en CmaBuildClient.cosechar().
+// Por eso este handler NO puede confirmar/fallar por el tipo de evento como hace hoy:
+// se reescribe en el hito de COSECHA (webhook → cosechar → ensamblar Artefacto → R2 →
+// confirmar). Las allowlists de abajo son de NOMBRES INVENTADOS (pre-hallazgo): NO hacen
+// daño porque un evento real cae en "tipo NO reconocido" → no-op + ALERTA (falla seguro,
+// no mis-confirma), pero quedan aquí solo hasta ese hito. Los reales, para referencia:
+//   éxito-candidato: session.status_idled   (requiere cosechar para confirmar)
+//   fallo terminal:  session.status_terminated
+//   informativo:     session.outcome_evaluation_ended, session.status_run_started, ...
 const CMA_EXITO = new Set(["session.completed", "session.succeeded", "session.ready"]);
 const CMA_FALLO = new Set(["session.failed", "session.errored", "session.expired", "session.canceled", "session.cancelled", "session.stopped"]);
 // Tipos informativos de CMA que se ignoran a propósito (no gatean nada). Ajustar al cablear.
