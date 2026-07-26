@@ -7,6 +7,9 @@
 // kill-switch frena, la cuota corta, RLS aísla.
 //   ADMIN_URL=... DATABASE_URL=... npm run verify:pgstate:pg
 // ─────────────────────────────────────────────────────────────────────────────
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { crearPool } from "../src/db/pg.ts";
 import { PgStateRepo } from "../src/state/pg.ts";
 import { construir, ejecutar, type Deps } from "../src/pipeline/build-pipeline.ts";
@@ -21,6 +24,9 @@ const B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const C = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const D = "dddddddd-dddd-dddd-dddd-dddddddddddd";
 const PER = () => new Date().toISOString().slice(0, 7); // YYYY-MM (mismo formato que cobrar_build)
+// a4: el gate de entrada ahora corre en construir/ejecutar, así que se usa un archivo REAL
+// válido (no '/dev/null' ni inputs:{}, que el gate rechazaría por 'vacio' antes de los asserts).
+let MUESTRA: string;
 
 let admin: ReturnType<typeof crearPool>;
 let app: ReturnType<typeof crearPool>;
@@ -50,6 +56,8 @@ const depsDe = (org: string): Deps => ({ storage: new StubStorage(), state: new 
 async function main() {
   admin = crearPool(ADMIN_URL);
   app = crearPool(APP_URL);
+  MUESTRA = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "pgstate-")), "muestra.csv");
+  await fs.writeFile(MUESTRA, "producto,ingreso\nTaco,100\nAgua,20\n");
   const repoA = new PgStateRepo(app, A);
   const repoB = new PgStateRepo(app, B);
   try {
@@ -100,12 +108,12 @@ async function main() {
     console.log("\n7. PIPELINE M0 completo contra Postgres (build→artefacto→run→vista):");
     const gA = await genDe(A);
     const depsA = depsDe(A); // MISMO storage entre construir y ejecutar
-    const { version } = await construir(depsA, { orgId: A, nombre: "Pipeline PG", spec, vista, ejemploPath: "/dev/null" });
+    const { version } = await construir(depsA, { orgId: A, nombre: "Pipeline PG", spec, vista, ejemploPath: MUESTRA });
     check("construir → versión ready con artefacto", version.estado === "ready" && !!version.artefactoKey);
     check("el pipeline consumió una generación de verdad", (await genDe(A)) === gA + 1);
     const filaV = (await admin.query<{ estado: string; tipo: string | null }>("SELECT estado, tipo FROM versiones WHERE id=$1", [version.id])).rows[0];
     check("la versión existe en Postgres, estado ready, tipo NULL (build inicial)", filaV?.estado === "ready" && filaV?.tipo === null);
-    const { ejecucion } = await ejecutar(depsA, { version, inputs: {} });
+    const { ejecucion } = await ejecutar(depsA, { version, inputs: { archivo: MUESTRA } });
     check("ejecutar → ejecución ok persistida en Postgres", ejecucion.estado === "ok");
     const filaE = (await admin.query<{ n: number }>("SELECT count(*)::int AS n FROM ejecuciones WHERE version_id=$1 AND estado='ok'", [version.id])).rows[0]?.n;
     check("la ejecución quedó en el ledger (reserva→confirma, 1 fila ok)", filaE === 1);
@@ -113,7 +121,7 @@ async function main() {
     console.log("\n8. El pipeline respeta el kill-switch Y COMPENSA la automatización huérfana:");
     const activasAntes = (await admin.query<{ n: number }>("SELECT count(*)::int AS n FROM automatizaciones WHERE org_id=$1 AND activa", [A])).rows[0]?.n ?? 0;
     await congelar(admin, "builds");
-    check("construir con builds congelados → ServicioSuspendido", await lanza(() => construir(depsDe(A), { orgId: A, nombre: "bloqueada", spec, vista, ejemploPath: "/dev/null" }), ServicioSuspendido));
+    check("construir con builds congelados → ServicioSuspendido", await lanza(() => construir(depsDe(A), { orgId: A, nombre: "bloqueada", spec, vista, ejemploPath: MUESTRA }), ServicioSuspendido));
     await descongelar(admin, "builds");
     const activasDespues = (await admin.query<{ n: number }>("SELECT count(*)::int AS n FROM automatizaciones WHERE org_id=$1 AND activa", [A])).rows[0]?.n ?? 0;
     check("NO dejó automatización huérfana activa (compensación: activa=false)", activasDespues === activasAntes);
@@ -127,10 +135,10 @@ async function main() {
     await admin.query("UPDATE uso_periodo SET ejecuciones=0 WHERE org_id=$1", [A]);
     // (c) ejecutar recomputa la clave: aunque artefacto_key esté tampereado, corre igual.
     const dA2 = depsDe(A);
-    const built = await construir(dA2, { orgId: A, nombre: "recompute", spec, vista, ejemploPath: "/dev/null" });
+    const built = await construir(dA2, { orgId: A, nombre: "recompute", spec, vista, ejemploPath: MUESTRA });
     await admin.query("UPDATE versiones SET artefacto_key='artefactos/AJENO.json' WHERE id=$1", [built.version.id]);
     const tampered = { ...built.version, artefactoKey: "artefactos/AJENO.json" };
-    check("ejecutar ignora artefacto_key tampereado (recomputa de version.id)", (await ejecutar(dA2, { version: tampered, inputs: {} })).ejecucion.estado === "ok");
+    check("ejecutar ignora artefacto_key tampereado (recomputa de version.id)", (await ejecutar(dA2, { version: tampered, inputs: { archivo: MUESTRA } })).ejecucion.estado === "ok");
   } finally {
     await admin.query("UPDATE interruptores SET builds=false, ejecuciones=false, cobros=false").catch(() => {});
     await admin.query("DELETE FROM orgs WHERE id = ANY($1)", [[A, B, C, D]]).catch(() => {});

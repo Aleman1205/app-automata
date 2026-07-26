@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
+import { gatearEjemplo } from "../entrada/puente.ts";
 import type {
   ArranqueBuild,
   BuildClientAsync,
@@ -183,6 +184,10 @@ export class CmaBuildClient implements BuildClientAsync {
       tools: [{ type: "agent_toolset_20260401" } as any],
     } as any);
 
+    // Defensa en profundidad (a4): el gate de entrada valida el ejemplo ANTES de subir sus
+    // bytes a CMA. prepararSesion es el embudo ÚNICO de build() y arrancar(), así que esto
+    // cubre también el camino async aunque su orquestador se cablee después (a3).
+    await gatearEjemplo(ejemploPath);
     const subido = await this.client.beta.files.upload({
       file: createReadStream(ejemploPath),
       purpose: "agent",

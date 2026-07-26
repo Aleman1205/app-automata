@@ -12,6 +12,7 @@ import type {
   Vista,
 } from "../types.ts";
 import { resolverVista } from "../vista/resolver.ts";
+import { gatearEjemplo, gatearInputs, type MetaEntrada } from "../entrada/puente.ts";
 
 // El pipeline teje los puertos: build -> guardar artefacto -> run -> resolver
 // vista. En producción cada paso es un `step` de Inngest con webhooks (docs/03);
@@ -32,8 +33,12 @@ function artefactoKey(versionId: string): string {
 /** Compone el artefacto (código construido + vista provista) y lo guarda. */
 export async function construir(
   deps: Deps,
-  args: { orgId: string; nombre: string; spec: Spec; vista: Vista; ejemploPath: string; contratoTexto?: string },
+  args: { orgId: string; nombre: string; spec: Spec; vista: Vista; ejemploPath: string; ejemploExt?: string; contratoTexto?: string },
 ): Promise<{ version: Version; artefacto: Artefacto; costoUsd: number; iteraciones: number }> {
+  // GATE de entrada (a4): valida el ejemplo ANTES de consumir un espacio del plan o subir
+  // nada a CMA. Lanza EntradaRechazada (hostil) / EntradaEnRevision (ilegible). La extensión
+  // sale del meta declarado; en M0 se deriva del path. Va lo PRIMERO: no se cobra por hostil.
+  await gatearEjemplo(args.ejemploPath, { nombre: args.nombre, extension: args.ejemploExt });
   // crearAutomatizacion COMMITea con activa=true (consume un espacio del plan). Si algo
   // posterior falla, la automatización queda activa SIN build → agotaría los espacios y
   // ladrillaría la org (el rol de app no puede borrarla). Por eso todo lo que sigue va en
@@ -78,14 +83,19 @@ export async function construir(
 /** Ejecuta un artefacto sobre insumos y devuelve el Resultado ya resuelto. */
 export async function ejecutar(
   deps: Deps,
-  args: { version: Version; inputs: Record<string, string> },
+  args: { version: Version; inputs: Record<string, string>; metas?: Record<string, MetaEntrada> },
 ): Promise<{ resultado: Resultado; datos: unknown; ejecucion: Ejecucion; ms: number }> {
-  // Carga el artefacto desde el Storage por su clave. Ejerce el hop
-  // artefacto→Storage→run de ida y vuelta: en producción, build y run son steps
-  // separados de Inngest y el run NO tiene el objeto en memoria (docs/03).
   if (!args.version.artefactoKey) {
     throw new Error("La versión no tiene artefacto (¿el build terminó bien?).");
   }
+  // GATE de entrada (a4): valida el SOBRE de insumos ANTES de reservar la ejecución y de
+  // correr el código de IA. Hostil → EntradaRechazada; ilegible → EntradaEnRevision (no
+  // corre). NOTA (follow-up): cuando el run se exponga por HTTP, llamar verificar_freno
+  // ANTES de esto para no inflar zips grandes delante del kill-switch (DoS).
+  await gatearInputs(args.inputs, args.metas);
+  // Carga el artefacto desde el Storage por su clave. Ejerce el hop
+  // artefacto→Storage→run de ida y vuelta: en producción, build y run son steps
+  // separados de Inngest y el run NO tiene el objeto en memoria (docs/03).
   // La clave se RECOMPUTA de version.id (determinista), NO se lee de version.artefactoKey:
   // con el rol de app escribible (GRANT UPDATE(artefacto_key)) y el Storage sin org-scope,
   // confiar en la columna dejaría a un app comprometido apuntar al artefacto de otra org.

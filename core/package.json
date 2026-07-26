@@ -24,6 +24,7 @@
     "verify:auth": "tsx scripts/verify-auth.ts",
     "verify:cuota": "tsx scripts/verify-cuota.ts",
     "verify:entrada": "tsx scripts/verify-entrada.ts",
+    "verify:entrada:gate": "tsx scripts/verify-entrada-gate.ts",
     "verify:http": "tsx scripts/verify-http.ts",
     "verify:webhooks": "tsx scripts/verify-webhooks.ts",
     "verify:ciclo": "tsx scripts/verify-ciclo.ts",
