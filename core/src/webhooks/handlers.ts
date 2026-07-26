@@ -1,6 +1,7 @@
 import { type PoolClient } from "pg";
 import { type Evento } from "./receptor.ts";
 import { confirmarAjuste, fallarAjuste } from "../ciclo/servicio.ts";
+import { emitirEnTx } from "../ops/incidentes.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Los `procesar` de los webhooks (corren en la tx de dedupe del receptor, con el rol
@@ -44,6 +45,9 @@ export async function procesarCma(c: PoolClient, evento: Evento): Promise<void> 
   const fallo = CMA_FALLO.has(evento.tipo);
   if (!exito && !fallo) {
     if (!CMA_IGNORAR.has(evento.tipo)) {
+      // Incidente durable (a2): un tipo no reconocido = build que podría colgarse; que ops
+      // lo vea en minutos, no a las 6h del reaper. Sin org aún (pre-resolución) → org_id NULL.
+      await emitirEnTx(c, { tipo: "webhook_desconocido", severidad: "media", detalle: `CMA data.type no reconocido: '${evento.tipo}'` });
       console.error(`[webhook:cma] tipo NO reconocido '${evento.tipo}' — confirmar la allowlist contra los docs de CMA (build podría quedar colgado).`);
     }
     return; // no-op (ack)
@@ -58,6 +62,8 @@ export async function procesarCma(c: PoolClient, evento: Evento): Promise<void> 
   if (v.estado !== "building") {
     // Ya resuelta. Un ÉXITO tras el reaper (ya 'failed') = build pagado no entregado → reconciliar.
     if (exito && v.estado === "failed") {
+      // Incidente durable (a2). Aún sin fijarOrg → se pasa v.org_id (SD: coalesce con p_org).
+      await emitirEnTx(c, { tipo: "pago_no_entregado", severidad: "alta", orgId: v.org_id, autoId: v.auto_id, versionId: v.version_id, detalle: "éxito de CMA tras reaper: versión ya 'failed'" });
       console.error(`[webhook:cma] ÉXITO tras reaper: versión ${v.version_id} ya 'failed' — build pagado NO entregado, reconciliar.`);
     }
     return;

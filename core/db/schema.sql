@@ -224,6 +224,27 @@ CREATE TABLE IF NOT EXISTS bitacora_kill (
   cuando   timestamptz NOT NULL DEFAULT now()
 );
 
+-- Incidentes de dinero/entrega/operación (a2, auditoría de riesgo). Nivel PLATAFORMA, sin
+-- RLS: ops los mira cross-org y algunos nacen SIN org (webhook desconocido pre-resolución).
+-- Append-only para el app: solo INSERTA vía el SD app_registrar_incidente (REVOKE ALL abajo);
+-- el dueño/ops lee y resuelve. org_id SIN FK (como bitacora_kill): un incidente sobre una org
+-- purgada sobrevive como evidencia. Reemplaza los console.error que se perdían sin lector.
+CREATE TABLE IF NOT EXISTS incidentes (
+  id                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  tipo              text NOT NULL CHECK (tipo IN ('pago_no_entregado','entrega_sin_ajuste','webhook_desconocido','build_colgado','cosecha_fallida','otro')),
+  severidad         text NOT NULL DEFAULT 'media' CHECK (severidad IN ('baja','media','alta')),
+  org_id            uuid,
+  automatizacion_id uuid,
+  version_id        uuid,
+  detalle           text,
+  actor             text,                    -- session_user que lo emitió (app/webhook/owner)
+  cuando            timestamptz NOT NULL DEFAULT now(),
+  resuelto          timestamptz,
+  resuelto_por      text,
+  nota              text
+);
+CREATE INDEX IF NOT EXISTS idx_incidentes_abiertos ON incidentes (severidad, cuando) WHERE resuelto IS NULL;
+
 -- Dedupe de webhooks entrantes (docs/13 §4): nivel PLATAFORMA, sin org_id (no RLS).
 -- La lo escribe el receptor de webhooks con la conexión de DUEÑO (corre sin usuario);
 -- el rol de app no lo toca. El PK hace el dedupe atómico (INSERT ON CONFLICT DO NOTHING).
@@ -273,6 +294,8 @@ REVOKE INSERT, UPDATE, DELETE ON interruptores FROM automata_app;
 REVOKE INSERT, UPDATE, DELETE ON suspensiones  FROM automata_app;
 -- La bitácora del freno es append-only del dueño; el app ni la lee ni la escribe.
 REVOKE ALL ON bitacora_kill FROM automata_app;
+-- Incidentes: el app NO toca la tabla; solo emite vía el SD app_registrar_incidente (abajo).
+REVOKE ALL ON incidentes FROM automata_app;
 -- EL RECICLADOR (docs/06 §3, hallazgo ALTA de la revisión): el REVOKE UPDATE protege
 -- la fila, pero NO su existencia — borrar y recrear reseteaba entregada, ajustes_usados
 -- y ciclo_estado (ventana gratis + 3 ajustes nuevos, en bucle, con builds reales de
@@ -463,6 +486,19 @@ GRANT EXECUTE ON FUNCTION app_consumir_ajuste(uuid), en_ventana_gratis(uuid),
   resolver_sesion_cma(text), resolver_org_stripe(text) TO automata_webhook;
 -- Los resolvers cross-org SOLO para el rol de webhook (no el app ni PUBLIC).
 REVOKE EXECUTE ON FUNCTION resolver_sesion_cma(text), resolver_org_stripe(text) FROM PUBLIC;
+
+-- Emisión de incidentes (a2): único camino de escritura de `incidentes` para app/webhook.
+-- SECURITY DEFINER (la tabla tiene REVOKE ALL). Anti-forge: si hay contexto de org, ese
+-- MANDA (app bajo conOrg no puede atribuir a otra org); si no (webhook pre-resolución,
+-- owner), usa el p_org que se pasa. actor = session_user (quién llamó), NO el DEFINER dueño.
+CREATE OR REPLACE FUNCTION app_registrar_incidente(
+  p_tipo text, p_severidad text, p_org uuid, p_auto uuid, p_version uuid, p_detalle text
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+BEGIN
+  INSERT INTO incidentes (tipo, severidad, org_id, automatizacion_id, version_id, detalle, actor)
+  VALUES (p_tipo, coalesce(p_severidad, 'media'), coalesce(app_current_org(), p_org), p_auto, p_version, p_detalle, session_user);
+END $fn$;
+GRANT EXECUTE ON FUNCTION app_registrar_incidente(text, text, uuid, uuid, uuid, text) TO automata_app, automata_webhook;
 
 -- Congelado VOLUNTARIO ("esta ya quedó", docs/08 §3). Va por función porque el app
 -- perdió el UPDATE sobre ciclo_estado (si lo tuviera, podría des-congelarse y

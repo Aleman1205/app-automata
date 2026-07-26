@@ -3,7 +3,9 @@ import { auth } from "@clerk/nextjs/server";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 import { type Pool } from "pg";
-import { crearPoolApp } from "automata-core/db/pg";
+import { timingSafeEqual } from "node:crypto";
+import { crearPool, crearPoolApp } from "automata-core/db/pg";
+import { reaparBuildsColgados } from "automata-core/ciclo/servicio";
 import { adaptar, type ConfigAdaptador } from "automata-core/http/adaptador";
 import { type Deps, type Endpoint } from "automata-core/http/pipeline";
 import { type Sesion, type RateLimiter } from "automata-core/http/tipos";
@@ -120,5 +122,33 @@ export async function webhook(fuente: "cma" | "stripe", req: Request): Promise<R
   // rechazado → 401 (firma) / 400 (JSON); ilegible/duplicado/aceptado → 200 (ack, corta reintentos).
   const status = r.estado === "rechazado" ? (r.motivo.startsWith("firma") ? 401 : 400) : 200;
   return new Response(JSON.stringify({ estado: r.estado }), { status, headers: { "content-type": "application/json" } });
+}
+
+// ── Cron de ops (a2): reaper de builds colgados fuera del camino de request ──
+// Pool con el rol DUEÑO (bypassa RLS): SOLO para tareas de ops (barrido cross-org). NO pasa
+// por crearPoolApp — afirmarRolSeguro RECHAZA al dueño. Nunca alcanzable desde una ruta de
+// request; su única defensa es CRON_SECRET. crearPool es síncrono (no afirma rol).
+let poolOwner: Pool | undefined;
+function getPoolOwner(): Pool {
+  return (poolOwner ??= crearPool(env("DATABASE_URL_OWNER")));
+}
+
+// Comparación en tiempo constante del secreto del cron (Vercel Cron manda `Authorization:
+// Bearer <CRON_SECRET>`). Fail-closed: longitudes distintas o header ausente → false.
+function autorizadoCron(req: Request): boolean {
+  const secreto = env("CRON_SECRET");
+  const dado = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+  const a = Buffer.from(dado);
+  const b = Buffer.from(secreto);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Ruta de cron (Vercel Cron, cada 10 min): marca 'failed' los builds colgados y EMITE un
+ *  incidente por cada uno (a2). Sin esto, un build cuyo webhook nunca llega queda 'building'
+ *  para siempre. Corre con el pool DUEÑO. El route.ts queda en 1 línea. */
+export async function cronReaper(req: Request): Promise<Response> {
+  if (!autorizadoCron(req)) return new Response(JSON.stringify({ error: "no_autorizado" }), { status: 401, headers: { "content-type": "application/json" } });
+  const reapeados = await reaparBuildsColgados(getPoolOwner());
+  return new Response(JSON.stringify({ reapeados }), { status: 200, headers: { "content-type": "application/json" } });
 }
 

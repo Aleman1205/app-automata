@@ -3,6 +3,7 @@ import { type EstadoBuild } from "../types.ts";
 import { type Ciclo, type CicloEstado, type ResultadoRegresion, type TipoAjuste, ajustesRestantes, clasificar, puedeAjustar } from "./estados.ts";
 import { comoCuota } from "../billing/cuota.ts";
 import { comoSuspension } from "../ops/killswitch.ts";
+import { emitirEnTx, registrarIncidente } from "../ops/incidentes.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Aplicación del ciclo de vida en Postgres (docs/08). Patrón RESERVA→CONFIRMA:
@@ -197,6 +198,8 @@ export async function confirmarAjuste(c: PoolClient, autoId: string, versionId: 
     // el reaper la marcó por lenta, o el build falló y llegó tarde. No se traga en silencio.
     const est = await c.query<{ estado: EstadoBuild }>("SELECT estado FROM versiones WHERE id = $1 AND automatizacion_id = $2", [versionId, autoId]);
     if (est.rows[0]?.estado === "failed") {
+      // Incidente durable (a2) — vía SAVEPOINT: si el sink falla, NO aborta esta tx.
+      await emitirEnTx(c, { tipo: "pago_no_entregado", severidad: "alta", autoId, versionId, detalle: "confirmarAjuste sobre 'failed' (¿reaper por lenta?): build pagado no entregado" });
       console.error(`[ciclo] confirmarAjuste sobre versión ${versionId} en 'failed' (¿reaper-eada por lenta?): build pagado NO entregado — reconciliar/re-entregar.`);
     }
     return estadoDelCiclo(c, autoId);
@@ -221,8 +224,9 @@ export async function confirmarAjuste(c: PoolClient, autoId: string, versionId: 
     // re-entrega) y sin perder el conteo de un cambio de pago en silencio.
     if (!/AJUSTE_NO_PERMITIDO:(frozen|ajustes_agotados|no_existe)/.test(msg)) throw e;
     await c.query("ROLLBACK TO SAVEPOINT tras_entrega"); // preserva building→lista
-    // La versión queda entregada; el ciclo no avanza. En producción esto es una alerta
-    // durable a ops (build entregado sin contabilizar); aquí, log del incidente.
+    // La versión queda entregada; el ciclo no avanza. Incidente durable a ops (a2), vía su
+    // propio SAVEPOINT: un fallo del sink aquí NO puede revertir la entrega ya hecha.
+    await emitirEnTx(c, { tipo: "entrega_sin_ajuste", severidad: "media", autoId, versionId, detalle: `entregada sin contar el ajuste (${msg})` });
     console.error(`[ciclo] versión ${versionId} entregada sin contar el ajuste (${msg})`);
   }
   return estadoDelCiclo(c, autoId);
@@ -281,9 +285,15 @@ export async function limpiarRevision(owner: Pool, autoId: string): Promise<void
  */
 export async function reaparBuildsColgados(owner: Pool, minutos?: number): Promise<number> {
   const min = minStale(minutos); // clamp: minutos ≤ 0 barrería TODO 'building' de todas las orgs
-  const r = await owner.query(
-    "UPDATE versiones SET estado = 'failed' WHERE estado = 'building' AND creada < now() - ($1 || ' minutes')::interval RETURNING id",
+  const r = await owner.query<{ id: string; org_id: string; automatizacion_id: string }>(
+    "UPDATE versiones SET estado = 'failed' WHERE estado = 'building' AND creada < now() - ($1 || ' minutes')::interval RETURNING id, org_id, automatizacion_id",
     [min],
   );
+  // owner corre en AUTOCOMMIT (fuera de tx): registrarIncidente directo es seguro (no hay
+  // tx que abortar). Un build barrido = generación pagada sin entregable → incidente por
+  // fila para que ops lo vea (a2). Best-effort: un fallo del sink no revierte el reap.
+  for (const v of r.rows) {
+    await registrarIncidente(owner, { tipo: "build_colgado", severidad: "alta", orgId: v.org_id, autoId: v.automatizacion_id, versionId: v.id, detalle: `build 'building' > ${min} min → failed (webhook perdido / CMA colgado)` }).catch(() => {});
+  }
   return r.rowCount ?? 0;
 }
