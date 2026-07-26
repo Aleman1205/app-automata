@@ -68,4 +68,7 @@ export const R = {
   stepUp: (): Respuesta => ({ status: 403, cuerpo: { error: "step_up_requerido" } }),
   cuota: (msg: string): Respuesta => ({ status: 402, cuerpo: { error: "cuota_excedida", detalle: msg } }),
   rate: (): Respuesta => ({ status: 429, cuerpo: { error: "demasiadas_peticiones" } }),
+  // Kill-switch / org suspendida (docs/14 §3): 503 genérico (no confirma si es global o
+  // dirigido). Ops conoce el detalle; el cliente ve "vuelve más tarde", no un 500.
+  suspendido: (): Respuesta => ({ status: 503, cuerpo: { error: "servicio_no_disponible" } }),
 };

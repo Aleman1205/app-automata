@@ -5,8 +5,11 @@ El pipeline (`withEfecto`) es framework-agnóstico y está **probado end-to-end*
 **thin**: traducir `NextRequest → Solicitud`, implementar los 3 puertos con servicios
 reales, y montar las `route.ts`. Nada de la seguridad se decide aquí — solo se conecta.
 
-> Esto **no está construido** (necesita Clerk + Neon + Upstash vivos). Es el contrato
-> exacto de cómo se cablea. Difiere igual que Clerk (M2) y Stripe (M3).
+> El **adaptador `adaptar()` YA está construido y probado** (`core/src/http/adaptador.ts`,
+> `verify:adaptador:pg`): la traducción `Request → Solicitud → withEfecto → Response` con
+> las reglas de §4 en un solo lugar. Lo que falta (y difiere igual que Clerk/Stripe) es
+> **implementar los 3 puertos con servicios reales** y **montar las `route.ts`** — necesita
+> Clerk + Neon + Upstash vivos.
 
 ## 1. Puertos (impl real)
 
@@ -45,26 +48,25 @@ export default clerkMiddleware(); // configurar matcher para excluir / , /precio
 
 ## 3. `app/api/orgs/[orgId]/automatizaciones/route.ts`
 
+Usa `adaptar()` — que YA arma la Solicitud (cookie, Origin, IP, cuerpo) y trae el
+`catch → 500 sin fuga`. El `route.ts` queda en 2 líneas y **no** re-implementa nada de §4:
+
 ```ts
 import { crearAutomatizacionEP } from "automata-core/http/endpoints";
-import { withEfecto } from "automata-core/http/pipeline";
+import { adaptar } from "automata-core/http/adaptador";
+import { deps, cfg } from "@/lib/automata"; // wiring: {pool,sesion,rate} y {appOrigin,cookieSesion,ipDe}
 
-const handler = withEfecto(crearAutomatizacionEP, deps);
+const manejar = adaptar(crearAutomatizacionEP, deps, cfg);
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await params; // Next 16: params es Promise
-  const r = await handler({
-    metodo: "POST",
-    orgId,                                   // de la RUTA, nunca del cuerpo
-    sesionToken: req.cookies.get("__session")?.value,
-    origen: req.headers.get("origin") ?? undefined,
-    hostEsperado: process.env.APP_ORIGIN,    // SIEMPRE poblado (si falta, CSRF niega)
-    ip: ipDelEdge(req),                      // IP saneada del edge, NO el XFF crudo
-    cuerpo: await req.json().catch(() => undefined),
-  });
-  return Response.json(r.cuerpo, { status: r.status });
+  return manejar(req, orgId);      // orgId de la RUTA, nunca del cuerpo
 }
 ```
+
+> **No** llames `withEfecto` crudo desde el `route.ts`: perderías el `catch → 500` del
+> adaptador (un throw inesperado filtraría stack o caería a un 500 sin formato). `adaptar()`
+> es el único punto de traducción.
 
 ## 4. Reglas que el adaptador DEBE cumplir (o rompe la seguridad probada)
 
@@ -73,9 +75,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ org
   mutación (fail-closed) — no lo dejes `undefined`.
 - **`ip` saneada** por el edge (IP de conexión / último hop del proxy), no el
   `X-Forwarded-For` crudo (spoofable).
-- **Errores inesperados → 500 sin stack.** `withEfecto` re-lanza lo que no es
-  `NoAutorizado`/`CuotaExcedida`; el `route.ts` (o un wrapper) debe `catch` → 500
-  genérico, **nunca** filtrar el mensaje/stack ni caer a 200.
+- **Errores inesperados → 500 sin stack.** `adaptar()` ya hace el `catch` → 500 genérico
+  (`{error:"error_interno"}`), **nunca** filtra mensaje/stack ni cae a 200. `withEfecto`
+  traduce `NoAutorizado`→403, `CuotaExcedida`→402 y `ServicioSuspendido`→503; el resto
+  escapa al 500 del adaptador.
+- **El edge DEBE capar tamaño y timeout del cuerpo.** El adaptador materializa el body
+  (`req.json`) ANTES del rate-limit/authn de `withEfecto` (la capa 0 no cubre la INGESTA),
+  así que un body gigante o a goteo (slowloris) consume recursos aunque la request termine
+  denegada. Vercel capa ~4.5 MB; en self-host, configurar el límite en el proxy.
+- **Los puertos NUNCA lanzan.** `Esquema.analizar` siempre devuelve `{ok:false,problemas}`
+  (un throw sería 500 en vez de 400); `RateLimiter.permitir` siempre devuelve `false` para
+  negar (un throw sería 500 en vez de 429, y además fail-OPEN si se capturara mal).
 - **Un solo camino con efecto.** Todo `route.ts` con efecto delega en `withEfecto`.
   Añade un test que escanee `app/api/**/route.ts` y falle si algún verbo mutante no
   pasa por el registro — la garantía anti-olvido (BFLA/BOLA) real de docs/14 §2.

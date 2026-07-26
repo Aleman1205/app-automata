@@ -3,6 +3,7 @@ import { conOrg } from "../db/pg.ts";
 import { assertCan, necesitaStepUp, NoAutorizado, type Accion, type Membresia } from "../auth/roles.ts";
 import { leerMembresia } from "../auth/membresia.ts";
 import { CuotaExcedida } from "../billing/cuota.ts";
+import { ServicioSuspendido } from "../ops/killswitch.ts";
 import { type Contexto, type Esquema, type Metodo, type RateLimiter, type Respuesta, type Sesion, type Solicitud, R } from "./tipos.ts";
 
 // El ÚNICO camino para un handler CON EFECTO. Compone las 8 capas de docs/13 §3,
@@ -35,8 +36,10 @@ export interface Endpoint<T> {
 export function withEfecto<T>(ep: Endpoint<T>, deps: Deps): (s: Solicitud) => Promise<Respuesta> {
   const ahora = deps.ahora ?? Date.now;
   return async (s) => {
-    // 0. rate-limit (por IP saneada; cae a token/anon).
-    const clave = s.ip ?? s.sesionToken ?? "anon";
+    // 0. rate-limit por IP saneada. Si falta la IP, cae a 'anon' (cubeta compartida,
+    //    fail-closed) — NUNCA al token de la cookie, que el atacante elige sin autenticar
+    //    y le dejaría rotar cubetas para evadir el límite (revisión adversarial).
+    const clave = s.ip ?? "anon";
     if (!(await deps.rate.permitir(clave))) return R.rate();
 
     // 1. authn — Clerk verifica el JWT en el SERVIDOR; sin identidad válida → 401.
@@ -82,6 +85,7 @@ export function withEfecto<T>(ep: Endpoint<T>, deps: Deps): (s: Solicitud) => Pr
     } catch (e) {
       if (e instanceof NoAutorizado) return R.prohibido(e.message);
       if (e instanceof CuotaExcedida) return R.cuota(e.message);
+      if (e instanceof ServicioSuspendido) return R.suspendido(); // kill-switch/org → 503, no 500
       throw e; // inesperado → el adaptador lo mapea a 500 sin filtrar stack (nunca a 200)
     }
   };
