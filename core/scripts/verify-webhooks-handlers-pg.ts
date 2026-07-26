@@ -36,7 +36,6 @@ async function main() {
     await admin.query("INSERT INTO versiones (automatizacion_id, org_id, numero, estado, tipo, cma_session_id, creada) VALUES ($1,$2,$3,'building',$4,$5, now() - interval '5 min')", [AUTO, A, numero, tipo, sid]);
   };
   const estadoVer = (sid: string) => admin.query<{ estado: string; ak: string | null; id: string }>("SELECT id, estado, artefacto_key AS ak FROM versiones WHERE cma_session_id=$1", [sid]).then((r) => r.rows[0]);
-  const ajustes = () => admin.query<{ n: number }>("SELECT ajustes_usados AS n FROM automatizaciones WHERE id=$1", [AUTO]).then((r) => r.rows[0]?.n ?? -1);
   const estadoSub = () => admin.query<{ e: string }>("SELECT estado AS e FROM subscriptions WHERE org_id=$1", [A]).then((r) => r.rows[0]?.e);
 
   try {
@@ -54,28 +53,33 @@ async function main() {
     check("resolver_sesion_cma (SECURITY DEFINER) SÍ resuelve cross-org → 1 fila", viaResolver === 1);
     check("automata_app NO puede llamar el resolver (revocado) → 42501", await app.query("SELECT resolver_sesion_cma('x')").then(() => false).catch((e) => (e as { code?: string }).code === "42501"));
 
-    console.log("\n1. CMA ÉXITO (como rol no-super): building→lista + consume ajuste + clave:");
-    const aj0 = await ajustes();
-    await enTx((c) => procesarCma(c, evCma("session.completed", "sess_ok")));
-    const vok = await estadoVer("sess_ok");
-    check("la versión pasó a 'lista' (el handler NO fue no-op bajo RLS)", vok?.estado === "lista");
-    check("consumió el ajuste", (await ajustes()) === aj0 + 1);
-    check("fijó la clave determinista del artefacto", vok?.ak === `artefactos/${vok?.id}.json`);
+    const enOutbox = (sid: string) => admin.query<{ n: number }>("SELECT count(*)::int AS n FROM cosecha_pendiente WHERE session_id=$1", [sid]).then((r) => r.rows[0]?.n ?? 0);
 
-    console.log("\n2. CMA FALLO: building→failed (libera el 'en vuelo'):");
+    console.log("\n1. CMA status_idled (tipo REAL): ENCOLA en el outbox, NO confirma in-tx:");
+    await enTx((c) => procesarCma(c, evCma("session.status_idled", "sess_ok")));
+    check("la versión sigue 'building' (la cosecha la hace el drainer, no el webhook)", (await estadoVer("sess_ok"))?.estado === "building");
+    check("encoló en cosecha_pendiente (idempotente por session_id)", (await enOutbox("sess_ok")) === 1);
+    await enTx((c) => procesarCma(c, evCma("session.status_idled", "sess_ok"))); // duplicado
+    check("un status_idled duplicado NO crea segunda fila (ON CONFLICT)", (await enOutbox("sess_ok")) === 1);
+
+    console.log("\n2. CMA status_terminated (tipo REAL): building→failed in-tx (libera el 'en vuelo'):");
     await seedVersion("sess_fail", "cambio", 2);
-    await enTx((c) => procesarCma(c, evCma("session.failed", "sess_fail")));
+    await enTx((c) => procesarCma(c, evCma("session.status_terminated", "sess_fail")));
     check("la versión pasó a 'failed'", (await estadoVer("sess_fail"))?.estado === "failed");
+    check("un fallo NO encola cosecha", (await enOutbox("sess_fail")) === 0);
 
-    console.log("\n3. Robustez CMA (no-op ante tipo/sesión desconocidos; alerta éxito-tras-reaper):");
+    console.log("\n3. Robustez CMA (informativo/desconocido/sesión desconocida; alerta idle-tras-reaper):");
     await seedVersion("sess_unk", "cambio", 3);
-    await enTx((c) => procesarCma(c, evCma("session.log", "sess_unk")));
-    check("tipo informativo → no-op (sigue 'building')", (await estadoVer("sess_unk"))?.estado === "building");
-    await enTx((c) => procesarCma(c, evCma("session.completed", "sess_inexistente")));
+    await enTx((c) => procesarCma(c, evCma("session.outcome_evaluation_ended", "sess_unk")));
+    check("tipo informativo → no-op (sigue 'building', sin outbox)", (await estadoVer("sess_unk"))?.estado === "building" && (await enOutbox("sess_unk")) === 0);
+    await enTx((c) => procesarCma(c, evCma("session.frobnicate", "sess_unk"))); // tipo inventado
+    check("tipo NO reconocido → no-op + incidente (sigue 'building')", (await estadoVer("sess_unk"))?.estado === "building");
+    check("...y dejó un incidente 'webhook_desconocido'", (await admin.query<{ n: number }>("SELECT count(*)::int AS n FROM incidentes WHERE tipo='webhook_desconocido'")).rows[0]!.n >= 1);
+    await enTx((c) => procesarCma(c, evCma("session.status_idled", "sess_inexistente")));
     check("sesión desconocida → no-op (no lanza)", true);
     await admin.query("UPDATE versiones SET estado='failed' WHERE cma_session_id='sess_unk'"); // reaper la mató
-    await enTx((c) => procesarCma(c, evCma("session.completed", "sess_unk"))); // éxito tras reaper → alerta+no-op
-    check("éxito tras reaper: no revive la versión (sigue 'failed')", (await estadoVer("sess_unk"))?.estado === "failed");
+    await enTx((c) => procesarCma(c, evCma("session.status_idled", "sess_unk"))); // idle tras reaper → alerta+no-op
+    check("idle tras reaper: no revive la versión (sigue 'failed'), no encola", (await estadoVer("sess_unk"))?.estado === "failed" && (await enOutbox("sess_unk")) === 0);
 
     console.log("\n4. Stripe (como rol no-super): estado de la suscripción con guard MONÓTONO:");
     await enTx((c) => procesarStripe(c, evStripe("invoice.payment_failed", "cus_123", 100)));
@@ -91,6 +95,8 @@ async function main() {
     await enTx((c) => procesarStripe(c, evStripe("invoice.payment_failed", "cus_desconocido", 500)));
     check("customer no mapeado → no-op (no lanza)", true);
   } finally {
+    await admin.query("DELETE FROM cosecha_pendiente WHERE org_id = $1", [A]).catch(() => {}); // outbox: sin FK a orgs
+    await admin.query("DELETE FROM incidentes WHERE org_id = $1 OR org_id IS NULL", [A]).catch(() => {});
     await admin.query("DELETE FROM orgs WHERE id = $1", [A]).catch(() => {});
     await admin.end(); await wh.end(); await app.end();
   }

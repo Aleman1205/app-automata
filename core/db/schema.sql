@@ -249,6 +249,19 @@ CREATE TABLE IF NOT EXISTS incidentes (
 );
 CREATE INDEX IF NOT EXISTS idx_incidentes_abiertos ON incidentes (severidad, cuando) WHERE resuelto IS NULL;
 
+-- Outbox de cosecha (a3): el webhook thin de CMA solo ENCOLA aquí (session_id PK = dedupe);
+-- un drainer (owner) hace el fetch de CMA + descarga + R2 + confirmarAjuste FUERA de la tx del
+-- receptor (el I/O externo no debe colgar su tx ni el pool). Nivel plataforma (sin RLS): lo
+-- inserta el webhook y lo drena el dueño. org_id viene del resolver FIRMADO (no del payload).
+CREATE TABLE IF NOT EXISTS cosecha_pendiente (
+  session_id  text PRIMARY KEY,
+  version_id  uuid NOT NULL,
+  auto_id     uuid NOT NULL,
+  org_id      uuid NOT NULL,
+  intentos    int  NOT NULL DEFAULT 0,
+  creada      timestamptz NOT NULL DEFAULT now()
+);
+
 -- Dedupe de webhooks entrantes (docs/13 §4): nivel PLATAFORMA, sin org_id (no RLS).
 -- La lo escribe el receptor de webhooks con la conexión de DUEÑO (corre sin usuario);
 -- el rol de app no lo toca. El PK hace el dedupe atómico (INSERT ON CONFLICT DO NOTHING).
@@ -300,6 +313,8 @@ REVOKE INSERT, UPDATE, DELETE ON suspensiones  FROM automata_app;
 REVOKE ALL ON bitacora_kill FROM automata_app;
 -- Incidentes: el app NO toca la tabla; solo emite vía el SD app_registrar_incidente (abajo).
 REVOKE ALL ON incidentes FROM automata_app;
+-- Outbox de cosecha: la escribe el webhook y la drena el dueño; el app no la toca.
+REVOKE ALL ON cosecha_pendiente FROM automata_app;
 -- EL RECICLADOR (docs/06 §3, hallazgo ALTA de la revisión): el REVOKE UPDATE protege
 -- la fila, pero NO su existencia — borrar y recrear reseteaba entregada, ajustes_usados
 -- y ciclo_estado (ventana gratis + 3 ajustes nuevos, en bucle, con builds reales de
@@ -492,6 +507,10 @@ END $$;
 -- SECURITY DEFINER de arriba). Nada de GRANT ALL: lo justo para el receptor + los handlers.
 GRANT USAGE ON SCHEMA public TO automata_webhook;
 GRANT INSERT ON webhook_events TO automata_webhook;                     -- dedupe (no-org, sin RLS)
+-- INSERT + SELECT: el ON CONFLICT (session_id) DO NOTHING del handler necesita SELECT para
+-- leer el índice árbitro (sin él: "permission denied", aunque haya INSERT). El outbox no tiene
+-- secretos (ids de sesión/versión/org ya resueltos por el SD firmado); leerlo es benigno.
+GRANT INSERT, SELECT ON cosecha_pendiente TO automata_webhook;
 GRANT SELECT, UPDATE (estado, artefacto_key) ON versiones TO automata_webhook; -- confirmar/fallar
 GRANT SELECT ON automatizaciones TO automata_webhook;                  -- estadoDelCiclo
 GRANT SELECT, UPDATE (estado, ultimo_evento_ts) ON subscriptions TO automata_webhook; -- Stripe

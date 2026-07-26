@@ -1,6 +1,6 @@
 import { type PoolClient } from "pg";
 import { type Evento } from "./receptor.ts";
-import { confirmarAjuste, fallarAjuste } from "../ciclo/servicio.ts";
+import { fallarAjuste } from "../ciclo/servicio.ts";
 import { emitirEnTx } from "../ops/incidentes.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -11,42 +11,35 @@ import { emitirEnTx } from "../ops/incidentes.ts";
 // el rol no-super veía/mutaba 0 filas → no-op permanente (hallazgo ALTA de la revisión).
 // ─────────────────────────────────────────────────────────────────────────────
 
-// HALLAZGO (docs Managed Agents §webhooks): el webhook de CMA es THIN y sus data.type
-// REALES son `session.status_idled` (agente terminó/espera), `session.status_terminated`
-// (error terminal) y `session.outcome_evaluation_ended` (grader terminó una iteración).
-// NINGUNO dice si el build PASÓ: eso solo se sabe re-consultando la sesión
-// (outcome_evaluations[].result === "satisfied") — eso vive en CmaBuildClient.cosechar().
-// Por eso este handler NO puede confirmar/fallar por el tipo de evento como hace hoy:
-// se reescribe en el hito de COSECHA (webhook → cosechar → ensamblar Artefacto → R2 →
-// confirmar). Las allowlists de abajo son de NOMBRES INVENTADOS (pre-hallazgo): NO hacen
-// daño porque un evento real cae en "tipo NO reconocido" → no-op + ALERTA (falla seguro,
-// no mis-confirma), pero quedan aquí solo hasta ese hito. Los reales, para referencia:
-//   éxito-candidato: session.status_idled   (requiere cosechar para confirmar)
-//   fallo terminal:  session.status_terminated
-//   informativo:     session.outcome_evaluation_ended, session.status_run_started, ...
-const CMA_EXITO = new Set(["session.completed", "session.succeeded", "session.ready"]);
-const CMA_FALLO = new Set(["session.failed", "session.errored", "session.expired", "session.canceled", "session.cancelled", "session.stopped"]);
-// Tipos informativos de CMA que se ignoran a propósito (no gatean nada). Ajustar al cablear.
-const CMA_IGNORAR = new Set(["session.started", "session.log", "session.progress", "event"]);
+// data.type REALES de CMA (docs Managed Agents §webhooks). El webhook es THIN: NO dice si el
+// build PASÓ — eso lo decide cosechar() re-consultando la sesión (outcome_evaluations). Por eso:
+//   · status_idled     → ENCOLA en cosecha_pendiente (outbox); el drainer cosecha FUERA de esta
+//                        tx (el I/O externo a CMA/R2 no debe colgar la tx del receptor ni el pool).
+//   · status_terminated→ error terminal → fallarAjuste in-tx (UPDATE barato, libera el 'en vuelo').
+//   · resto            → informativos (grader por iteración, arranques, threads): no-op.
+const CMA_COSECHA = "session.status_idled";
+const CMA_FALLO = "session.status_terminated";
+const CMA_IGNORAR = new Set(["session.status_scheduled", "session.status_run_started", "session.outcome_evaluation_ended", "session.thread_created", "session.thread_idled"]);
 
 async function fijarOrg(c: PoolClient, org: string): Promise<void> {
   await c.query("SELECT set_config('app.current_org', $1, true)", [org]);
 }
 
 /**
- * Fin de build de CMA. Resuelve sesión FIRMADA → versión por resolver SD (cross-org),
- * fija app.current_org y cierra el ciclo (FALLO → fallarAjuste, libera el "en vuelo" YA;
- * ÉXITO → confirmarAjuste + clave del artefacto). Un ÉXITO que llega tras el reaper (versión
- * ya 'failed') se ALERTA (entregable pagado perdido). Tipo desconocido → alerta, no-op.
+ * Webhook de fin/estado de sesión de CMA. Resuelve sesión FIRMADA → versión por el resolver SD
+ * (cross-org). Un `status_idled` sobre una versión 'building' se ENCOLA en el outbox (idempotente
+ * por session_id); el drainer hará el fetch de CMA + R2 + confirmarAjuste. `status_terminated`
+ * falla el ajuste in-tx. Un idle tras el reaper (ya 'failed') = entregable pagado perdido → alerta.
+ * Tipo desconocido → incidente + no-op (falla seguro).
  */
 export async function procesarCma(c: PoolClient, evento: Evento): Promise<void> {
   if (evento.recurso.fuente !== "cma") return;
-  const exito = CMA_EXITO.has(evento.tipo);
-  const fallo = CMA_FALLO.has(evento.tipo);
-  if (!exito && !fallo) {
+  const cosecha = evento.tipo === CMA_COSECHA;
+  const fallo = evento.tipo === CMA_FALLO;
+  if (!cosecha && !fallo) {
     if (!CMA_IGNORAR.has(evento.tipo)) {
-      // Incidente durable (a2): un tipo no reconocido = build que podría colgarse; que ops
-      // lo vea en minutos, no a las 6h del reaper. Sin org aún (pre-resolución) → org_id NULL.
+      // Tipo no reconocido = build que podría colgarse; incidente durable (a2) para que ops lo
+      // vea en minutos, no a las 6h del reaper. Sin org aún (pre-resolución) → org_id NULL.
       await emitirEnTx(c, { tipo: "webhook_desconocido", severidad: "media", detalle: `CMA data.type no reconocido: '${evento.tipo}'` });
       console.error(`[webhook:cma] tipo NO reconocido '${evento.tipo}' — confirmar la allowlist contra los docs de CMA (build podría quedar colgado).`);
     }
@@ -60,25 +53,25 @@ export async function procesarCma(c: PoolClient, evento: Evento): Promise<void> 
   const v = r.rows[0];
   if (!v) return; // sesión desconocida → ack, no-op
   if (v.estado !== "building") {
-    // Ya resuelta. Un ÉXITO tras el reaper (ya 'failed') = build pagado no entregado → reconciliar.
-    if (exito && v.estado === "failed") {
-      // Incidente durable (a2). Aún sin fijarOrg → se pasa v.org_id (SD: coalesce con p_org).
-      await emitirEnTx(c, { tipo: "pago_no_entregado", severidad: "alta", orgId: v.org_id, autoId: v.auto_id, versionId: v.version_id, detalle: "éxito de CMA tras reaper: versión ya 'failed'" });
-      console.error(`[webhook:cma] ÉXITO tras reaper: versión ${v.version_id} ya 'failed' — build pagado NO entregado, reconciliar.`);
+    // Ya resuelta. Un idle/cosecha tras el reaper (ya 'failed') = build pagado no entregado.
+    if (cosecha && v.estado === "failed") {
+      await emitirEnTx(c, { tipo: "pago_no_entregado", severidad: "alta", orgId: v.org_id, autoId: v.auto_id, versionId: v.version_id, detalle: "idle de CMA tras reaper: versión ya 'failed'" });
+      console.error(`[webhook:cma] idle tras reaper: versión ${v.version_id} ya 'failed' — build pagado NO entregado, reconciliar.`);
     }
-    return;
+    return; // 'lista' (ya cosechada) → no-op idempotente
   }
 
-  await fijarOrg(c, v.org_id);
   if (fallo) {
-    await fallarAjuste(c, v.auto_id, v.version_id); // libera el "en vuelo" sin esperar el reaper
+    await fijarOrg(c, v.org_id); // fallarAjuste opera bajo RLS
+    await fallarAjuste(c, v.auto_id, v.version_id); // libera el 'en vuelo' sin esperar el reaper
     return;
   }
-  await confirmarAjuste(c, v.auto_id, v.version_id); // building→lista + consume ajuste (savepoint anti-brick)
-  // Clave determinista (los bytes los sube el pipeline a R2 en esta misma clave; ejecutar la
-  // recomputa de version.id). PENDIENTE (revisión): al cablear R2, verificar que los bytes
-  // existan ANTES de dejar la versión 'lista' (evitar 'lista' no ejecutable).
-  await c.query("UPDATE versiones SET artefacto_key = 'artefactos/' || id || '.json' WHERE id = $1", [v.version_id]);
+  // COSECHA: encolar en el outbox (idempotente por session_id PK). NO se cosecha aquí — el
+  // drainer (owner) hace el I/O externo fuera de la tx del receptor. org_id del resolver FIRMADO.
+  await c.query(
+    "INSERT INTO cosecha_pendiente (session_id, version_id, auto_id, org_id) VALUES ($1,$2,$3,$4) ON CONFLICT (session_id) DO NOTHING",
+    [evento.recurso.sessionId, v.version_id, v.auto_id, v.org_id],
+  );
 }
 
 // Eventos de Stripe cuyo TIPO determina el estado sin leer el payload.
