@@ -1,6 +1,7 @@
 import type {
   Artefacto,
   BuildClient,
+  BuildClientAsync,
   CodigoConstruido,
   Ejecucion,
   Resultado,
@@ -75,6 +76,34 @@ export async function construir(
     return { version, artefacto, costoUsd, iteraciones };
   } catch (e) {
     // Compensación (no enmascara el error original si ella misma falla).
+    await deps.state.desactivarAutomatizacion(auto.id).catch(() => {});
+    throw e;
+  }
+}
+
+/** Build-start ASÍNCRONO (a3): la versión analoga de `construir` para producción. Gatea el
+ *  ejemplo, RESERVA la versión 'building' con la vista (cobrar_build cobra la generación),
+ *  ARRANCA la sesión de CMA y graba su id (write-once). NO espera: el webhook encola y el
+ *  drainer cosecha. Compensa (desactiva la automatización) ante cualquier fallo del arranque. */
+export async function arrancarConstruccion(
+  deps: { state: StateRepo; cosechador: BuildClientAsync; ahora: () => string },
+  args: { orgId: string; nombre: string; spec: Spec; vista: Vista; ejemploPath: string; ejemploExt?: string; contratoTexto?: string },
+): Promise<{ version: Version; sessionId: string }> {
+  await gatearEjemplo(args.ejemploPath, { nombre: args.nombre, extension: args.ejemploExt }); // a4
+  const auto = await deps.state.crearAutomatizacion({ orgId: args.orgId, nombre: args.nombre });
+  try {
+    // RESERVA antes de gastar: crear la versión (cobrar_build) ANTES de abrir la sesión de CMA.
+    const version = await deps.state.crearVersion({ automatizacionId: auto.id, numero: 1, estado: "building", vista: args.vista, creada: deps.ahora() });
+    let sessionId: string;
+    try {
+      ({ sessionId } = await deps.cosechador.arrancar(args.spec, args.ejemploPath, args.contratoTexto));
+    } catch (e) {
+      await deps.state.actualizarVersion(version.id, { estado: "failed" });
+      throw e;
+    }
+    await deps.state.fijarSesionCma(version.id, sessionId); // write-once vía el SD
+    return { version, sessionId };
+  } catch (e) {
     await deps.state.desactivarAutomatizacion(auto.id).catch(() => {});
     throw e;
   }

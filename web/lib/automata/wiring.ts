@@ -6,6 +6,9 @@ import { type Pool } from "pg";
 import { timingSafeEqual } from "node:crypto";
 import { crearPool, crearPoolApp } from "automata-core/db/pg";
 import { reaparBuildsColgados } from "automata-core/ciclo/servicio";
+import { drenarCosecha, type CosechaDeps } from "automata-core/pipeline/cosecha";
+import { CmaBuildClient } from "automata-core/cma/build";
+import { R2Storage, crearClienteR2 } from "automata-core/storage/r2";
 import { adaptar, type ConfigAdaptador } from "automata-core/http/adaptador";
 import { type Deps, type Endpoint } from "automata-core/http/pipeline";
 import { type Sesion, type RateLimiter } from "automata-core/http/tipos";
@@ -150,5 +153,27 @@ export async function cronReaper(req: Request): Promise<Response> {
   if (!autorizadoCron(req)) return new Response(JSON.stringify({ error: "no_autorizado" }), { status: 401, headers: { "content-type": "application/json" } });
   const reapeados = await reaparBuildsColgados(getPoolOwner());
   return new Response(JSON.stringify({ reapeados }), { status: 200, headers: { "content-type": "application/json" } });
+}
+
+// ── Cron de cosecha (a3): drena el outbox → cosecha en CMA → sube a R2 → confirma ──
+// Deps LAZY (no tocan env al importar): CmaBuildClient (ANTHROPIC_API_KEY) + R2Storage se
+// construyen al invocar, para que `next build` no falle sin credenciales.
+function getCosechaDeps(): CosechaDeps {
+  return {
+    pool: getPoolOwner(),
+    cosechador: new CmaBuildClient(),
+    storage: new R2Storage(
+      crearClienteR2({ accountId: env("R2_ACCOUNT_ID"), accessKeyId: env("R2_ACCESS_KEY_ID"), secretAccessKey: env("R2_SECRET_ACCESS_KEY"), bucket: env("R2_BUCKET") }),
+      env("R2_BUCKET"),
+    ),
+  };
+}
+
+/** Ruta de cron (Vercel Cron): drena el outbox de cosecha. Cierra el loop async del build
+ *  (webhook encoló → aquí se cosecha). Auth por CRON_SECRET; corre con el pool DUEÑO. */
+export async function cronCosecha(req: Request): Promise<Response> {
+  if (!autorizadoCron(req)) return new Response(JSON.stringify({ error: "no_autorizado" }), { status: 401, headers: { "content-type": "application/json" } });
+  const r = await drenarCosecha(getCosechaDeps());
+  return new Response(JSON.stringify(r), { status: 200, headers: { "content-type": "application/json" } });
 }
 

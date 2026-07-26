@@ -6,10 +6,15 @@
 // write-once, el app no puede INSERTAR cma_session_id).
 //   ADMIN_URL=... DATABASE_URL=... npm run verify:cosecha:pg
 // ─────────────────────────────────────────────────────────────────────────────
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { crearPool, conOrg } from "../src/db/pg.ts";
 import { PgStateRepo } from "../src/state/pg.ts";
 import { cosecharYConfirmar, drenarCosecha, type CosechaDeps } from "../src/pipeline/cosecha.ts";
-import type { BuildClientAsync, ResultadoCosecha, Storage, Vista } from "../src/types.ts";
+import { arrancarConstruccion } from "../src/pipeline/build-pipeline.ts";
+import { reaparBuildsColgados } from "../src/ciclo/servicio.ts";
+import type { ArranqueBuild, BuildClientAsync, ResultadoCosecha, Spec, Storage, Vista } from "../src/types.ts";
 
 const ADMIN_URL = process.env.ADMIN_URL ?? "postgres://postgres@127.0.0.1:55432/postgres";
 const APP_URL = process.env.DATABASE_URL ?? "postgres://automata_app@127.0.0.1:55432/postgres";
@@ -32,10 +37,12 @@ class FakeStorage implements Storage {
 }
 class FakeCosechador implements BuildClientAsync {
   r = new Map<string, ResultadoCosecha>();
+  sessionIdArranque = "sess_arranque";
   async build(): Promise<never> { throw new Error("no usado"); }
-  async arrancar(): Promise<never> { throw new Error("no usado"); }
+  async arrancar(): Promise<ArranqueBuild> { return { sessionId: this.sessionIdArranque }; }
   async cosechar(sid: string): Promise<ResultadoCosecha> { return this.r.get(sid) ?? { estado: "en_curso" }; }
 }
+const spec: Spec = { objetivo: "demo", reglas: [], criterios_exito: [], entradas: [] };
 
 async function main() {
   const admin = crearPool(ADMIN_URL);
@@ -125,6 +132,25 @@ async function main() {
       catch (e) { return (e as { code?: string }).code; }
     });
     check("el app NO puede INSERTAR cma_session_id (columna fuera del GRANT) → 42501", insDirecto === "42501");
+
+    console.log("\n8. arrancarConstruccion (build-start async): reserva + arranca + graba cma_session_id:");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cosecha-"));
+    const csv = path.join(dir, "m.csv"); await fs.writeFile(csv, "producto,ingreso\nTaco,100\n");
+    cosechador.sessionIdArranque = "sess_arr_1";
+    const { version: vArr } = await arrancarConstruccion({ state: new PgStateRepo(app, A), cosechador, ahora: () => new Date().toISOString() }, { orgId: A, nombre: "Nueva auto", spec, vista, ejemploPath: csv });
+    const r8 = await uno("SELECT estado, cma_session_id AS sid, (vista IS NOT NULL) AS tiene_vista FROM versiones WHERE id=$1", [vArr.id]);
+    check("la versión quedó 'building' con cma_session_id grabado", r8?.["estado"] === "building" && r8?.["sid"] === "sess_arr_1");
+    check("persistió la vista para la cosecha", r8?.["tiene_vista"] === true);
+    check("resolver_sesion_cma la mapea (el webhook podrá encontrarla)", (await uno("SELECT version_id FROM resolver_sesion_cma('sess_arr_1')"))?.["version_id"] === vArr.id);
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+
+    console.log("\n9. El reaper limpia el outbox de los builds que mata (a3-s4):");
+    const vr = await admin.query<{ id: string }>("INSERT INTO versiones (automatizacion_id,org_id,numero,estado,creada) VALUES ($1,$2,20,'building', now() - interval '2 hours') RETURNING id", [AUTO, A]);
+    const vReap = vr.rows[0]!.id;
+    await admin.query("INSERT INTO cosecha_pendiente (session_id,version_id,auto_id,org_id) VALUES ('s_reap',$1,$2,$3)", [vReap, AUTO, A]);
+    await reaparBuildsColgados(admin, 60); // marca 'failed' los building > 60 min
+    check("el reaper marcó 'failed' el build colgado", (await estadoVer(vReap))?.["estado"] === "failed");
+    check("...y sacó su fila del outbox de cosecha", (await enOutbox("s_reap")) === 0);
   } finally {
     await admin.query("DELETE FROM cosecha_pendiente WHERE org_id=$1", [A]).catch(() => {});
     await admin.query("DELETE FROM incidentes WHERE org_id=$1", [A]).catch(() => {});

@@ -295,5 +295,11 @@ export async function reaparBuildsColgados(owner: Pool, minutos?: number): Promi
   for (const v of r.rows) {
     await registrarIncidente(owner, { tipo: "build_colgado", severidad: "alta", orgId: v.org_id, autoId: v.automatizacion_id, versionId: v.id, detalle: `build 'building' > ${min} min → failed (webhook perdido / CMA colgado)` }).catch(() => {});
   }
+  // a3-s4: saca del outbox de cosecha las versiones que el reaper mató. Sin esto, un
+  // status_idled tardío ya encolado haría que el drainer gaste una llamada a CMA para
+  // toparse con que la versión ya está 'failed' (no-op). Se limpia proactivamente.
+  if (r.rows.length > 0) {
+    await owner.query("DELETE FROM cosecha_pendiente WHERE version_id = ANY($1)", [r.rows.map((v) => v.id)]).catch(() => {});
+  }
   return r.rowCount ?? 0;
 }

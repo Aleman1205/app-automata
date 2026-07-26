@@ -297,6 +297,25 @@ export class CmaBuildClient implements BuildClientAsync {
     // reconstruye aquí (no hubo stream); la fuente autoritativa es la consola / la
     // API de uso — mismo caveat que el spike (run.js subcuenta ~1.4×).
     const codigo = await this.descargarCodigo(sessionId);
-    return { estado: "satisfecho", codigo, costoUsd: 0, iteraciones: c.iteraciones };
+    return { estado: "satisfecho", codigo, costoUsd: await this.reconstruirCosto(sessionId), iteraciones: c.iteraciones };
+  }
+
+  // Reconstruye el costo del build asíncrono re-listando los eventos de la sesión y sumando
+  // el de cada model_request (mismo cálculo que el stream síncrono). BEST-EFFORT: si el SDK
+  // no expone events.list o falla, devuelve 0 + log — el costo es OBSERVABILIDAD, NUNCA gatea
+  // la entrega; la consola es la fuente autoritativa (run.js subcuenta ~1.4×).
+  private async reconstruirCosto(sessionId: string): Promise<number> {
+    try {
+      const resp = (await this.client.beta.sessions.events.list(sessionId)) as any;
+      const eventos: any[] = Array.isArray(resp) ? resp : resp?.data ?? [];
+      let total = 0;
+      for (const ev of eventos) {
+        if (ev?.type === "span.model_request_end" && ev.model_usage) total += costoDe(ev.model_usage);
+      }
+      return total;
+    } catch (e) {
+      this.log(`no se pudo reconstruir el costo de ${sessionId} (observabilidad, no gatea): ${(e as { message?: string })?.message ?? e}`);
+      return 0;
+    }
   }
 }
