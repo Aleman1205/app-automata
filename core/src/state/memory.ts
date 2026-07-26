@@ -25,6 +25,10 @@ export class MemoryStateRepo implements StateRepo {
     return auto;
   }
 
+  async desactivarAutomatizacion(_id: string): Promise<void> {
+    // Memoria no aplica cuota de espacios; la compensación de `construir` es no-op aquí.
+  }
+
   async crearVersion(v: Omit<Version, "id">): Promise<Version> {
     const version: Version = { ...v, id: this.id("ver") };
     this.versiones.set(version.id, version);

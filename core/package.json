@@ -20,6 +20,7 @@
     "verify:killswitch:pg": "tsx scripts/verify-killswitch-pg.ts",
     "verify:ventana:pg": "tsx scripts/verify-ventana-pg.ts",
     "verify:reparaciones:pg": "tsx scripts/verify-reparaciones-pg.ts",
+    "verify:pgstate:pg": "tsx scripts/verify-pgstate-pg.ts",
     "verify:pg": "tsx scripts/verify-pg.ts",
     "verify:cuota:pg": "tsx scripts/verify-cuota-pg.ts",
     "m0": "tsx scripts/run-m0.ts",

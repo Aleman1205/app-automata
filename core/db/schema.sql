@@ -246,12 +246,14 @@ REVOKE ALL ON bitacora_kill FROM automata_app;
 -- ~$52 MXN cada uno). El app no borra nunca: archivar es activa=false (docs/06 §9).
 REVOKE DELETE ON automatizaciones FROM automata_app;
 REVOKE DELETE ON versiones        FROM automata_app;  -- el ledger de builds no se borra
--- El app NO reescribe el ledger de versiones: solo transiciona `estado` (building→lista/
--- failed). Con UPDATE abierto podía `SET tipo='cambio'` o `SET creada=<mes pasado>` para
--- resetear el contador del circuit breaker → reparaciones gratis ilimitadas (ALTA). Mismo
--- patrón column-scoped que automatizaciones (nombre/activa).
+-- El app NO reescribe el ledger de versiones: solo transiciona `estado` (building→ready/
+-- lista/failed) y fija `artefacto_key` al terminar el build (el pipeline lo guarda tras
+-- subir el artefacto). Con UPDATE abierto podía `SET tipo='cambio'` o `SET creada=<mes
+-- pasado>` para resetear el contador del circuit breaker → reparaciones gratis ilimitadas
+-- (ALTA). tipo/creada/automatizacion_id/numero/org_id NO son escribibles: eso blinda el
+-- contador. Mismo patrón column-scoped que automatizaciones (nombre/activa).
 REVOKE UPDATE ON versiones FROM automata_app;
-GRANT  UPDATE (estado) ON versiones TO automata_app;
+GRANT  UPDATE (estado, artefacto_key) ON versiones TO automata_app;
 REVOKE DELETE ON ejecuciones      FROM automata_app;  -- ni el de runs (facturación)
 
 -- Org viva de la sesión, robusta: '' o no-seteada → NULL → fail-closed (0 filas).
@@ -640,3 +642,19 @@ CREATE TRIGGER trg_presupuesto_build BEFORE INSERT ON versiones
 DROP TRIGGER IF EXISTS trg_kill_run ON ejecuciones;
 CREATE TRIGGER trg_kill_run BEFORE INSERT ON ejecuciones
   FOR EACH ROW EXECUTE FUNCTION verificar_kill_switch('ejecuciones');
+
+-- Tope DURO de ejecuciones (docs/11 §8: "corta, no solo alarma"), en la BD como los
+-- builds. Sin esto, el camino real del run (PgStateRepo.crearEjecucion) solo disparaba el
+-- kill-switch y NADIE consumía la cuota → el tope no existía (hallazgo ALTA). app_consumir
+-- exige subscription activa. Cobra al RESERVAR (antes de correr), como el build.
+CREATE OR REPLACE FUNCTION cobrar_ejecucion() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
+BEGIN
+  IF NEW.org_id IS DISTINCT FROM app_current_org() THEN RETURN NEW; END IF;  -- dueño: bypass
+  PERFORM app_consumir(to_char(now(), 'YYYY-MM'), 'ejecuciones');
+  RETURN NEW;
+END $fn$;
+-- 'kill_run' ('k') corre ANTES que 'presupuesto_run' ('p'): si está congelado, no cobra.
+DROP TRIGGER IF EXISTS trg_presupuesto_run ON ejecuciones;
+CREATE TRIGGER trg_presupuesto_run BEFORE INSERT ON ejecuciones
+  FOR EACH ROW EXECUTE FUNCTION cobrar_ejecucion();

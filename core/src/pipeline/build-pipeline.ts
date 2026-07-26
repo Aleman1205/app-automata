@@ -34,35 +34,45 @@ export async function construir(
   deps: Deps,
   args: { orgId: string; nombre: string; spec: Spec; vista: Vista; ejemploPath: string; contratoTexto?: string },
 ): Promise<{ version: Version; artefacto: Artefacto; costoUsd: number; iteraciones: number }> {
+  // crearAutomatizacion COMMITea con activa=true (consume un espacio del plan). Si algo
+  // posterior falla, la automatización queda activa SIN build → agotaría los espacios y
+  // ladrillaría la org (el rol de app no puede borrarla). Por eso todo lo que sigue va en
+  // un try que COMPENSA desactivándola (devuelve el espacio) ante cualquier fallo.
   const auto = await deps.state.crearAutomatizacion({ orgId: args.orgId, nombre: args.nombre });
-  let version = await deps.state.crearVersion({
-    automatizacionId: auto.id,
-    numero: 1,
-    estado: "building",
-    creada: deps.ahora(),
-  });
-
-  let codigo: CodigoConstruido;
-  let costoUsd: number;
-  let iteraciones: number;
-  let aprobado: boolean;
   try {
-    ({ codigo, costoUsd, iteraciones, aprobado } = await deps.build.build(args.spec, args.ejemploPath, args.contratoTexto));
+    let version = await deps.state.crearVersion({
+      automatizacionId: auto.id,
+      numero: 1,
+      estado: "building",
+      creada: deps.ahora(),
+    });
+
+    let codigo: CodigoConstruido;
+    let costoUsd: number;
+    let iteraciones: number;
+    let aprobado: boolean;
+    try {
+      ({ codigo, costoUsd, iteraciones, aprobado } = await deps.build.build(args.spec, args.ejemploPath, args.contratoTexto));
+    } catch (e) {
+      await deps.state.actualizarVersion(version.id, { estado: "failed" });
+      throw e;
+    }
+    if (!aprobado) {
+      await deps.state.actualizarVersion(version.id, { estado: "failed" });
+      throw new Error("El Verifier no aprobó el build.");
+    }
+
+    const artefacto: Artefacto = { ...codigo, vista: args.vista };
+    const key = artefactoKey(version.id);
+    await deps.storage.put(key, JSON.stringify(artefacto));
+    version = await deps.state.actualizarVersion(version.id, { estado: "ready", artefactoKey: key });
+
+    return { version, artefacto, costoUsd, iteraciones };
   } catch (e) {
-    await deps.state.actualizarVersion(version.id, { estado: "failed" });
+    // Compensación (no enmascara el error original si ella misma falla).
+    await deps.state.desactivarAutomatizacion(auto.id).catch(() => {});
     throw e;
   }
-  if (!aprobado) {
-    await deps.state.actualizarVersion(version.id, { estado: "failed" });
-    throw new Error("El Verifier no aprobó el build.");
-  }
-
-  const artefacto: Artefacto = { ...codigo, vista: args.vista };
-  const key = artefactoKey(version.id);
-  await deps.storage.put(key, JSON.stringify(artefacto));
-  version = await deps.state.actualizarVersion(version.id, { estado: "ready", artefactoKey: key });
-
-  return { version, artefacto, costoUsd, iteraciones };
 }
 
 /** Ejecuta un artefacto sobre insumos y devuelve el Resultado ya resuelto. */
@@ -76,7 +86,11 @@ export async function ejecutar(
   if (!args.version.artefactoKey) {
     throw new Error("La versión no tiene artefacto (¿el build terminó bien?).");
   }
-  const artefacto = JSON.parse(await deps.storage.getText(args.version.artefactoKey)) as Artefacto;
+  // La clave se RECOMPUTA de version.id (determinista), NO se lee de version.artefactoKey:
+  // con el rol de app escribible (GRANT UPDATE(artefacto_key)) y el Storage sin org-scope,
+  // confiar en la columna dejaría a un app comprometido apuntar al artefacto de otra org.
+  // version.id solo se obtiene de la propia org (RLS), así que es una clave segura.
+  const artefacto = JSON.parse(await deps.storage.getText(artefactoKey(args.version.id))) as Artefacto;
 
   // RESERVA→CORRE→CONFIRMA: el asiento en `ejecuciones` se crea ANTES de correr el
   // código de IA. En Postgres ese INSERT dispara trg_kill_run (y con RLS lo hace en

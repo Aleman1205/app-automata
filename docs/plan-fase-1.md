@@ -109,6 +109,21 @@ para la garantía anti-olvido — el contrato exacto está en
 **Prueba:** signup real; el test de **aislamiento cross-tenant** (docs/11 §10) —
 A no puede leer nada de B — ahora **contra Neon**; `A lee objeto de B por API → 404/403`.
 
+**✅ Construido — `PgStateRepo`** (`verify:pgstate:pg` 24/24): la implementación Postgres del
+puerto `StateRepo`, que por primera vez corre el **pipeline (build→artefacto→run→vista) contra
+la BD bajo el rol de app**, conectando las dos mitades que se probaban por separado. Ligado a
+una org; cada método por `conOrg`. Ahora los triggers disparan de verdad desde el pipeline: v1
+cobra generación, sella la entrega, el kill-switch y la cuota cortan, RLS aísla. Su revisión
+adversarial (9 hallazgos, 2 ALTA) obligó a: **compensar la automatización huérfana** (`construir`
+desactiva la auto si el build falla — si no, N fallos agotan los espacios y ladrillan la org);
+**tope de ejecuciones en la BD** (trigger `cobrar_ejecucion`, antes NADIE consumía la cuota en el
+camino real → cierra el 🟡 de docs/14 §3); **recomputar la clave del artefacto** de `version.id`
+(no confiar en la columna, que un app comprometido podía apuntar a otra org); y assert de org en
+`crearAutomatizacion`. **Abierto (→ wiring):** `construir` no es idempotente (un reintento del
+orquestador doble-cobra → necesita clave de idempotencia de Inngest); `afirmarRolSeguro` debe
+llamarse al abrir el pool de la app; errores de suscripción (morosa/cancelada) llegan crudos
+(falta clase tipada); y `resultadoKey`/`versionActual` del tipo no tienen columna (alinear).
+
 ### M3 — Billing + cuotas
 **Objetivo:** cobrar y capear.
 **Construyes:** Stripe (planes), **verificación de firma de webhooks** (CMA +

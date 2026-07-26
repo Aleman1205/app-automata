@@ -133,7 +133,9 @@ export interface Artefacto {
 
 // ── Registros de estado (schema mínimo M0). Neon en M2; en M0 en memoria. ──
 
-export type EstadoBuild = "queued" | "building" | "ready" | "failed";
+// 'ready' lo escribe el pipeline (build inicial); 'lista' el servicio de ciclo (ajustes).
+// Ambos = "el cliente ya la puede usar" (trg_marcar_entrega acepta los dos).
+export type EstadoBuild = "queued" | "building" | "ready" | "lista" | "failed";
 
 export interface Automatizacion {
   id: string;
@@ -176,6 +178,9 @@ export interface Storage {
 /** Estado. Memoria/archivo en M0; Postgres/Neon con RLS en M2. */
 export interface StateRepo {
   crearAutomatizacion(a: Omit<Automatizacion, "id">): Promise<Automatizacion>;
+  /** Desactiva (activa=false) una automatización: la compensación de `construir` cuando el
+   *  build falla, para devolver el espacio del plan (una activa sin build lo consumiría). */
+  desactivarAutomatizacion(id: string): Promise<void>;
   crearVersion(v: Omit<Version, "id">): Promise<Version>;
   actualizarVersion(id: string, cambios: Partial<Version>): Promise<Version>;
   crearEjecucion(e: Omit<Ejecucion, "id">): Promise<Ejecucion>;
