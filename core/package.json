@@ -37,6 +37,7 @@
     "verify:adaptador:pg": "tsx scripts/verify-adaptador-pg.ts",
     "verify:rutas": "tsx scripts/verify-rutas.ts",
     "verify:storage": "tsx scripts/verify-storage.ts",
+    "verify:sandbox": "tsx scripts/verify-run-sandbox.ts",
     "verify:cma": "tsx scripts/verify-cma-clasificar.ts",
     "verify:webhooks:handlers:pg": "tsx scripts/verify-webhooks-handlers-pg.ts",
     "verify:pg": "tsx scripts/verify-pg.ts",
