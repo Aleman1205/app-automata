@@ -159,6 +159,9 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   estado              text NOT NULL DEFAULT 'activa' CHECK (estado IN ('activa','morosa','cancelada')),
   stripe_customer_id  text,
   periodo_fin         timestamptz,
+  -- Guard MONÓTONO anti out-of-order de Stripe: el ts (epoch) del último evento aplicado.
+  -- Un evento más VIEJO (reintento/retraso) no puede regresar el estado (docs/13 §4).
+  ultimo_evento_ts    bigint,
   creada              timestamptz NOT NULL DEFAULT now()
 );
 
@@ -262,7 +265,10 @@ REVOKE DELETE ON versiones        FROM automata_app;  -- el ledger de builds no 
 -- (ALTA). tipo/creada/automatizacion_id/numero/org_id NO son escribibles: eso blinda el
 -- contador. Mismo patrón column-scoped que automatizaciones (nombre/activa).
 REVOKE UPDATE ON versiones FROM automata_app;
-GRANT  UPDATE (estado, artefacto_key, cma_session_id) ON versiones TO automata_app;
+-- El app NO escribe cma_session_id (columna UNIQUE global): podría pre-reclamar la sesión
+-- de otra org y secuestrar el despacho del webhook (hallazgo de la revisión). Lo graba el
+-- build-start por un camino de confianza con el id que devuelve CMA (no elegible por el app).
+GRANT  UPDATE (estado, artefacto_key) ON versiones TO automata_app;
 REVOKE DELETE ON ejecuciones      FROM automata_app;  -- ni el de runs (facturación)
 
 -- Org viva de la sesión, robusta: '' o no-seteada → NULL → fail-closed (0 filas).
@@ -395,6 +401,47 @@ BEGIN
   RETURN QUERY SELECT v_estado, v_usados, v_gratis, v_tipo;
 END $fn$;
 GRANT EXECUTE ON FUNCTION app_consumir_ajuste(uuid) TO automata_app;
+
+-- ── Camino de WEBHOOKS (docs/13 §4) ─────────────────────────────────────────
+-- El pool de webhooks corre con un rol DEDICADO no-super (automata_webhook) sujeto a
+-- FORCE RLS. Para descubrir la org (que aún no conoce) necesita LEER cross-org — imposible
+-- bajo RLS sin contexto. Estos RESOLVERS son SECURITY DEFINER (dueño = quien aplica el
+-- schema, que bypassa RLS), así que resuelven cross-org SIN que el rol de webhook bypasee
+-- nada. Después, el handler fija app.current_org y reusa confirmarAjuste/fallarAjuste (que
+-- funcionan bajo RLS con el contexto puesto). Sin esto, el handler veía 0 filas → no-op
+-- permanente en prod (hallazgo ALTA de la revisión, reproducido con un dueño no-super).
+CREATE OR REPLACE FUNCTION resolver_sesion_cma(p_sid text)
+RETURNS TABLE (version_id uuid, auto_id uuid, org_id uuid, estado text)
+LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+  SELECT id, automatizacion_id, org_id, estado FROM versiones WHERE cma_session_id = p_sid
+$fn$;
+CREATE OR REPLACE FUNCTION resolver_org_stripe(p_cust text)
+RETURNS uuid LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+  SELECT org_id FROM subscriptions WHERE stripe_customer_id = p_cust
+$fn$;
+
+-- Rol del pool de webhooks: no-super, no-dueño (afirmarRolSeguro lo acepta), con los
+-- privilegios MÍNIMOS para el receptor + los handlers, y sujeto a RLS (por eso necesita
+-- los resolvers y app.current_org). NO puede leer cross-org por sí mismo.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'automata_webhook') THEN
+    CREATE ROLE automata_webhook LOGIN NOSUPERUSER NOBYPASSRLS;
+  ELSE
+    ALTER ROLE automata_webhook LOGIN NOSUPERUSER NOBYPASSRLS;
+  END IF;
+END $$;
+
+-- Privilegios MÍNIMOS del rol de webhooks (sujeto a RLS; resuelve cross-org solo por los
+-- SECURITY DEFINER de arriba). Nada de GRANT ALL: lo justo para el receptor + los handlers.
+GRANT USAGE ON SCHEMA public TO automata_webhook;
+GRANT INSERT ON webhook_events TO automata_webhook;                     -- dedupe (no-org, sin RLS)
+GRANT SELECT, UPDATE (estado, artefacto_key) ON versiones TO automata_webhook; -- confirmar/fallar
+GRANT SELECT ON automatizaciones TO automata_webhook;                  -- estadoDelCiclo
+GRANT SELECT, UPDATE (estado, ultimo_evento_ts) ON subscriptions TO automata_webhook; -- Stripe
+GRANT EXECUTE ON FUNCTION app_consumir_ajuste(uuid), en_ventana_gratis(uuid),
+  resolver_sesion_cma(text), resolver_org_stripe(text) TO automata_webhook;
+-- Los resolvers cross-org SOLO para el rol de webhook (no el app ni PUBLIC).
+REVOKE EXECUTE ON FUNCTION resolver_sesion_cma(text), resolver_org_stripe(text) FROM PUBLIC;
 
 -- Congelado VOLUNTARIO ("esta ya quedó", docs/08 §3). Va por función porque el app
 -- perdió el UPDATE sobre ciclo_estado (si lo tuviera, podría des-congelarse y

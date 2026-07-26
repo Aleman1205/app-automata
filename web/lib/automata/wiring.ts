@@ -3,7 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 import { type Pool } from "pg";
-import { crearPool, crearPoolApp } from "automata-core/db/pg";
+import { crearPoolApp } from "automata-core/db/pg";
 import { adaptar, type ConfigAdaptador } from "automata-core/http/adaptador";
 import { type Deps, type Endpoint } from "automata-core/http/pipeline";
 import { type Sesion, type RateLimiter } from "automata-core/http/tipos";
@@ -95,13 +95,15 @@ export function ruta<T>(ep: Endpoint<T>): (req: Request, ctx: CtxRuta) => Promis
   };
 }
 
-// ── Webhooks (CMA / Stripe): OTRO camino — cuerpo CRUDO + firma HMAC + conexión de DUEÑO ──
-// El pool de DUEÑO NO usa crearPoolApp: el dueño es super/dueño de las tablas y
-// afirmarRolSeguro lo rechazaría; el receptor lo necesita para mutar subscriptions/
-// webhook_events (revocados al rol de app).
-let poolOwnerP: Promise<Pool> | undefined;
-function getPoolOwner(): Promise<Pool> {
-  return (poolOwnerP ??= Promise.resolve(crearPool(env("DATABASE_URL_OWNER"))));
+// ── Webhooks (CMA / Stripe): OTRO camino — cuerpo CRUDO + firma HMAC ──
+// Pool con el rol DEDICADO `automata_webhook` (no-super, no-dueño, sujeto a RLS): resuelve
+// la org cross-org SOLO por los resolvers SECURITY DEFINER y luego opera bajo RLS con
+// app.current_org. crearPoolApp lo AFIRMA seguro igual que el rol de app (afirmarRolSeguro
+// acepta no-super/no-bypass/no-dueño). Antes se usaba el rol DUEÑO → los handlers eran
+// no-op bajo FORCE RLS (hallazgo ALTA de la revisión).
+let poolWebhookP: Promise<Pool> | undefined;
+function getPoolWebhook(): Promise<Pool> {
+  return (poolWebhookP ??= crearPoolApp(env("DATABASE_URL_WEBHOOK")));
 }
 
 /** Handler de ruta de webhook: verifica firma sobre el cuerpo CRUDO, deduplica y despacha
@@ -114,7 +116,7 @@ export async function webhook(fuente: "cma" | "stripe", req: Request): Promise<R
       ? { verificar: (raw, h) => verificarStandardWebhook(raw, h, env("CMA_WEBHOOK_SECRET"), Date.now()) }
       : { verificar: (raw, h) => verificarStripe(raw, h["stripe-signature"] ?? "", env("STRIPE_WEBHOOK_SECRET"), Date.now()) };
   const procesar = fuente === "cma" ? procesarCma : procesarStripe;
-  const r = await recibir({ rawBody, headers }, { verificador, fuente, pool: await getPoolOwner() }, procesar);
+  const r = await recibir({ rawBody, headers }, { verificador, fuente, pool: await getPoolWebhook() }, procesar);
   // rechazado → 401 (firma) / 400 (JSON); ilegible/duplicado/aceptado → 200 (ack, corta reintentos).
   const status = r.estado === "rechazado" ? (r.motivo.startsWith("firma") ? 401 : 400) : 200;
   return new Response(JSON.stringify({ estado: r.estado }), { status, headers: { "content-type": "application/json" } });

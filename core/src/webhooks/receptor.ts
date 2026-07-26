@@ -30,6 +30,7 @@ export interface Evento {
   id: string; // clave de dedupe (webhook-id firmado en CMA; evt.id firmado en Stripe)
   tipo: string; // data.type (CMA) / type (Stripe)
   recurso: Recurso;
+  ts?: number; // epoch (s) del evento — guard monótono anti out-of-order (Stripe `created`)
 }
 
 export type Resultado =
@@ -67,7 +68,8 @@ function extraerEvento(fuente: "cma" | "stripe", parsed: unknown, idFirmado?: st
   const oo = typeof obj === "object" && obj !== null ? (obj as Record<string, unknown>) : {};
   const customerId = typeof oo["customer"] === "string" ? (oo["customer"] as string) : undefined;
   const subscriptionId = typeof oo["id"] === "string" ? (oo["id"] as string) : undefined;
-  return { id, tipo, recurso: { fuente: "stripe", customerId, subscriptionId } };
+  const created = typeof o["created"] === "number" ? (o["created"] as number) : undefined; // epoch (s) del evento
+  return { id, tipo, recurso: { fuente: "stripe", customerId, subscriptionId }, ts: created };
 }
 
 /**
