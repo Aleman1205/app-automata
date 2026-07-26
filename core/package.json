@@ -35,6 +35,7 @@
     "verify:killswitch:pg": "tsx scripts/verify-killswitch-pg.ts",
     "verify:offboarding:pg": "tsx scripts/verify-offboarding-pg.ts",
     "verify:incidentes:pg": "tsx scripts/verify-incidentes-pg.ts",
+    "verify:cosecha:pg": "tsx scripts/verify-cosecha-pg.ts",
     "verify:ventana:pg": "tsx scripts/verify-ventana-pg.ts",
     "verify:reparaciones:pg": "tsx scripts/verify-reparaciones-pg.ts",
     "verify:pgstate:pg": "tsx scripts/verify-pgstate-pg.ts",
