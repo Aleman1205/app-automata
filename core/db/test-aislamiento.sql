@@ -69,6 +69,22 @@ BEGIN
     RAISE NOTICE 'PASS · DELETE revocado para el rol de app (42501), ni propio ni cross-org';
   END;
 
+  -- a1 (auditoría): el rol de app tampoco BORRA ni CREA una org. RLS se lo dejaría (policy
+  -- orgs id=app_current_org()) y el ON DELETE CASCADE arrasaría el ledger "inmutable".
+  BEGIN
+    DELETE FROM orgs WHERE id = a;
+    RAISE EXCEPTION 'FALLO: el rol de app pudo BORRAR su propia org (cascade al ledger)';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS · DELETE ON orgs revocado (42501): el tenant no se auto-borra';
+  END;
+
+  BEGIN
+    INSERT INTO orgs (nombre) VALUES ('intrusa');
+    RAISE EXCEPTION 'FALLO: el rol de app pudo CREAR una org';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS · INSERT ON orgs revocado (42501): el app no crea tenants';
+  END;
+
   -- Re-etiquetado: no puede mover una fila PROPIA (A) a la org B (WITH CHECK).
   BEGIN
     UPDATE automatizaciones SET org_id = b WHERE id = a1;
@@ -103,7 +119,7 @@ BEGIN
   RAISE NOTICE 'PASS · fail-closed: sin org en la sesión no ve nada';
 
   RESET ROLE;
-  RAISE NOTICE '── AISLAMIENTO CROSS-TENANT: 10/10 ✓ ──';
+  RAISE NOTICE '── AISLAMIENTO CROSS-TENANT: 12/12 ✓ ──';
 END $$;
 
 ROLLBACK;

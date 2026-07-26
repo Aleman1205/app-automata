@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS orgs (
   nombre  text NOT NULL,
   creada  timestamptz NOT NULL DEFAULT now()
 );
+-- El app NUNCA crea ni borra un tenant (REVOKE INSERT/DELETE ON orgs, abajo): el alta
+-- y la purga son owner-only. Los hijos son ON DELETE CASCADE a propósito, para que la
+-- purga owner-only (offboarding/GDPR) barra todo de una; por eso el CASCADE se conserva.
 -- El plan NO vive aquí: la fuente de verdad de facturación es `subscriptions`
 -- (una fila por org), para no duplicar el plan en dos lugares (deriva que la
 -- auditoría de docs/14 marcó como vector). Ver más abajo.
@@ -96,9 +99,14 @@ CREATE TABLE IF NOT EXISTS versiones (
 );
 ALTER TABLE versiones ADD COLUMN IF NOT EXISTS tipo text;
 ALTER TABLE versiones ADD COLUMN IF NOT EXISTS cma_session_id text;
+-- Idempotente de verdad: una constraint UNIQUE se respalda con un índice homónimo, así que
+-- re-agregarla lanza `duplicate_table` (42P07), NO `duplicate_object` (42710) — el guard por
+-- excepción no la cazaba y abortaba TODO el resto del schema. Chequear pg_constraint sí.
 DO $$ BEGIN
-  ALTER TABLE versiones ADD CONSTRAINT versiones_cma_session_key UNIQUE (cma_session_id);
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'versiones_cma_session_key') THEN
+    ALTER TABLE versiones ADD CONSTRAINT versiones_cma_session_key UNIQUE (cma_session_id);
+  END IF;
+END $$;
 DO $$ BEGIN
   ALTER TABLE versiones ADD CONSTRAINT versiones_tipo_chk CHECK (tipo IN ('cambio','reparacion'));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -240,6 +248,15 @@ REVOKE CREATE ON SCHEMA public FROM automata_app;
 
 GRANT USAGE ON SCHEMA public TO automata_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO automata_app;
+-- a1 (auditoría de riesgo): el app NUNCA crea ni borra un TENANT. RLS se lo permitiría
+-- (policy `orgs` USING/WITH CHECK id = app_current_org()): podría INSERTAR su propia fila
+-- o BORRARLA, y el ON DELETE CASCADE de los hijos (memberships/automatizaciones/versiones/
+-- ejecuciones/subscriptions/…) arrasaría el ledger "inmutable" EVADIENDO los REVOKE DELETE
+-- de abajo — el cascade de RI corre como dueño del constraint y no respeta ni privilegios
+-- de tabla del invocador ni RLS. Alta y purga del tenant son owner-only (offboarding/GDPR,
+-- docs/04 §4). Va DESPUÉS del GRANT de arriba, o el blanket lo re-otorga en silencio.
+REVOKE DELETE ON orgs FROM automata_app;
+REVOKE INSERT ON orgs FROM automata_app;
 -- El rol de app NO muta su propio plan ni resetea sus contadores: solo lectura +
 -- consumo vía función. El plan lo cambia el dueño/webhook de Stripe (bypassa RLS).
 REVOKE INSERT, UPDATE, DELETE ON planes        FROM automata_app;

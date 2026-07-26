@@ -122,6 +122,40 @@ async function main() {
     });
     check("el app NO puede borrar automatizaciones (revocado, 42501)", del === "42501");
 
+    // a1 (auditoría): el app tampoco borra ni crea su PROPIA org. RLS se lo dejaría
+    // (policy orgs id=app_current_org()) y el ON DELETE CASCADE arrasaría el ledger. Cada
+    // intento en su PROPIO conOrg: un 42501 aborta la tx (25P02), no se pueden encadenar.
+    const delOrgA = await conOrg(app, A, async (c) => {
+      try { await c.query("DELETE FROM orgs WHERE id = $1", [A]); return "permitido"; }
+      catch (e) { return (e as { code?: string }).code; }
+    });
+    check("el app NO puede borrar su PROPIA org (revocado, 42501)", delOrgA === "42501");
+
+    const delOrgB = await conOrg(app, A, async (c) => {
+      try { await c.query("DELETE FROM orgs WHERE id = $1", [B]); return "permitido"; }
+      catch (e) { return (e as { code?: string }).code; }
+    });
+    check("el app NO puede borrar OTRA org (42501)", delOrgB === "42501");
+
+    const insOrg = await conOrg(app, A, async (c) => {
+      try { await c.query("INSERT INTO orgs (id, nombre) VALUES (gen_random_uuid(), 'x')"); return "permitido"; }
+      catch (e) { return (e as { code?: string }).code; }
+    });
+    check("el app NO puede CREAR una org (INSERT revocado, 42501)", insOrg === "42501");
+
+    // El REVOKE no fue más ancho de la cuenta: las orgs siguen intactas (conteo por admin,
+    // no por el pool app scopeado — RLS daría verde falso) y el app CONSERVA el DELETE de
+    // memberships (expulsión, endpoints.ts). Sin esto, un REVOKE de más rompería quitar gente.
+    const orgsVivas = await admin.query<{ n: number }>("SELECT count(*)::int AS n FROM orgs WHERE id = ANY($1)", [[A, B]]);
+    check("las orgs siguen intactas tras los intentos bloqueados (2)", orgsVivas.rows[0]?.n === 2);
+
+    await admin.query("INSERT INTO memberships (org_id, user_id, rol) VALUES ($1,'u_tmp','operador')", [A]);
+    const delMemb = await conOrg(app, A, async (c) => {
+      try { const r = await c.query("DELETE FROM memberships WHERE org_id = $1 AND user_id = 'u_tmp'", [A]); return r.rowCount; }
+      catch (e) { return (e as { code?: string }).code; }
+    });
+    check("el app SÍ conserva DELETE de memberships (expulsión) — borró 1", delMemb === 1);
+
     let fkBloqueado = false;
     try {
       await conOrg(app, A, async (c) => {
