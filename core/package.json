@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "description": "Motor del producto (Fase 1, M0): el loop build -> artefacto -> run -> vista. Framework-agnostico; se envuelve en API routes de Next mas adelante.",
+  "exports": {
+    "./http/adaptador": "./src/http/adaptador.ts",
+    "./http/pipeline": "./src/http/pipeline.ts",
+    "./http/endpoints": "./src/http/endpoints.ts",
+    "./http/tipos": "./src/http/tipos.ts",
+    "./db/pg": "./src/db/pg.ts",
+    "./webhooks/receptor": "./src/webhooks/receptor.ts",
+    "./webhooks/firma": "./src/webhooks/firma.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "verify": "tsx scripts/verify-run-vista.ts",
@@ -22,6 +31,7 @@
     "verify:reparaciones:pg": "tsx scripts/verify-reparaciones-pg.ts",
     "verify:pgstate:pg": "tsx scripts/verify-pgstate-pg.ts",
     "verify:adaptador:pg": "tsx scripts/verify-adaptador-pg.ts",
+    "verify:rutas": "tsx scripts/verify-rutas.ts",
     "verify:pg": "tsx scripts/verify-pg.ts",
     "verify:cuota:pg": "tsx scripts/verify-cuota-pg.ts",
     "m0": "tsx scripts/run-m0.ts",

@@ -9,17 +9,24 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@clerk/nextjs": "^6.34.0",
+    "@upstash/ratelimit": "^2.0.6",
+    "@upstash/redis": "^1.35.4",
+    "automata-core": "file:../core",
     "lenis": "^1.3.25",
     "lucide-react": "^1.25.0",
     "motion": "^12.42.2",
     "next": "16.2.10",
+    "pg": "^8.13.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "recharts": "^3.9.2"
+    "recharts": "^3.9.2",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.11.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
