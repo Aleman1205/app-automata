@@ -32,9 +32,10 @@ const rate: RateLimiter = {
   },
 };
 
-// Deps del pool: automata_app (no-dueño) + afirmarRolSeguro al arrancar (docs/11 §6).
-const pool = crearPool(process.env.DATABASE_URL!); // → rol automata_app en Neon
-await afirmarRolSeguro(pool); // fatal si es superuser/bypassrls
+// Deps del pool: crearPoolApp OBLIGA afirmarRolSeguro (docs/11 §6) — abre el pool y
+// AFIRMA que el rol es no-dueño; si la URL apunta a un superusuario/BYPASSRLS (RLS
+// quedaría inerte), lanza al ARRANCAR, no en silencio. Nunca usar crearPool a secas aquí.
+const pool = await crearPoolApp(process.env.DATABASE_URL!); // → rol automata_app en Neon
 const deps: Deps = { pool, sesion, rate };
 ```
 

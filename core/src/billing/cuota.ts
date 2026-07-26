@@ -97,14 +97,16 @@ async function consumir(c: PoolClient, periodo: string, recurso: "generaciones" 
   }
 }
 
-/** Consume una GENERACIÓN del mes (build que llega a `ready`). Corta al límite.
- *  Debe llamarse UNA vez por build, en la misma tx que registra la versión. */
+// ⚠️ INTERNO / TEST — NO llamar en producción. El cobro de cuota es 100% de los TRIGGERS
+// de la BD (cobrar_build al INSERT en versiones; cobrar_ejecucion al INSERT en ejecuciones),
+// que son la fuente ÚNICA. Estos wrappers llaman app_consumir directamente y existen solo
+// para EJERCER esa función en las pruebas (TOCTOU, reset mensual, morosa/cancelada). Llamarlos
+// además del trigger sería DOBLE-COBRO.
+/** [test] Consume una generación vía app_consumir directamente. */
 export function consumirGeneracion(c: PoolClient, periodo: string): Promise<number> {
   return consumir(c, periodo, "generaciones");
 }
-
-/** Consume una EJECUCIÓN del mes. Tope DURO que corta (docs/11 §8). Debe llamarse
- *  en la misma tx que inserta la fila de ejecuciones (ledger), para no divergir. */
+/** [test] Consume una ejecución vía app_consumir directamente. */
 export function consumirEjecucion(c: PoolClient, periodo: string): Promise<number> {
   return consumir(c, periodo, "ejecuciones");
 }

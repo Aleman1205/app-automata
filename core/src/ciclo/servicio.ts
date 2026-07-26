@@ -1,4 +1,5 @@
 import { type Pool, type PoolClient } from "pg";
+import { type EstadoBuild } from "../types.ts";
 import { type Ciclo, type CicloEstado, type ResultadoRegresion, type TipoAjuste, ajustesRestantes, clasificar, puedeAjustar } from "./estados.ts";
 import { comoCuota } from "../billing/cuota.ts";
 import { comoSuspension } from "../ops/killswitch.ts";
@@ -54,6 +55,16 @@ function fila1<T>(r: { rows: T[] }): T | undefined {
   return r.rows[0];
 }
 
+// ── Reaper de builds huérfanos ───────────────────────────────────────────────
+const REAP_PISO_MIN = 30;     // NUNCA reaper-ear builds más frescos que esto (protege el "en vuelo")
+const REAP_DEFAULT_MIN = 360; // 6h: muy por encima del build de CMA más lento (~10 min + cola/reintentos)
+/** Umbral de "build muerto" saneado: entero ≥ piso, o el default. Clamp defensivo — nunca
+ *  reaper-ea builds frescos (staleMin ≤ 0 o no-entero → default). NO alimentar desde un request. */
+function minStale(v: number | undefined): number {
+  const n = Math.trunc(Number(v ?? REAP_DEFAULT_MIN));
+  return Number.isFinite(n) && n >= REAP_PISO_MIN ? n : REAP_DEFAULT_MIN;
+}
+
 const aEstado = (c: Ciclo, gratis = false, hasta: string | null = null, enRevision = false): EstadoCiclo => ({
   estado: c.estado,
   ajustesUsados: c.ajustesUsados,
@@ -106,7 +117,7 @@ export interface Iniciado {
  * llamador. Guarda: automatización activa, sin otra versión 'building', y —para un
  * cambio— ready con ajustes disponibles. Crea la versión 'building' sin consumir.
  */
-export async function iniciarAjuste(c: PoolClient, autoId: string, regresion: ResultadoRegresion): Promise<Iniciado> {
+export async function iniciarAjuste(c: PoolClient, autoId: string, regresion: ResultadoRegresion, opts?: { staleMin?: number }): Promise<Iniciado> {
   // Solo automatizaciones ACTIVAS y de ESTA org (RLS). activa=false = solo lectura (docs/06 §9).
   const r = await c.query<FilaCiclo & { org_id: string }>(
     `SELECT ciclo_estado, ajustes_usados, org_id, en_ventana_gratis(id) AS gratis,
@@ -118,7 +129,18 @@ export async function iniciarAjuste(c: PoolClient, autoId: string, regresion: Re
   const f = fila1(r);
   if (!f) throw new AutomatizacionNoDisponible();
 
-  // Un solo build en vuelo por automatización (anti-spam + evita versiones paralelas).
+  // AUTO-SANACIÓN (reaper): un build 'building' AÑEJO quedó huérfano (el proceso murió o
+  // el webhook de fin de build nunca llegó). Sin esto, la guarda "un build en vuelo" de
+  // abajo rechazaría TODO ajuste posterior para siempre (AjusteEnCurso) → automatización
+  // ladrillada. Se marca 'failed' (la generación ya se cobró al arrancar: no se reembolsa,
+  // docs/06 §4). Corre bajo el FOR UPDATE de arriba, así que serializa con otros iniciar.
+  const staleMin = minStale(opts?.staleMin);
+  await c.query(
+    "UPDATE versiones SET estado = 'failed' WHERE automatizacion_id = $1 AND estado = 'building' AND creada < now() - ($2 || ' minutes')::interval",
+    [autoId, staleMin],
+  );
+
+  // Un solo build en vuelo RECIENTE por automatización (anti-spam + evita versiones paralelas).
   const enCurso = await c.query("SELECT 1 FROM versiones WHERE automatizacion_id = $1 AND estado = 'building'", [autoId]);
   if ((enCurso.rowCount ?? 0) > 0) throw new AjusteEnCurso();
 
@@ -169,7 +191,16 @@ export async function confirmarAjuste(c: PoolClient, autoId: string, versionId: 
     "UPDATE versiones SET estado = 'lista' WHERE id = $1 AND automatizacion_id = $2 AND estado = 'building' RETURNING id",
     [versionId, autoId],
   );
-  if ((upd.rowCount ?? 0) === 0) return estadoDelCiclo(c, autoId); // ya confirmada/fallida/ajena → no re-consumir
+  if ((upd.rowCount ?? 0) === 0) {
+    // 0 filas = ya confirmada (webhook duplicado, benigno), ajena, o 'failed'. Si está
+    // 'failed' pero el caller creía que el build COMPLETÓ, es un entregable PAGADO perdido:
+    // el reaper la marcó por lenta, o el build falló y llegó tarde. No se traga en silencio.
+    const est = await c.query<{ estado: EstadoBuild }>("SELECT estado FROM versiones WHERE id = $1 AND automatizacion_id = $2", [versionId, autoId]);
+    if (est.rows[0]?.estado === "failed") {
+      console.error(`[ciclo] confirmarAjuste sobre versión ${versionId} en 'failed' (¿reaper-eada por lenta?): build pagado NO entregado — reconciliar/re-entregar.`);
+    }
+    return estadoDelCiclo(c, autoId);
+  }
   // (el paso a 'lista' de la PRIMERA versión sella `entregada` vía trigger: ahí
   //  arranca la ventana de 30 días.)
 
@@ -238,4 +269,21 @@ export async function automatizacionesEnRevision(owner: Pool): Promise<EnRevisio
  */
 export async function limpiarRevision(owner: Pool, autoId: string): Promise<void> {
   await owner.query("UPDATE automatizaciones SET en_revision = NULL WHERE id = $1", [autoId]);
+}
+
+/**
+ * Ops/cron (dueño): barre TODOS los builds 'building' AÑEJOS (más viejos que `minutos`)
+ * → 'failed', en todas las orgs. Backstop proactivo del reaper: iniciarAjuste ya
+ * auto-sana la automatización que el cliente reintenta, pero esto limpia las que nadie
+ * reintenta (para que no queden 'building' colgados y para observabilidad). El primary
+ * fix en producción es cablear fallarAjuste al webhook de fallo de CMA; esto es la red.
+ * Devuelve cuántos reaper-eó.
+ */
+export async function reaparBuildsColgados(owner: Pool, minutos?: number): Promise<number> {
+  const min = minStale(minutos); // clamp: minutos ≤ 0 barrería TODO 'building' de todas las orgs
+  const r = await owner.query(
+    "UPDATE versiones SET estado = 'failed' WHERE estado = 'building' AND creada < now() - ($1 || ' minutes')::interval RETURNING id",
+    [min],
+  );
+  return r.rowCount ?? 0;
 }

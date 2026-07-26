@@ -10,7 +10,27 @@ import { Pool, type PoolClient } from "pg";
 // de app); la garantía PRIMARIA es el rol de login + afirmarRolSeguro().
 
 export function crearPool(url: string): Pool {
-  return new Pool({ connectionString: url });
+  // connectionTimeoutMillis: falla-RÁPIDO si la BD es inalcanzable al arrancar (blackhole
+  // de red), en vez de colgar el bootstrap indefinidamente (revisión adversarial).
+  return new Pool({ connectionString: url, connectionTimeoutMillis: 10_000 });
+}
+
+/**
+ * Abre el pool de la APP y AFIRMA el rol seguro antes de devolverlo. Es la forma
+ * obligatoria de crear el pool de aplicación en producción: si la URL apunta por error
+ * a un rol superusuario/BYPASSRLS (el aislamiento entre clientes quedaría inerte), esto
+ * lanza al ARRANCAR — no en silencio a media operación. Cierra el pool si el guard falla
+ * para no dejar conexiones colgadas.
+ */
+export async function crearPoolApp(url: string): Promise<Pool> {
+  const pool = crearPool(url);
+  try {
+    await afirmarRolSeguro(pool);
+  } catch (e) {
+    await pool.end().catch(() => {});
+    throw e;
+  }
+  return pool;
 }
 
 /**
@@ -29,6 +49,21 @@ export async function afirmarRolSeguro(pool: Pool): Promise<void> {
     throw new Error(
       `Rol de conexión inseguro '${row.usuario}' (superuser=${row.super}, bypassrls=${row.bypass}): ` +
         `RLS quedaría inerte. Conecta con un rol no-dueño NOSUPERUSER NOBYPASSRLS (automata_app). Ver docs/11 §6.`,
+    );
+  }
+  // Punto ciego cerrado (revisión adversarial): un rol DUEÑO de las tablas —aunque NO sea
+  // superuser ni BYPASSRLS— puede `ALTER TABLE ... DISABLE ROW LEVEL SECURITY` y neutralizar
+  // el aislamiento. El rol de app debe tener privilegios pero NO ser dueño (las migraciones
+  // corren como el dueño, aparte). Se rechaza si posee cualquier tabla del esquema public.
+  const own = await pool.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
+       WHERE ns.nspname = 'public' AND c.relkind IN ('r','p')
+         AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)`,
+  );
+  if ((own.rows[0]?.n ?? 0) > 0) {
+    throw new Error(
+      `Rol de conexión '${row.usuario}' es DUEÑO de tablas en 'public': podría DISABLE RLS y ` +
+        `neutralizar el aislamiento. Usa un rol NO-dueño (automata_app); las migraciones corren aparte.`,
     );
   }
 }

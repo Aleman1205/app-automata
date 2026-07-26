@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { crearPool, conOrg } from "../src/db/pg.ts";
 import {
-  iniciarAjuste, confirmarAjuste, fallarAjuste, congelar, estadoDelCiclo,
+  iniciarAjuste, confirmarAjuste, fallarAjuste, congelar, estadoDelCiclo, reaparBuildsColgados,
   AjusteNoPermitido, AjusteEnCurso, AutomatizacionNoDisponible,
 } from "../src/ciclo/servicio.ts";
 import { type Pool, type PoolClient } from "pg";
@@ -21,6 +21,7 @@ const PER = "2026-07";
 const id = (n: number) => `c1000000-0000-0000-0000-00000000000${n}`;
 const CICLO = id(1), INFLIGHT = id(2), FAIL = id(3), CONGELA = id(4), RACE = id(5), INACTIVA = id(6), AJENA = id(7);
 const BRICK_GUARD = id(8), BRICK_ROBUST = id(9), TOCTOU_C = id(0);
+const REAPER = "c1000000-0000-0000-0000-0000000000aa";
 
 let ok = true;
 const check = (n: string, p: boolean) => { console.log(`  ${p ? "✓" : "✗"} ${n}`); ok = ok && p; };
@@ -64,7 +65,7 @@ async function main() {
     // cuota a media prueba — el tope de generaciones lo cubre verify-cuota-pg.ts.
     for (const o of [A, OTRA]) { await admin.query("INSERT INTO orgs (id,nombre) VALUES ($1,'o')", [o]); await admin.query("INSERT INTO subscriptions (org_id,plan) VALUES ($1,'equipo')", [o]); }
     await seedAuto(CICLO); await seedAuto(INFLIGHT); await seedAuto(FAIL); await seedAuto(CONGELA);
-    await seedAuto(RACE); await seedAuto(INACTIVA, false); await seedAuto(BRICK_GUARD); await seedAuto(BRICK_ROBUST); await seedAuto(TOCTOU_C);
+    await seedAuto(RACE); await seedAuto(INACTIVA, false); await seedAuto(BRICK_GUARD); await seedAuto(BRICK_ROBUST); await seedAuto(TOCTOU_C); await seedAuto(REAPER);
     await admin.query("INSERT INTO automatizaciones (id,org_id,nombre) VALUES ($1,$2,'ajena')", [AJENA, OTRA]);
 
     console.log("1. Reserva→confirma: 3 cambios consumen ajuste + generación → frozen:");
@@ -163,6 +164,18 @@ async function main() {
     const rc = await pc;
     check("congelar BLOQUEA hasta el commit del iniciar concurrente (FOR UPDATE)", bloqueo === true);
     check("y luego lo rechaza (AjusteEnCurso), sin frozen+building coexistiendo", rc instanceof AjusteEnCurso);
+
+    console.log("\n12. Reaper: builds 'building' AÑEJOS no ladrillan (auto-sanación + ops):");
+    // Un 'building' añejo (proceso muerto / webhook nunca llegó) sembrado como dueño (que
+    // bypasea la normalización de creada). iniciarAjuste debe reaper-earlo y PROCEDER.
+    await admin.query("INSERT INTO versiones (automatizacion_id,org_id,numero,estado,creada) VALUES ($1,$2,2,'building', now() - interval '2 hours')", [REAPER, A]);
+    const reanudado = await conOrg(app, A, (c) => iniciarAjuste(c, REAPER, "pasa", { staleMin: 60 }));
+    check("un 'building' añejo se reaper-ea y el ajuste PROCEDE (no AjusteEnCurso)", typeof reanudado.versionId === "string");
+    check("el 'building' añejo quedó 'failed'", (await admin.query<{ n: number }>("SELECT count(*)::int AS n FROM versiones WHERE automatizacion_id=$1 AND numero=2 AND estado='failed'", [REAPER])).rows[0]?.n === 1);
+    check("un 'building' RECIENTE (el que acaba de crear) SÍ bloquea (AjusteEnCurso)", await lanza(() => conOrg(app, A, (c) => iniciarAjuste(c, REAPER, "pasa")), AjusteEnCurso));
+    // Barrido de ops entre orgs.
+    await admin.query("INSERT INTO versiones (automatizacion_id,org_id,numero,estado,creada) VALUES ($1,$2,9,'building', now() - interval '3 hours')", [CICLO, A]);
+    check("reaparBuildsColgados (ops) marca los añejos → failed (≥1)", (await reaparBuildsColgados(admin, 60)) >= 1);
 
     console.log("\n10. Backstops de integridad en la BD:");
     check("UNIQUE(automatizacion_id, numero): numero duplicado → error 23505", await (async () => {

@@ -647,6 +647,8 @@ CREATE TRIGGER trg_kill_run BEFORE INSERT ON ejecuciones
 -- builds. Sin esto, el camino real del run (PgStateRepo.crearEjecucion) solo disparaba el
 -- kill-switch y NADIE consumía la cuota → el tope no existía (hallazgo ALTA). app_consumir
 -- exige subscription activa. Cobra al RESERVAR (antes de correr), como el build.
+-- POLÍTICA (explícita): un run que reserva y luego FALLA cuenta igual (cobro al reservar,
+-- sin reembolso) — simétrico con "el que falla paga" de los builds (docs/06 §3).
 CREATE OR REPLACE FUNCTION cobrar_ejecucion() RETURNS trigger
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
 BEGIN

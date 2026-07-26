@@ -8,7 +8,7 @@
 //   ADMIN_URL=postgres://postgres@host/db  DATABASE_URL=postgres://automata_app@host/db  npm run verify:pg
 //   (por defecto apuntan al cluster temporal en 127.0.0.1:55432)
 // ─────────────────────────────────────────────────────────────────────────────
-import { crearPool, conOrg, afirmarRolSeguro } from "../src/db/pg.ts";
+import { crearPool, crearPoolApp, conOrg, afirmarRolSeguro } from "../src/db/pg.ts";
 import { leerMembresia } from "../src/auth/membresia.ts";
 import { assertCan, NoAutorizado, type Membresia } from "../src/auth/roles.ts";
 
@@ -51,7 +51,28 @@ async function main() {
     console.log("0. El rol de la app es seguro (docs/11 §6):");
     let guardOk = true;
     try { await afirmarRolSeguro(app); } catch { guardOk = false; }
-    check("el rol de conexión NO es superuser ni bypassrls", guardOk);
+    check("afirmarRolSeguro ACEPTA el rol de app (no super, no bypassrls)", guardOk);
+    // Y —lo que de verdad importa— RECHAZA un pool superusuario (RLS quedaría inerte):
+    let rechazaSuper = false;
+    try { await afirmarRolSeguro(admin); } catch { rechazaSuper = true; }
+    check("afirmarRolSeguro RECHAZA un pool superusuario (el guard tiene dientes)", rechazaSuper);
+    // crearPoolApp obliga el guard: con la URL de app funciona…
+    check("crearPoolApp abre el pool de app y afirma el rol", await crearPoolApp(APP_URL).then((p) => p.end()).then(() => true).catch(() => false));
+    // …y con la URL de admin (superusuario) FALLA al arrancar (no en silencio).
+    check("crearPoolApp con URL superusuario → falla al arrancar", await crearPoolApp(ADMIN_URL).then(() => false).catch(() => true));
+    // Punto ciego cerrado: un rol DUEÑO no-super (podría DISABLE RLS) también se rechaza.
+    await admin.query("DROP TABLE IF EXISTS probe_rls").catch(() => {});
+    await admin.query("DROP ROLE IF EXISTS probe_owner").catch(() => {});
+    await admin.query("CREATE ROLE probe_owner LOGIN NOSUPERUSER NOBYPASSRLS");
+    await admin.query("CREATE TABLE probe_rls (x int)");
+    await admin.query("ALTER TABLE probe_rls OWNER TO probe_owner");
+    const ownerPool = crearPool(ADMIN_URL.replace(/\/\/[^@/]+@/, "//probe_owner@"));
+    let rechazaOwner = false;
+    try { await afirmarRolSeguro(ownerPool); } catch { rechazaOwner = true; }
+    await ownerPool.end().catch(() => {});
+    await admin.query("DROP TABLE probe_rls").catch(() => {});
+    await admin.query("DROP ROLE probe_owner").catch(() => {});
+    check("afirmarRolSeguro RECHAZA un rol DUEÑO no-super (podría DISABLE RLS)", rechazaOwner);
 
     console.log("\n1. RLS NO es inerte (el hueco que cazó la revisión de M2):");
     const fuera = await app.query("SELECT count(*)::int AS n FROM automatizaciones");
