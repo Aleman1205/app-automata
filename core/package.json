@@ -42,6 +42,7 @@
     "verify:incidentes:pg": "tsx scripts/verify-incidentes-pg.ts",
     "verify:cosecha:pg": "tsx scripts/verify-cosecha-pg.ts",
     "verify:disparo:pg": "tsx scripts/verify-disparo-pg.ts",
+    "verify:lectura:pg": "tsx scripts/verify-lectura-pg.ts",
     "verify:ventana:pg": "tsx scripts/verify-ventana-pg.ts",
     "verify:reparaciones:pg": "tsx scripts/verify-reparaciones-pg.ts",
     "verify:pgstate:pg": "tsx scripts/verify-pgstate-pg.ts",

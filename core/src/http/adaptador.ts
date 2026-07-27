@@ -86,8 +86,11 @@ export function adaptar<T>(ep: Endpoint<T>, deps: Deps, cfg: ConfigAdaptador): (
         origen: req.headers.get("origin") ?? undefined,
         hostEsperado: cfg.appOrigin, // SIEMPRE poblado
         ip: cfg.ipDe(req), // saneada por el edge
-        // El cuerpo solo se lee (y consume el stream) en mutaciones; un GET no trae body.
-        cuerpo: MUTANTES.has(metodo) ? await req.json().catch(() => undefined) : undefined,
+        // Mutaciones: el cuerpo JSON. Lecturas (GET): los query params (?id=…) como objeto,
+        // así los endpoints de lectura validan con el MISMO mecanismo `esquema`.
+        cuerpo: MUTANTES.has(metodo)
+          ? await req.json().catch(() => undefined)
+          : Object.fromEntries(new URL(req.url).searchParams),
       };
       const r = await correr(solicitud);
       return jsonResponse(r.status, r.cuerpo);

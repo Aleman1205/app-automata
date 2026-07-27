@@ -153,7 +153,72 @@ export const ejecutarEP: Endpoint<Record<string, never>> = {
   },
 };
 
+// ── API de LECTURA (GET): portafolio / panel / detalle ──────────────────────
+// Corren bajo conOrg (RLS): cada query ve SOLO la org del contexto. Acción "ver" (admin y
+// operador). El id del detalle llega por query (?id=…) — el adaptador lo pone en `cuerpo`.
+const iso = (v: unknown): string | null => (v instanceof Date ? v.toISOString() : v == null ? null : String(v));
+// EstadoAuto de la UI derivado del ciclo + la última versión (contrato de web/lib/datos.ts).
+function estadoAuto(ultimaVersion: string | null, ciclo: string): "lista" | "generando" | "fallo" | "congelada" {
+  if (ciclo === "frozen") return "congelada";
+  if (ultimaVersion === "lista") return "lista";
+  if (ultimaVersion === "failed") return "fallo";
+  return "generando"; // queued/building/ready o aún sin versión
+}
+const esquemaLista: Esquema<Record<string, never>> = { analizar: () => ({ ok: true, valor: {} }) };
+const esquemaVerId: Esquema<{ id: string }> = {
+  analizar(x) {
+    const id = esObjeto(x) ? x["id"] : undefined;
+    if (typeof id !== "string" || !/^[0-9a-fA-F-]{36}$/.test(id)) return { ok: false, problemas: ["id (uuid) requerido"] };
+    return { ok: true, valor: { id } };
+  },
+};
+
+export const listarAutomatizacionesEP: Endpoint<Record<string, never>> = {
+  nombre: "GET /orgs/:orgId/automatizaciones",
+  metodo: "GET",
+  accion: "ver",
+  esquema: esquemaLista,
+  handler: async ({ cliente }) => {
+    const r = await cliente.query(
+      `SELECT a.id, a.nombre, a.activa, a.ciclo_estado, a.ajustes_usados, a.creada, a.entregada,
+         (SELECT v.estado FROM versiones v WHERE v.automatizacion_id = a.id ORDER BY v.numero DESC LIMIT 1) AS ultima,
+         (SELECT count(*)::int FROM ejecuciones e JOIN versiones v ON e.version_id = v.id WHERE v.automatizacion_id = a.id) AS ejecuciones,
+         (SELECT max(e.creada) FROM ejecuciones e JOIN versiones v ON e.version_id = v.id WHERE v.automatizacion_id = a.id) AS ultima_ejec
+       FROM automatizaciones a ORDER BY a.creada DESC`,
+    );
+    return R.ok({
+      automatizaciones: r.rows.map((f) => ({
+        id: f.id, nombre: f.nombre, activa: f.activa, cicloEstado: f.ciclo_estado,
+        ajustesUsados: f.ajustes_usados, creada: iso(f.creada), entregada: iso(f.entregada),
+        estado: estadoAuto(f.ultima ?? null, f.ciclo_estado), ejecuciones: f.ejecuciones, ultimaEjecucion: iso(f.ultima_ejec),
+      })),
+    });
+  },
+};
+
+export const verAutomatizacionEP: Endpoint<{ id: string }> = {
+  nombre: "GET /orgs/:orgId/automatizacion",
+  metodo: "GET",
+  accion: "ver",
+  esquema: esquemaVerId,
+  handler: async ({ cliente, input }) => {
+    const a = await cliente.query("SELECT id, nombre, activa, ciclo_estado, ajustes_usados, creada, entregada, en_revision FROM automatizaciones WHERE id = $1", [input.id]);
+    const auto = a.rows[0];
+    if (!auto) return { status: 404, cuerpo: { error: "no_encontrada" } }; // RLS: ajena/inexistente → 0 filas
+    const vs = await cliente.query("SELECT numero, estado, tipo, creada FROM versiones WHERE automatizacion_id = $1 ORDER BY numero DESC", [input.id]);
+    const vista = await cliente.query("SELECT vista FROM versiones WHERE automatizacion_id = $1 AND estado = 'lista' AND vista IS NOT NULL ORDER BY numero DESC LIMIT 1", [input.id]);
+    return R.ok({
+      id: auto.id, nombre: auto.nombre, activa: auto.activa, cicloEstado: auto.ciclo_estado,
+      ajustesUsados: auto.ajustes_usados, creada: iso(auto.creada), entregada: iso(auto.entregada),
+      enRevision: !!auto.en_revision,
+      estado: estadoAuto(vs.rows[0]?.estado ?? null, auto.ciclo_estado),
+      versiones: vs.rows.map((v) => ({ numero: v.numero, estado: v.estado, tipo: v.tipo, creada: iso(v.creada) })),
+      vista: vista.rows[0]?.vista ?? null, // el layout de la última versión lista; los DATOS del resultado son otro slice (ejecución)
+    });
+  },
+};
+
 // Registro central. NOTA (revisión): esto NO es la garantía anti-olvido completa —
 // en Next hace falta un test que ESCANEE app/api/**/route.ts y falle si algún handler
 // con efecto no delega en withEfecto. Aquí registrarse es la convención.
-export const ENDPOINTS = [crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, solicitarBuildEP] as const;
+export const ENDPOINTS = [crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, solicitarBuildEP, listarAutomatizacionesEP, verAutomatizacionEP] as const;

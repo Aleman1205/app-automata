@@ -1,5 +1,6 @@
 import { ruta } from "@/lib/automata/wiring";
-import { crearAutomatizacionEP } from "automata-core/http/endpoints";
+import { crearAutomatizacionEP, listarAutomatizacionesEP } from "automata-core/http/endpoints";
 
-// POST /api/orgs/:orgId/automatizaciones — crear una automatización (admin).
+// POST — crear una automatización (admin). GET — listar las de la org (portafolio/panel, ver).
 export const POST = ruta(crearAutomatizacionEP);
+export const GET = ruta(listarAutomatizacionesEP);

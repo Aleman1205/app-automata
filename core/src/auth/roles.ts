@@ -10,6 +10,7 @@
 export type Rol = "admin" | "operador";
 
 export type Accion =
+  | "ver"
   | "ejecutar"
   | "descargar"
   | "crear_build"
@@ -36,6 +37,7 @@ interface Politica {
   stepup: boolean;
 }
 const POLITICA: Record<Accion, Politica> = {
+  ver: { roles: ["admin", "operador"], stepup: false }, // lectura del portafolio/panel/detalle (ambos roles)
   ejecutar: { roles: ["admin", "operador"], stepup: false },
   descargar: { roles: ["admin", "operador"], stepup: false },
   crear_build: { roles: ["admin"], stepup: false },

@@ -98,9 +98,9 @@ async function main() {
     check("quitar a un no-miembro → 400", (await quitar({ cuerpo: { userId: "u_fantasma" } })).status === 400);
 
     console.log("\n7. Cobertura de registro:");
-    const acciones = new Set(["crear_build", "invitar", "quitar_gente", "ejecutar", "descargar", "ajustar", "facturacion", "exportar_codigo", "borrar_org"]);
+    const acciones = new Set(["ver", "crear_build", "invitar", "quitar_gente", "ejecutar", "descargar", "ajustar", "facturacion", "exportar_codigo", "gestionar_espacios", "borrar_org"]);
     check("todo endpoint declara método + acción válida", ENDPOINTS.every((e) => acciones.has(e.accion) && !!e.metodo));
-    check("los 5 endpoints con efecto están registrados", ENDPOINTS.length === 5 && ENDPOINTS.includes(invitarEP));
+    check("los 7 endpoints están registrados (5 con efecto + 2 de lectura)", ENDPOINTS.length === 7 && ENDPOINTS.includes(invitarEP));
   } finally {
     await admin.query("DELETE FROM orgs WHERE id = ANY($1)", [[A, B, Q]]).catch(() => {});
     await admin.end();
