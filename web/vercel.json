@@ -1,6 +1,7 @@
 {
   "crons": [
     { "path": "/api/cron/reaper", "schedule": "*/10 * * * *" },
-    { "path": "/api/cron/cosecha", "schedule": "*/2 * * * *" }
+    { "path": "/api/cron/cosecha", "schedule": "*/2 * * * *" },
+    { "path": "/api/cron/disparo", "schedule": "*/2 * * * *" }
   ]
 }

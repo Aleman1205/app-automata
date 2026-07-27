@@ -262,6 +262,20 @@ CREATE TABLE IF NOT EXISTS cosecha_pendiente (
   creada      timestamptz NOT NULL DEFAULT now()
 );
 
+-- Outbox de DISPARO de build (a3-s6): el endpoint (app) encola una solicitud aprobada; un
+-- drainer (owner) corre el planner (vista+contrato) y arrancarConstruccion (CMA) FUERA del
+-- request. Plataforma (sin RLS): el app SOLO inserta vía el SD app_solicitar_build (que fija
+-- org_id = app_current_org()); el dueño lee/borra. spec del intake, ejemplo_key en storage.
+CREATE TABLE IF NOT EXISTS build_pendiente (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id      uuid NOT NULL,
+  nombre      text NOT NULL,
+  spec        jsonb NOT NULL,
+  ejemplo_key text NOT NULL,
+  intentos    int  NOT NULL DEFAULT 0,
+  creada      timestamptz NOT NULL DEFAULT now()
+);
+
 -- Dedupe de webhooks entrantes (docs/13 §4): nivel PLATAFORMA, sin org_id (no RLS).
 -- La lo escribe el receptor de webhooks con la conexión de DUEÑO (corre sin usuario);
 -- el rol de app no lo toca. El PK hace el dedupe atómico (INSERT ON CONFLICT DO NOTHING).
@@ -315,6 +329,8 @@ REVOKE ALL ON bitacora_kill FROM automata_app;
 REVOKE ALL ON incidentes FROM automata_app;
 -- Outbox de cosecha: la escribe el webhook y la drena el dueño; el app no la toca.
 REVOKE ALL ON cosecha_pendiente FROM automata_app;
+-- Outbox de disparo de build: el app SOLO inserta vía el SD app_solicitar_build; el dueño drena.
+REVOKE ALL ON build_pendiente FROM automata_app;
 -- EL RECICLADOR (docs/06 §3, hallazgo ALTA de la revisión): el REVOKE UPDATE protege
 -- la fila, pero NO su existencia — borrar y recrear reseteaba entregada, ajustes_usados
 -- y ciclo_estado (ventana gratis + 3 ajustes nuevos, en bucle, con builds reales de
@@ -545,6 +561,20 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'SESION_CMA_NO_FIJABLE'; END IF;
 END $fn$;
 GRANT EXECUTE ON FUNCTION app_fijar_sesion_cma(uuid, text) TO automata_app;
+
+-- Encolar un disparo de build (a3-s6). SECURITY DEFINER (build_pendiente tiene REVOKE ALL):
+-- fija org_id = app_current_org() (el app no puede encolar para otra org). El drainer valida
+-- cuota/kill-switch al crear la versión real (cobrar_build), así que esto solo registra la
+-- intención; devuelve el id de la solicitud.
+CREATE OR REPLACE FUNCTION app_solicitar_build(p_nombre text, p_spec jsonb, p_ejemplo_key text)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_org uuid := app_current_org(); v_id uuid;
+BEGIN
+  IF v_org IS NULL THEN RAISE EXCEPTION 'app_solicitar_build sin contexto de org'; END IF;
+  INSERT INTO build_pendiente (org_id, nombre, spec, ejemplo_key) VALUES (v_org, p_nombre, p_spec, p_ejemplo_key) RETURNING id INTO v_id;
+  RETURN v_id;
+END $fn$;
+GRANT EXECUTE ON FUNCTION app_solicitar_build(text, jsonb, text) TO automata_app;
 
 -- Congelado VOLUNTARIO ("esta ya quedó", docs/08 §3). Va por función porque el app
 -- perdió el UPDATE sobre ciclo_estado (si lo tuviera, podría des-congelarse y

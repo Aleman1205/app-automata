@@ -7,7 +7,9 @@ import { timingSafeEqual } from "node:crypto";
 import { crearPool, crearPoolApp } from "automata-core/db/pg";
 import { reaparBuildsColgados } from "automata-core/ciclo/servicio";
 import { drenarCosecha, type CosechaDeps } from "automata-core/pipeline/cosecha";
+import { drenarBuilds, type DisparoDeps } from "automata-core/pipeline/disparo";
 import { CmaBuildClient } from "automata-core/cma/build";
+import { PlannerAgent } from "automata-core/planner/agent";
 import { R2Storage, crearClienteR2 } from "automata-core/storage/r2";
 import { adaptar, type ConfigAdaptador } from "automata-core/http/adaptador";
 import { type Deps, type Endpoint } from "automata-core/http/pipeline";
@@ -174,6 +176,28 @@ function getCosechaDeps(): CosechaDeps {
 export async function cronCosecha(req: Request): Promise<Response> {
   if (!autorizadoCron(req)) return new Response(JSON.stringify({ error: "no_autorizado" }), { status: 401, headers: { "content-type": "application/json" } });
   const r = await drenarCosecha(getCosechaDeps());
+  return new Response(JSON.stringify(r), { status: 200, headers: { "content-type": "application/json" } });
+}
+
+// ── Cron de disparo (a3-s6): drena build_pendiente → planner → arrancarConstruccion ──
+function getDisparoDeps(): DisparoDeps {
+  return {
+    pool: getPoolOwner(),
+    planeador: new PlannerAgent(),
+    cosechador: new CmaBuildClient(),
+    storage: new R2Storage(
+      crearClienteR2({ accountId: env("R2_ACCOUNT_ID"), accessKeyId: env("R2_ACCESS_KEY_ID"), secretAccessKey: env("R2_SECRET_ACCESS_KEY"), bucket: env("R2_BUCKET") }),
+      env("R2_BUCKET"),
+    ),
+    ahora: () => new Date().toISOString(),
+  };
+}
+
+/** Ruta de cron: drena las solicitudes de build encoladas por /construir → corre el planner y
+ *  arranca el build en CMA. Auth por CRON_SECRET; corre con el pool DUEÑO. */
+export async function cronDisparo(req: Request): Promise<Response> {
+  if (!autorizadoCron(req)) return new Response(JSON.stringify({ error: "no_autorizado" }), { status: 401, headers: { "content-type": "application/json" } });
+  const r = await drenarBuilds(getDisparoDeps());
   return new Response(JSON.stringify(r), { status: 200, headers: { "content-type": "application/json" } });
 }
 

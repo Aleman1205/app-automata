@@ -1,0 +1,77 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Verificación del DISPARO de build (a3-s6) contra Postgres, con planner/cosechador/storage
+// FALSOS (sin modelo ni CMA ni R2). Prueba: el app encola SOLO vía el SD app_solicitar_build
+// (no INSERT directo); y drenarBuilds corre el planner + arrancarConstruccion (crea la
+// automatización + versión 'building' con vista + cma_session_id) y saca la solicitud.
+//   ADMIN_URL=... DATABASE_URL=... npm run verify:disparo:pg
+// ─────────────────────────────────────────────────────────────────────────────
+import { crearPool, conOrg } from "../src/db/pg.ts";
+import { drenarBuilds, type DisparoDeps, type Planeador } from "../src/pipeline/disparo.ts";
+import type { ArranqueBuild, BuildClientAsync, ResultadoCosecha, Storage, Vista } from "../src/types.ts";
+import type { PlanResultado } from "../src/planner/schema.ts";
+
+const ADMIN_URL = process.env.ADMIN_URL ?? "postgres://postgres@127.0.0.1:55432/postgres";
+const APP_URL = process.env.DATABASE_URL ?? "postgres://automata_app@127.0.0.1:55432/postgres";
+const A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+
+let ok = true;
+const check = (n: string, p: boolean) => { console.log(`  ${p ? "✓" : "✗"} ${n}`); ok = ok && p; };
+const vista: Vista = { version_vista: 1, titulo: "demo", archivoSalida: "out.json", bloques: [] };
+const plan: PlanResultado = { vista, resultado_contrato: { campos: [] } as unknown as PlanResultado["resultado_contrato"] };
+
+class FakeStorage implements Storage {
+  async put() {} async getText() { return ""; } async existe() { return true; } async list() { return []; }
+  async get() { return Buffer.from("producto,ingreso\nTaco,100\n"); } // el ejemplo que baja el drainer
+}
+class FakePlaneador implements Planeador {
+  llamado = 0;
+  async planear() { this.llamado++; return plan; }
+}
+class FakeCosechador implements BuildClientAsync {
+  async build(): Promise<never> { throw new Error("no usado"); }
+  async cosechar(): Promise<ResultadoCosecha> { return { estado: "en_curso" }; }
+  async arrancar(): Promise<ArranqueBuild> { return { sessionId: "sess_disparo_1" }; }
+}
+
+async function main() {
+  const admin = crearPool(ADMIN_URL);
+  const app = crearPool(APP_URL);
+  const uno = (sql: string, p: unknown[] = []) => admin.query<Record<string, unknown>>(sql, p).then((r) => r.rows[0]);
+  const codigoDe = async (fn: () => Promise<unknown>) => { try { await fn(); return "permitido"; } catch (e) { return (e as { code?: string }).code ?? "throw"; } };
+  const deps: DisparoDeps = { pool: admin, planeador: new FakePlaneador(), cosechador: new FakeCosechador(), storage: new FakeStorage(), ahora: () => new Date().toISOString() };
+
+  try {
+    await admin.query("DELETE FROM orgs WHERE id=$1", [A]);
+    await admin.query("DELETE FROM build_pendiente WHERE org_id=$1", [A]);
+    await admin.query("INSERT INTO orgs (id,nombre) VALUES ($1,'o')", [A]);
+    await admin.query("INSERT INTO subscriptions (org_id,plan) VALUES ($1,'equipo')", [A]);
+
+    console.log("1. El app encola SOLO vía el SD (no INSERT directo):");
+    check("INSERT directo en build_pendiente como app → 42501", (await conOrg(app, A, (c) => codigoDe(() => c.query("INSERT INTO build_pendiente (org_id,nombre,spec,ejemplo_key) VALUES (app_current_org(),'x','{}','k')")))) === "42501");
+    const spec = JSON.stringify({ objetivo: "reporte", reglas: [], criterios_exito: ["ok"], entradas: [] });
+    await conOrg(app, A, (c) => c.query("SELECT app_solicitar_build('Reporte X', $1::jsonb, 'ejemplos/" + A + "/m.csv')", [spec]));
+    check("app_solicitar_build encoló la solicitud con org_id=A", (await uno("SELECT count(*)::int AS n FROM build_pendiente WHERE org_id=$1 AND nombre='Reporte X'", [A]))?.["n"] === 1);
+
+    console.log("\n2. drenarBuilds: planner + arrancarConstruccion (crea versión building + cma_session_id):");
+    const res = await drenarBuilds(deps);
+    check(`arrancó la solicitud (arrancados=${res.arrancados})`, res.arrancados === 1);
+    check("corrió el planner", (deps.planeador as FakePlaneador).llamado === 1);
+    check("sacó la solicitud del outbox", (await uno("SELECT count(*)::int AS n FROM build_pendiente WHERE org_id=$1", [A]))?.["n"] === 0);
+    const auto = await uno("SELECT id FROM automatizaciones WHERE org_id=$1 AND nombre='Reporte X'", [A]);
+    check("creó la automatización", !!auto);
+    const ver = await uno("SELECT estado, cma_session_id AS sid, (vista IS NOT NULL) AS v FROM versiones WHERE automatizacion_id=$1", [auto?.["id"]]);
+    check("creó la versión 'building' con cma_session_id + vista", ver?.["estado"] === "building" && ver?.["sid"] === "sess_disparo_1" && ver?.["v"] === true);
+    check("resolver_sesion_cma la mapea (el webhook la encontrará)", !!(await uno("SELECT version_id FROM resolver_sesion_cma('sess_disparo_1')")));
+
+    console.log("\n3. Outbox vacío → no-op:");
+    check("drenarBuilds sobre outbox vacío → 0", (await drenarBuilds(deps)).arrancados === 0);
+  } finally {
+    await admin.query("DELETE FROM build_pendiente WHERE org_id=$1", [A]).catch(() => {});
+    await admin.query("DELETE FROM incidentes WHERE org_id=$1", [A]).catch(() => {});
+    await admin.query("DELETE FROM orgs WHERE id=$1", [A]).catch(() => {});
+    await admin.end(); await app.end();
+  }
+  console.log(`\n${ok ? "✓ DISPARO PROBADO" : "✗ FALLÓ"} — el endpoint encola vía SD (app no toca la tabla); el drainer corre planner + arrancarConstruccion fuera del request.`);
+  process.exit(ok ? 0 : 1);
+}
+main().catch((e) => { console.error("Error:", e); process.exit(1); });
