@@ -5,6 +5,39 @@ congela.**
 
 ---
 
+## Estado de implementación (2026-07-26)
+
+Este ciclo dejó de ser papel: está **construido y forzado en la BD** (Fase 1,
+motor real en `core/`, framework-agnóstico). No es "que el app se acuerde" — el
+contador vive en Postgres y el rol de la app **no puede escribirlo**. Lo que
+sigue está vivo; lo que aún es plan queda marcado al final de esta sección.
+
+| Pieza de este doc | Estado | Dónde (archivo:línea) | Prueba |
+|---|---|---|---|
+| **3 ajustes → congelado** (§1, §3) | Construido | `MAX_AJUSTES = 3` y `trasAjuste` congela al tope: `core/src/ciclo/estados.ts:11,56`; CHECK `ajustes_usados <= 3`: `core/db/schema.sql:51`; `app_consumir_ajuste` congela al llegar a 3: `core/db/schema.sql:485` | `verify:ciclo:pg` (test 1) |
+| **Cambio ≠ reparación, tipo DERIVADO** (§2) | Construido | `clasificar` (regresión → tipo): `core/src/ciclo/estados.ts:24`; el tipo lo deriva `iniciarAjuste`, no el llamador, y se PERSISTE en `versiones.tipo`: `core/src/ciclo/servicio.ts:149,164`; la BD lee el tipo de la fila al consumir: `core/db/schema.sql:466,476` | `verify:ciclo:pg` (tests 2,3) |
+| **Reparación gratis e ilimitada** (§2) | Construido | `puedeAjustar` deja pasar toda reparación, incluso sobre `frozen`: `core/src/ciclo/estados.ts:44`; la BD no cobra generación por reparación: `core/db/schema.sql:638` | `verify:ciclo:pg` (test 2) |
+| **Circuit breaker de reparaciones (latch)** (§2) | Construido | latch `automatizaciones.en_revision`: `core/db/schema.sql:64`; cap `planes.reparaciones` (default 10): `core/db/schema.sql:155,159`; conteo rodante 30 días + enganche del latch en el trigger `cobrar_build`: `core/db/schema.sql:661,665`; pull de ops `automatizacionesEnRevision` y rearme `limpiarRevision`: `core/src/ciclo/servicio.ts:260,274` | `verify:reparaciones:pg` |
+| **Ventana de 30 días gratis** (§7) | Construido | `en_ventana_gratis` anclada a `entregada`: `core/db/schema.sql:440`; `marcar_entrega` sella la entrega UNA sola vez: `core/db/schema.sql:684`; el consumo se salta dentro de la ventana: `core/db/schema.sql:482` | `verify:ventana:pg` |
+| **Congelado voluntario "esta ya quedó"** (§3) | Construido | `congelar` vía `app_congelar` (el app perdió el UPDATE sobre `ciclo_estado`): `core/src/ciclo/servicio.ts:242`, `core/db/schema.sql:582` | `verify:ciclo:pg` (test 7) |
+| **Entrega garantizada (anti-brick)** (§3) | Construido | `confirmarAjuste` entrega building→lista y cuenta el ajuste tras un `SAVEPOINT tras_entrega`: si el conteo falla, la versión YA quedó entregada (no vuelve a `building`, no ladrilla): `core/src/ciclo/servicio.ts:214,226`; guard: no congelar con un CAMBIO en vuelo: `core/db/schema.sql:599` | `verify:ciclo:pg` (test 11) |
+| **Reaper de builds colgados** (nuevo) | Construido | auto-sanación en `iniciarAjuste` (un `building` añejo → `failed`, no ladrilla): `core/src/ciclo/servicio.ts:133`; barrido de ops `reaparBuildsColgados`: `core/src/ciclo/servicio.ts:286` | `verify:ciclo:pg` (test 12) |
+
+Enforcement de fondo: el rol de la app **no** puede escribir
+`ajustes_usados` / `ciclo_estado` / `entregada` / `en_revision` (REVOKE + GRANT
+solo de `nombre`, `activa`): `core/db/schema.sql:694`. Toda mutación del ciclo
+pasa por funciones `SECURITY DEFINER` que solo INCREMENTAN, y una automatización
+nueva nace ready/0/sin entregar (`normalizar_ciclo_nuevo`, `core/db/schema.sql:701`).
+
+**Sigue siendo plan (no construido en este ciclo):** el contexto que entra al
+build en un ajuste (§4, es comportamiento del agente builder), la UI del cliente
+(§5, el front es demo), el **push/alerta a ops** al enganchar el breaker (§2, hoy
+es pull vía `automatizacionesEnRevision`), el cap de reparaciones **por plan**
+(§2, hoy uniforme = 10) y la compra de ajustes sueltos / la automatización
+derivada (§6).
+
+---
+
 ## 1. El ciclo
 
 ```
@@ -157,6 +190,13 @@ Sin esa instrucción, el agente reescribe desde cero, resuelve lo que pediste y
 rompe otra cosa en silencio. **La puerta de calidad lo detecta** —los ejemplos
 de v1 y v2 son regresión obligatoria— pero es mejor que no ocurra: cada rebuild
 fallido gasta $3 y un ajuste del cliente.
+
+**Actualización (2026-07-26):** con el modelo reserva→confirma ya construido, un
+rebuild fallido **NO** gasta uno de los 3 ajustes — el consumo solo ocurre cuando
+el build llega a `ready` (`confirmarAjuste`, `core/src/ciclo/servicio.ts:190`;
+`verify:ciclo:pg` test 5). Sí consume una **generación** del tope interno (§7),
+que se cobra al **arrancar** el build (`core/db/schema.sql:677`), y el costo real
+por build es **~$1.8**, no $3 (spike, `spike/RESULTADO.md`).
 
 ---
 

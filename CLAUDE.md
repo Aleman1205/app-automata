@@ -13,6 +13,48 @@ mexicanas** (hoteles, restaurantes, despachos). Idea original del fundador:
 "una página donde el cliente entra, describe su proceso, pica un botón, y una
 serie de agentes piensa, planea, programa, ejecuta".
 
+## Estado de implementación (2026-07-26)
+
+> **El backend de Fase 1 ya existe.** Este documento nació como mapa de
+> *planeación*; buena parte de lo que describía como diseño hoy es **código real**
+> en `core/` (motor framework-agnóstico, TS+tsx) envuelto por `web/` (wiring
+> Next 16). Lo de abajo resume qué del mapa ya está construido, con evidencia
+> (archivo:línea real) y el `verify` que lo prueba. Lo que aún es plan NO se
+> marca como hecho.
+
+| Pieza del doc | Estado | Evidencia | Verify |
+|---|---|---|---|
+| Multitenancy / RLS (docs/04) | **Construido** | `core/db/schema.sql:773-798` (RLS FORCE + política `aislada_por_org` en 7 tablas); `core/src/db/pg.ts:25-51` (`crearPoolApp` + `afirmarRolSeguro` rechaza super/bypassrls) | `verify:pg`, `verify:pgstate:pg` |
+| Cuota / pricing (docs/06) | **Construido** | `core/src/billing/` (reserva→confirma, cobro al arrancar, downgrade con excedente en solo-lectura) | `verify:cuota:pg`, `verify:plan:pg` |
+| Auth / pipeline 8 capas (docs/13) | **Construido** | `core/src/http/pipeline.ts:43-51` (`autorizar`: 0 rate → 1 authn → método → 2 CSRF → 3 org → conOrg{6 membresía → 7 assertCan → 5 step-up}) | `verify:http`, `verify:rutas`, `verify:adaptador:pg`, `verify:auth` |
+| Ciclo de vida (docs/08) | **Construido** | `core/src/ciclo/servicio.ts:190-228` (`confirmarAjuste` con SAVEPOINT `tras_entrega` = entrega garantizada; 3 ajustes + congelado; circuit breaker con latch) | `verify:ciclo:pg`, `verify:ventana:pg`, `verify:reparaciones:pg` |
+| Kill-switch / offboarding (docs/04, 05) | **Construido** | `core/src/ops/killswitch.ts:54-87` (`verificarFreno`, `suspenderOrg`, `purgarOrg` owner-only) + triggers DB | `verify:killswitch:pg`, `verify:offboarding:pg` |
+| Intake / componentes (docs/09, 10) | **Construido** (núcleo determinista) | `core/src/intake/` (adapter + validator), `core/src/vista/resolver.ts` | `verify:intake`, `verify:planner` |
+| Entrada multi-formato / gate (docs/11 §4bis) | **Construido** | `core/src/entrada/` (validador XXE/zip-bomb/pixel-flood/spoofing + `puente.ts` cableado a build/run/upload) | `verify:entrada`, `verify:entrada:gate` |
+| Webhooks + cosecha (docs/03, 13) | **Construido** | `core/src/webhooks/` (firma HMAC, dedupe, handlers), `core/src/pipeline/cosecha.ts` + `disparo.ts` | `verify:webhooks`, `verify:webhooks:handlers:pg`, `verify:cosecha:pg`, `verify:disparo:pg` |
+| Observabilidad / incidentes (docs/05) | **Construido** | `core/src/ops/incidentes.ts` (append-only, SD, reaper emite incidentes) | `verify:incidentes:pg` |
+| Data plane: storage + CMA | **Construido** | `core/src/storage/r2.ts` (R2/S3-compat, `existe()`), `core/src/cma/build.ts` (arrancar/cosechar + clasificarSesion) | `verify:storage`, `verify:cma` |
+| Runner sandbox (docs/02, 11) | **Fase 0 probada; gVisor cableado** | `core/src/run/executor.ts` (`LocalPythonExecutor` endurecido: env allowlist, ulimit, kill de grupo) probado; `core/src/run/container-executor.ts:12-97` (jaula gVisor `runsc`, `--network none`, `--read-only`, `--cap-drop ALL`, `--pids-limit`) **cableado, se prueba al desplegar** | `verify:sandbox` |
+
+**Marco de pruebas:** 28 scripts `verify:*` en `core/package.json:28-55` (unit +
+contra Postgres real, sufijo `:pg`). Por el reporte de Fase 1 corren **en verde**;
+`tsc --noEmit` y `next build` OK. La BD de pruebas es un Postgres temporal en el
+puerto **55432**.
+
+**Hallazgo que corrige el diseño previo:** el webhook de CMA es *thin* — sus
+`data.type` reales **accionables** son `session.status_idled` (→ encola cosecha) y
+`session.status_terminated` (→ falla); el resto (`session.outcome_evaluation_ended`,
+etc.) es informativo. El ÉXITO de un build sólo se sabe **re-consultando la
+sesión**, no por el evento. Esto corrige los nombres inventados
+(`session.completed`, etc.) que docs/13 daba por buenos (ver corrección en línea
+en el índice, abajo).
+
+**Falta para producción (deferido, necesita llaves/infra, NO código):**
+credenciales en `.env.local`/Vercel/Neon; alta de webhooks en las consolas de
+CMA y Stripe; crons en Vercel Pro; desplegar el runner gVisor y cambiar
+`LocalPythonExecutor` → `ContainerRunExecutor`. El flujo de subida ya existe
+(`POST /orgs/:orgId/ejemplo`).
+
 ## Estado actual
 
 | Parte | Estado |
@@ -20,7 +62,7 @@ serie de agentes piensa, planea, programa, ejecuta".
 | Planeación de arquitectura | **Completa** — 13 documentos, 2 curtidos con crítica adversarial |
 | Prototipo del front | **Funcional** — solo apariencia, datos falsos, para inversionistas |
 | Spike (prueba técnica) | **Corrido ✓ — 3/3 casos, ~$1.8/build real** (ver `spike/RESULTADO.md`) |
-| Backend / producto real | **No existe** — plan de construcción listo en `docs/plan-fase-1.md` |
+| Backend / producto real | **Actualización (2026-07-26): motor de Fase 1 CONSTRUIDO** — `core/` (TS+tsx, framework-agnóstico) + `web/` (wiring Next 16); 28 `verify:*` en verde, typecheck + `next build` OK. Detalle en la sección "Estado de implementación". Plan original en `docs/plan-fase-1.md`. Falta activar (llaves/infra), no código. |
 
 ## Los riesgos abiertos (no se resuelven con más papel)
 
@@ -35,8 +77,19 @@ serie de agentes piensa, planea, programa, ejecuta".
    riesgo #1 abierto.** Evidencia *indirecta* de mercado en
    `docs/mercado-microsaas.md` (el producto es negocio probado; el ICP PyME-MX
    sigue sin validar).
+3. ~~**Riesgo técnico del backend (auditoría de riesgo + Top-5).**~~
+   **Actualización (2026-07-26): CERRADO EN CÓDIGO.** Se hizo la auditoría de
+   riesgo y el Top-5 se **implementó** en el motor de Fase 1: aislamiento por org
+   (RLS FORCE + rol no-dueño), cuota sin oversell, entrega garantizada del ajuste
+   (anti-brick), kill-switch DB-enforced, gate de entrada contra archivos
+   maliciosos y jaula gVisor cableada para el Run. Evidencia y `verify` en la
+   sección "Estado de implementación". Queda **deferido** (no es código) activar
+   llaves/infra y desplegar el runner gVisor.
 
-Más planeación de arquitectura es, a estas alturas, procrastinar el #2.
+**Actualización:** con el spike resuelto (#1 histórico) y el riesgo técnico del
+backend cerrado en código (#3), el riesgo abierto que **no se resuelve con más
+papel ni con más código** es el **#2: clientes**. Más planeación de arquitectura
+—o más motor— es, a estas alturas, procrastinar el #2.
 
 ## Estructura del repo
 
@@ -63,8 +116,9 @@ spike/             prueba técnica — Node + npm (raíz)
 | 09 | Sistema de componentes | el agente declara vistas, no escribe HTML; **catálogo v1 construido** en el prototipo |
 | 10 | Intake | el agente entrevistador (opción múltiple → spec validado) |
 | 11 | Threat model | ejecutar código de IA es el producto; escape de contenedor = riesgo #1 |
-| 13 | Auth y webhooks | **diseñado**: sesiones/step-up MFA, assertCan por request, cadena de firma de webhooks; pipeline de request de 8 capas |
+| 13 | Auth y webhooks | **IMPLEMENTADO**: pipeline de 8 capas (`core/src/http/pipeline.ts:43-51`), firma de webhooks (`core/src/webhooks/`). **Actualización (2026-07-26):** los nombres de evento de CMA que este doc daba por buenos (`session.completed`, etc.) eran **inventados**; los `data.type` reales accionables son `session.status_idled` / `session.status_terminated` (el resto, `session.outcome_evaluation_ended` etc., es informativo) y el ÉXITO sólo se sabe re-consultando la sesión (webhook *thin*). |
 | 14 | Controles de seguridad | **matriz de casos comunes** (65, 5 dominios) estilo OWASP: caso → postura → capa → milestone → estado; une docs/13+11+04 |
+| 15 | **Motor implementado** | **NUEVO (2026-07-26):** catálogo maestro de lo construido en Fase 1 — módulos de `core/`, modelo de seguridad en la BD, loop async de build de punta a punta, la suite de 28 `verify:*`, rutas/crons y el checklist para activar en producción |
 
 (No hay docs/12; el 13 se numeró así a propósito.)
 
@@ -117,10 +171,24 @@ npm install
 npm run datos                              # genera/regenera datos de prueba
 export ANTHROPIC_API_KEY=sk-ant-...
 npm run spike                              # corre el caso (Vitrales sintético)
+
+# Motor de Fase 1 — desde core/ (agregado 2026-07-26)
+cd core && npm install
+npm run typecheck                          # tsc --noEmit
+npm run verify                             # verify base (run → vista, sin BD)
+# Verifies contra Postgres real (requieren la BD temporal en el puerto 55432):
+npm run verify:pg                          # aislamiento / RLS
+npm run verify:cuota:pg                    # cuota (reserva→confirma, sin oversell)
+npm run verify:ciclo:pg                    # ciclo de vida (entrega garantizada)
+npm run verify:killswitch:pg              # freno DB-enforced
+# ...son 28 scripts `verify:*` en core/package.json:28-55 (sufijo :pg = con BD)
 ```
 
-- **Front y spike son proyectos separados**: front usa `pnpm` en `web/`; el
-  spike usa `npm` en la raíz. No mezclar.
+- **Front, spike y motor son proyectos separados**: front usa `pnpm` en `web/`;
+  el spike usa `npm` en la raíz; el motor usa `npm` en `core/`. No mezclar.
+- Los `verify:*` con sufijo **`:pg`** necesitan un Postgres alcanzable (en las
+  pruebas de Fase 1 se usó uno temporal en el puerto **55432**); los demás corren
+  sin BD.
 - El spike usa **Managed Agents (beta)** — si da error de acceso, hay que
   activarlo en la cuenta de Anthropic. Aparta ~$5 de crédito por corrida.
 

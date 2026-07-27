@@ -4,6 +4,37 @@ Detalle de [ARQUITECTURA.md](../ARQUITECTURA.md) §7.
 
 ---
 
+## Estado de implementación (2026-07-26)
+
+> Fase 1 construyó el **wiring de producción** de este doc: los servicios
+> externos ya están cableados y hay un camino real de despliegue. El motor vive
+> en `core/` (TypeScript framework-agnóstico) y `web/` es solo el ensamblado con
+> Next 16. Lo que sigue siendo plan (evals de prompts en CI, agentes como YAML
+> desde CI, runner gVisor desplegado) está marcado abajo y en el checklist §10.
+
+**Ya construido (con evidencia):**
+
+| Pieza del doc | Estado | Dónde |
+|---|---|---|
+| Cableado de servicios (Clerk, Upstash, Neon, R2, CMA, Stripe) | ✅ | `web/lib/automata/wiring.ts` — Clerk (`:43`), Upstash fail-closed (`:56`), pool Neon `automata_app` (`:74`), R2 (`:147`), webhooks CMA/Stripe (`:122`) |
+| Secretos por entorno, nunca en el repo (`.env.example` con los nombres) | ✅ | `web/.env.example` (plantilla completa); carga LAZY vía `env()` (`wiring.ts:33`) — falta una variable → falla en la 1ª request, no al `next build` |
+| Ninguna clave llega al Runner | ✅ | `core/src/run/container-executor.ts:14` (`--network none`) + allowlist de env del executor local (a5-Fase0) |
+| Jobs / loop asíncrono | ✅ (Vercel Cron) | `web/vercel.json:2` (reaper cada 10 min, cosecha/disparo cada 2 min) → `cronReaper/cronCosecha/cronDisparo` (`wiring.ts:167,186,205`), auth `CRON_SECRET` en tiempo constante (`:156`) |
+| Default-deny de páginas (forced-browsing) | ✅ | `web/middleware.ts:11` (allowlist pública; la `/api` se autentica en el pipeline, no en el middleware) |
+| Separación de roles de BD por conexión | ✅ | 3 URLs: `automata_app` / `automata_webhook` / dueño (ops) — `.env.example:11-16`. `app` (`wiring.ts:74`) y `webhook` (`:117`) se **afirman** al abrir (`crearPoolApp`→`afirmarRolSeguro`); el pool DUEÑO (`:141`) usa `crearPool` y **no se afirma** — `afirmarRolSeguro` rechaza al dueño a propósito (solo lo usan crons/ops, nunca una ruta de request) |
+| Runner en contenedor gVisor (imagen base del §1/§6) | ✅ código, ⏳ despliegue | `ContainerRunExecutor` (`core/src/run/container-executor.ts:64`, `--runtime=runsc`); falta el host con runsc en producción |
+
+Cobertura: suite de 28 scripts `verify:*` (todo verde) — p. ej. `verify:http`,
+`verify:rutas` (falla si un verbo mutante no pasa por `ruta`), `verify:cosecha:pg`,
+`verify:disparo:pg`, `verify:webhooks:handlers:pg`. Más `typecheck` + `next build`.
+
+**Sigue siendo plan (no construido):** la suite de evals de prompts en CI (§4),
+los agentes como YAML aplicados desde CI (§3), y el despliegue efectivo del runner
+gVisor (§2/§6). La *estructura* del repo (§7) quedó distinta a la propuesta — ver
+la corrección en esa sección. El detalle de activación está en el checklist §10.
+
+---
+
 ## 1. Lo que hace distinto desplegar esto
 
 En software normal, lo que despliegas es código: si compila y pasan los tests,
@@ -52,6 +83,13 @@ el modelo real.
 **Staging usa el Runner de producción**, no Docker local. La puerta de calidad
 valida artefactos ejecutándolos, y si el entorno de validación no es el de
 ejecución, validas una cosa y entregas otra.
+
+> **Actualización (Fase 1):** el renglón *Jobs* de la tabla no se implementó con
+> Inngest. El loop asíncrono del build (reaper → cosecha → disparo) corre como
+> **Vercel Cron** (`web/vercel.json:2-6`) invocando `cronReaper/cronCosecha/cronDisparo`
+> (`web/lib/automata/wiring.ts:167,186,205`), autenticados por `CRON_SECRET`. Las
+> variables `INNGEST_*` siguen en `.env.example` como reserva, pero hoy no hay
+> funciones de Inngest en el código.
 
 Bases de datos y buckets **completamente separados**. Un script de limpieza mal
 apuntado a producción borra archivos de clientes reales, y no hay deshacer.
@@ -126,8 +164,16 @@ caro. Que lo veas y decidas.
 | `ANTHROPIC_API_KEY` | Variables de Vercel / Inngest, por entorno |
 | Credenciales de base | Cadena de conexión de Neon, por rama |
 | Credenciales de blob | Token de R2/S3 con permiso solo a su bucket |
-| Firma de webhooks | `ANTHROPIC_WEBHOOK_SIGNING_KEY` |
+| Firma de webhooks | `CMA_WEBHOOK_SECRET` (CMA) y `STRIPE_WEBHOOK_SECRET` |
 | Stripe | Claves separadas de test y producción |
+
+> **Actualización (Fase 1):** el nombre real de la variable de firma no es
+> `ANTHROPIC_WEBHOOK_SIGNING_KEY`. El receptor usa **`CMA_WEBHOOK_SECRET`** para
+> el webhook de fin-de-build de CMA (standard-webhooks) y **`STRIPE_WEBHOOK_SECRET`**
+> para Stripe (`web/lib/automata/wiring.ts:127-128`, declaradas en
+> `web/.env.example:34,48`). La regla "ninguna clave llega al contenedor de
+> ejecución" sí se cumple: el runner corre con `--network none` y una allowlist de
+> env (`core/src/run/container-executor.ts:14`).
 
 Tres reglas: **claves distintas por entorno** (una clave de producción en local
 es un incidente esperando), **nunca en el repositorio** (`.env` en `.gitignore`,
@@ -177,6 +223,16 @@ spike/          la prueba desechable
 `agentes/` merece revisión de código igual que `app/`. Es donde vive la
 inteligencia del producto.
 
+> **Actualización (Fase 1):** la estructura real quedó distinta a esta propuesta.
+> El motor no se partió en `app/ worker/ agentes/ runner/ evals/ db/`, sino en dos
+> paquetes: **`core/`** (TypeScript framework-agnóstico — `db/`, `http/`, `pipeline/`,
+> `run/`, `webhooks/`, `ciclo/`, `billing/`, etc.) y **`web/`** (el ensamblado con
+> Next 16: `web/lib/automata/wiring.ts` + `web/app/api/**/route.ts`). En concreto:
+> el runner vive en `core/src/run/` (no en `runner/`); las migraciones son
+> `core/db/schema.sql` (no una carpeta `db/`); no hay `worker/` (el loop async es
+> Vercel Cron, ver §2); y `agentes/`/`evals/` aún **no existen** (siguen siendo
+> plan, §3 y §4).
+
 ---
 
 ## 8. Lo que cuesta la infraestructura
@@ -215,3 +271,57 @@ lo mismo que uno. Es la diferencia entre $50 y $250 al mes.
    calidad no lo detecta ningún test.
 3. **¿Región?** Elígela ahora ([docs/04](04-multitenancy.md) §7). Cambiarla
    después con clientes dentro es una migración de datos.
+
+---
+
+## 10. Para activar en producción (checklist)
+
+El código de Fase 1 está completo y verde; lo que falta para prender producción
+**no es código**, son llaves e infraestructura. Todo esto está *deferido* a
+propósito (necesita cuentas y credenciales reales), no pendiente de programar.
+
+**1. Credenciales (`.env.local` en dev, Variables de Vercel en prod).** Rellenar
+la plantilla `web/.env.example` con valores reales, distintos por entorno:
+
+- **Neon:** crear los 3 roles y sus URLs — `DATABASE_URL` (`automata_app`),
+  `DATABASE_URL_WEBHOOK` (`automata_webhook`), `DATABASE_URL_OWNER` (dueño, solo
+  migraciones/ops). Aplicar `core/db/schema.sql` con el rol dueño. Usar la URL
+  del *pooler* en modo transacción para serverless.
+- **Clerk:** `CLERK_SECRET_KEY` + `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`; configurar
+  el *session token* para exponer `mfaVerifiedAt` (sin él el step-up siempre
+  re-pide MFA — fail-safe).
+- **Upstash:** `UPSTASH_REDIS_REST_URL` + `_TOKEN` (rate-limit fail-closed).
+- **CMA/Anthropic:** `ANTHROPIC_API_KEY` con acceso a Managed Agents (la del
+  spike está malformada) + `CMA_WEBHOOK_SECRET`.
+- **R2:** `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`
+  (token con permiso solo a su bucket).
+- **Stripe:** `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` + los `STRIPE_PRICE_*`.
+- **Cron:** `CRON_SECRET` (Vercel Cron lo manda como `Authorization: Bearer`).
+
+**2. Webhooks (dar de alta en cada consola apuntando a las rutas ya construidas).**
+
+- **CMA →** `POST /api/webhooks/cma`, con `CMA_WEBHOOK_SECRET`. Recordar el
+  hallazgo del ciclo: el webhook de CMA es *thin* — el éxito solo se confirma
+  re-consultando la sesión, el evento no lo trae (ver `wiring.ts:122`, la cosecha
+  cierra el loop).
+- **Stripe →** `POST /api/webhooks/stripe`, con `STRIPE_WEBHOOK_SECRET`.
+
+**3. Crons (requieren Vercel Pro).** Los 3 jobs de `web/vercel.json` (reaper
+cada 10 min, cosecha y disparo cada 2 min) solo se ejecutan en Vercel Pro. Sin
+Pro, drenar los outbox a mano o con un scheduler externo que pegue a
+`/api/cron/*` con el `CRON_SECRET`.
+
+**4. Runner gVisor (a5-Fase2).** El código del runner endurecido ya existe
+(`ContainerRunExecutor`, `core/src/run/container-executor.ts:64`); falta
+**desplegarlo**: un host con Docker/nerdctl + `runsc` (gVisor) instalado, y hacer
+el swap del `LocalPythonExecutor` (a5-Fase0, dev) por el `ContainerRunExecutor`
+en el punto de ejecución del Run. Sin gVisor real la jaula no protege.
+
+**5. (Plan, aún sin código) evals y agentes-como-YAML.** La suite de evals de
+prompts en CI (§4) y el versionado de agentes en `agentes/*.yaml` aplicados
+desde CI (§3) todavía no existen. Son la puerta de calidad para *cambios de
+prompt*; construirlos antes de tocar prompts en producción.
+
+El flujo de subida de insumos ya está cableado de punta a punta: `POST /ejemplo`
+(gate de seguridad → R2 → `ejemploKey`) → `POST /construir` → disparo → CMA →
+webhook → cosecha → `'lista'`.

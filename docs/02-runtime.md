@@ -4,6 +4,67 @@ Detalle de [ARQUITECTURA.md](../ARQUITECTURA.md) §2.
 
 ---
 
+## Estado de implementación (2026-07-26)
+
+Lo construido en Fase 1 (motor real en `core/`). El puerto y **dos** ejecutores
+existen y están probados; el resto de este documento sigue siendo el mapa de
+diseño, y donde una afirmación ya cambió por el código la marco en línea con
+"**Actualización:**".
+
+- **La regla de §1 se cumple en el código.** El puerto `RunExecutor` ejecuta
+  `run(artefacto, inputs)` y devuelve `{ resultado, ms, costoUsd, salidas }` —
+  **sin ninguna llamada a modelo** (`core/src/types.ts:247`). El wiring lo llama
+  ciego a la implementación en `core/src/pipeline/build-pipeline.ts:149`
+  (`deps.run.run(...)`), justo el punto de intercambio que §3 pedía.
+
+- **`LocalPythonExecutor` — el "puente" endurecido (a5-Fase 0).** Es el ejecutor
+  de la ventana INTERNA/M0, no un runner de producción multi-tenant
+  (`core/src/run/executor.ts:121`). Endurecimiento real, todo probado:
+  - **env allowlist** — el código de IA no hereda `DATABASE_URL`/`ANTHROPIC`/R2
+    ni `*_KEY`/`*_TOKEN`; solo pasa locale/zona (`core/src/run/executor.ts:61`).
+  - **`ulimit -t`/`-f`** (CPU y tamaño de archivo por-proceso) vía wrapper POSIX,
+    con el hijo como líder de grupo `detached` (`core/src/run/executor.ts:87`).
+  - **kill del GRUPO al timeout** de reloj de pared, sin dejar huérfanos
+    (`core/src/run/executor.ts:97`).
+  - **lectura ACOTADA del resultado** antes de `JSON.parse` (anti-OOM del
+    orquestador, `core/src/run/executor.ts:109`).
+  - **guard anti-prod**: lanza si `NODE_ENV=production` sin flag explícito, porque
+    no enjaula red/FS/kernel (`core/src/run/executor.ts:127`).
+  - **límites por defecto**: timeout 300 s, CPU 300 s, 100 MB/archivo, 50 archivos
+    y 100 MB en `/out`, resultado ≤16 MB (`core/src/run/executor.ts:38`), alineados
+    con la tabla de §6.
+
+- **`ContainerRunExecutor` — la jaula real de producción (a5-Fase 2).** Mismo
+  puerto `RunExecutor`, intercambiable sin tocar el pipeline
+  (`core/src/run/container-executor.ts:64`). Arma la corrida en un contenedor
+  **gVisor** con los flags que §6 exige: `--runtime runsc`, `--network none`,
+  `--read-only`, `--user 65534:65534`, `--cap-drop ALL`,
+  `--security-opt no-new-privileges`, `--pids-limit`, `--memory`, `--cpus`, con
+  `/work` de solo lectura y `/out` de escritura acotada
+  (`core/src/run/container-executor.ts:87`). Está **cableado**; se prueba de
+  verdad al desplegar el runner en su infra (necesita host con Docker/nerdctl +
+  runsc — no corre en serverless).
+
+- **Costo del Run = $0 de tokens.** Ambos ejecutores devuelven `costoUsd: 0`; el
+  costo real es solo session-hours de infra, contabilizado aguas arriba. El
+  helper `costoCmaEquivalente(ms)` calcula el equivalente a $0.08/h de CMA
+  (`core/src/run/executor.ts:181`).
+
+- **Prueba (`npm run verify:sandbox`)** — `core/package.json:51` →
+  `core/scripts/verify-run-sandbox.ts`. 4 casos sobre python REAL con fixtures
+  hostiles: (1) fuga de secretos por env, (2) resultado gigante → cota anti-OOM,
+  (3) happy path intacto, (4) bucle infinito muerto por timeout/kill de grupo. La
+  red y el aislamiento cross-tenant **no** se prueban aquí a propósito: son la
+  compuerta que bloquea promover el puente a usuarios externos.
+
+**Lo que sigue siendo plan (no implementado en este ciclo):** el despliegue del
+runner gVisor en su infra y el swap `LocalPythonExecutor → ContainerRunExecutor`
+en producción; la caché de la capa de dependencias por hash (§5); la cola/pool
+tibio de §7; el registro `runs` con métricas de §8 (existe la fila de ejecución
+con `ms`/`costoUsd`, pero no la telemetría completa que lista §8).
+
+---
+
 ## 1. La regla que lo gobierna todo
 
 **El Run no usa modelos de lenguaje. Ni uno.**
@@ -69,6 +130,15 @@ interface Runner {
 
 Dos implementaciones: `RunnerCMA` (MVP) y `RunnerContenedor` (Fase 2). Nada del
 resto del sistema sabe cuál está activa. Una variable de entorno decide.
+
+> **Actualización:** el puerto implementado se llama `RunExecutor`
+> (`core/src/types.ts:247`) y su método es `run(artefacto, inputs)` →
+> `{ resultado, ms, costoUsd, salidas }` — la forma difiere de este boceto pero
+> el principio (puerto intercambiable) es el mismo. Las dos implementaciones
+> reales son `LocalPythonExecutor` (el "puente" endurecido para M0, no CMA;
+> `core/src/run/executor.ts:121`) y `ContainerRunExecutor` (la jaula gVisor de
+> producción; `core/src/run/container-executor.ts:64`), y el pipeline las llama
+> ciego a cuál está activa (`core/src/pipeline/build-pipeline.ts:149`).
 
 Esto también te deja migrar **de forma gradual**: por organización o por
 porcentaje de tráfico. Mandas el 5% de las ejecuciones al runner nuevo, comparas
@@ -141,6 +211,15 @@ desconocido. Trátalo como hostil, siempre.
 | Procesos | Máx. 64 | Frena bombas de procesos |
 | Tamaño de `/out` | 100 MB | Frena llenar el disco |
 | Vida del contenedor | Se destruye siempre | Cero estado entre ejecuciones |
+
+**Actualización (implementación).** En la jaula real (`ContainerRunExecutor`) el tope de
+procesos se aplica con `--pids-limit` a nivel cgroup, valor por defecto **256** y configurable
+(`core/src/run/container-executor.ts`), no 64. El puente (`LocalPythonExecutor`) **no** limita
+el número de procesos a propósito (`ulimit -u` es por-USUARIO y tumbaría la máquina de dev; ese
+control queda para el contenedor). Ojo con `/out`: el cap de **100 MB / 50 archivos** hoy lo
+impone **solo el puente** (`core/src/run/executor.ts`); el contenedor acota el `resultado.json`
+a 16 MB (`leerAcotado`) pero aún no el tamaño total de `/out`. El resto (red off, root no, solo
+lectura, 512 MB, 1 núcleo/300 s, efímero) coincide con los defaults del código.
 
 **Sobre el aislamiento del kernel — corrección del red-team
 ([docs/11](11-threat-model.md) §3).** El borrador ponía gVisor/Firecracker como
@@ -216,6 +295,16 @@ Ambos arrancan un contenedor por petición, cobran por segundo y se apagan solos
 generación; Fly permite runtime endurecido) — que es justo lo que §6 exige para
 el cross-tenant. Fly arranca más rápido; Cloud Run integra mejor si ya estás en
 Google. Cualquiera sirve — no gastes una semana eligiendo.
+
+> **Actualización:** en la implementación el Run de la ventana M0 corre en el
+> **puente local endurecido** (`LocalPythonExecutor`), no en una sesión de CMA;
+> el guard anti-prod impide usarlo con datos de varios clientes
+> (`core/src/run/executor.ts:127`). Y la **decisión de sandbox ya está tomada**:
+> el runner objetivo es un **contenedor gVisor self-hosted**, ya cableado en
+> `ContainerRunExecutor` (`core/src/run/container-executor.ts:64`). El código es
+> agnóstico al host — el contenedor gVisor puede vivir en Fly/Cloud Run Jobs/VM,
+> como sigue diciendo el comentario del ejecutor — así que la elección entre esas
+> plataformas queda para el despliegue, no para el código.
 
 **Matiz sobre el MVP con `RunnerCMA`:** el aislamiento entre sesiones lo provee
 Anthropic (contenedores gestionados). Sirve para arrancar, pero verifica su

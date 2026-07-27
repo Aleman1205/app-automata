@@ -13,7 +13,7 @@ import { comoSuspension } from "../ops/killswitch.ts";
 //                          (kill-switch/suspensión) + trg_marcar_entrega (sella entrega)
 //   crearEjecucion (run) → trg_kill_run
 // Está ligado a UNA org (como una request): cada método abre su propia tx corta, que es
-// el modelo de producción (cada paso de Inngest es una invocación aparte, docs/03).
+// el modelo de producción (cada paso del loop async —drainer de cron— es aparte, docs/03).
 // RLS acota SELECT/UPDATE por id sin necesidad de pasar la org (fail-closed sin contexto).
 // El app solo escribe lo que le toca: versiones(estado, artefacto_key); tipo/creada/
 // contador viven en la BD (ver GRANT/REVOKE en schema.sql).

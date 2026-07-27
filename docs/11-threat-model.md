@@ -24,6 +24,90 @@ de verdad separa a los clientes es el **aislamiento del contenedor** (§3).
 
 ---
 
+## Estado de implementación (2026-07-26)
+
+Fase 1 dejó de ser papel para varias de las defensas que este documento pedía.
+Resumen de lo **construido y probado** (con el `verify` que lo demuestra); lo que
+sigue siendo plan se marca explícitamente. Las afirmaciones del cuerpo que la
+implementación volvió falsas están corregidas en línea con **Actualización:**.
+
+**Aislamiento cross-tenant / RLS (§3, §6) — HECHO y probado.** El rol de
+aplicación es dedicado, no-dueño, `NOSUPERUSER NOBYPASSRLS`
+(`core/db/schema.sql:16`), con `FORCE ROW LEVEL SECURITY` y la política
+`aislada_por_org` (`org_id = app_current_org()`, `USING` + `WITH CHECK`) sobre
+las 7 tablas con `org_id` (`core/db/schema.sql:773-798`). El aislamiento se
+prueba **por el camino de código real** (Node → `pg` → RLS), corriendo como el
+rol de app real, no solo verificando que la policy exista: `verify:pg`
+(`core/scripts/verify-pg.ts`) — incluye que una query SIN `conOrg` ve 0 filas
+(fail-closed, `verify-pg.ts:78-79`) y que `afirmarRolSeguro` **rechaza** un pool
+superusuario o dueño (`verify-pg.ts:56-75`). Blindaje extra del `search_path`
+contra `pg_temp` (una tabla `pg_temp.automatizaciones` haría que las funciones
+`SECURITY DEFINER` leyeran la tabla falsa) en `core/db/schema.sql:290-302`, con
+`REVOKE TEMPORARY`/`REVOKE CREATE ON SCHEMA public`.
+
+**Kill-switch (§10, §11) — HECHO y probado.** Freno DB-enforced de dos capas:
+el guard `verificar_freno(p_op)` para llamar antes del trabajo caro
+(`core/db/schema.sql:413-429`) y el backstop `verificar_kill_switch` como
+trigger `BEFORE INSERT` sobre `versiones` (builds) y `ejecuciones` (runs)
+(`core/db/schema.sql:750`, `821-833`). Bitácora append-only `bitacora_kill` y
+suspensión por org. `verify:killswitch:pg`; la baja de tenant (owner-only) en
+`verify:offboarding:pg`.
+
+**Cuota / abuso económico (§8) — HECHO, incluido el tope de ejecuciones que
+CORTA.** `app_consumir` (`core/db/schema.sql:375-402`, exige subscription
+`activa`) es el único camino que sube contadores; sin oversell ni auto-ascenso.
+Lo que este doc pedía como **decisión pendiente #3** (un tope de ejecuciones que
+corte, no solo alarme) ya existe: `cobrar_ejecucion` cobra al reservar vía
+`app_consumir(..., 'ejecuciones')` (`core/db/schema.sql:835-848`), enforced por
+trigger en `ejecuciones`. `verify:cuota:pg`, `verify:plan:pg`.
+
+**Gate de insumos (§4, §4bis) — CABLEADO (a4) y probado.** El validador
+determinista existía pero ningún flujo lo invocaba; el puente
+`core/src/entrada/puente.ts` es ahora un **choke-point obligatorio** (no
+inyectable a propósito, `puente.ts:12-17`): `gatearEjemplo`/`gatearInputs`/
+`gatearArchivoBytes` (`puente.ts:61-88`) están cableados a build, run y upload —
+`build-pipeline.ts:42,124` y el embudo único `cma/build.ts:190` (dentro de
+`prepararSesion`). Cubre XXE/billion-laughs (`escanearXxe`,
+`deteccion.ts:70`), zip-bomb + path traversal (`deteccion.ts`), pixel-flood
+(`maxPixeles` 200 MP, `tipos.ts:51`), spoofing por magic bytes y el sobre de
+lote agregado (`validarLote`, `validador.ts:102-129`). `verify:entrada`,
+`verify:entrada:gate`.
+
+**El RUN (§3, §5) — el riesgo #1 ya NO está sin mitigar; tiene camino de
+cierre.** Dos executors detrás del mismo puerto `RunExecutor`:
+- **Fase 0 ("puente"),** `core/src/run/executor.ts` — contención de bajo costo
+  para la ventana interna/M0: env ALLOWLIST que **no hereda secretos**
+  (`DATABASE_URL`/`ANTHROPIC_API_KEY`/R2, `executor.ts:59-78`), `ulimit -t/-f`,
+  kill del grupo al timeout, lectura acotada del resultado, y un **guard
+  anti-producción** que lanza si se usa con `NODE_ENV=production`
+  (`executor.ts:121-130`). NO es jaula real (red/FS/kernel siguen abiertos por
+  diseño, `executor.ts:9-19`). `verify:sandbox`.
+- **Fase 2 (jaula real gVisor),** `core/src/run/container-executor.ts` —
+  `ContainerRunExecutor` **codificado** con `--runtime=runsc --network none
+  --read-only --user 65534 --cap-drop ALL --no-new-privileges --pids-limit
+  --memory --cpus` (`container-executor.ts:64-102`). Implementa el mismo puerto,
+  así que se intercambia sin tocar el pipeline. **Pendiente de despliegue** (no
+  de código): requiere un host con Docker/nerdctl + `runsc` y hacer el swap
+  `LocalPythonExecutor → ContainerRunExecutor` — es el camino de cierre de la
+  decisión #1, no un residuo lejano.
+
+**Otras superficies ya construidas y probadas** (soportan afirmaciones de este
+doc): firma de webhooks HMAC ANTES del dedupe (§7) —
+`core/src/webhooks/{firma,receptor}.ts`, `verify:webhooks:handlers:pg`;
+autorización `assertCan` + membresía viva por request (§6) — `verify:http`,
+`verify:rutas`; observabilidad append-only de incidentes (`incidentes`,
+`app_registrar_incidente`, `core/db/schema.sql:542-549`) — `verify:incidentes:pg`.
+
+**Sigue siendo plan (no marcar como hecho):** el despliegue del runner gVisor y
+el swap de executor; el mirror privado de PyPI con DNS fijado para el egress del
+build (§5, decisión #2 — hoy se apoya en `networking: limited` de CMA, ver
+`docs/decisiones-runtime.md`); el egress real del OCR (§4bis); y el checklist de
+pre-lanzamiento de §10 contra infra real (Neon pooler, WAF, backups). Los
+`verify` prueban el **camino de código**, no sustituyen la verificación contra
+la infraestructura de producción.
+
+---
+
 ## 1. Qué protegemos (en orden)
 
 1. **Los datos de los clientes** — facturas, nóminas, listas. Una filtración
@@ -71,6 +155,16 @@ portante del activo #1. **Recomendación revisada: adelantar el aislamiento
 fuerte (gVisor es el más barato de operar) a antes del primer cliente de pago,
 no a "cuando haya volumen".** El "sin red en el runner" ya corta la
 exfiltración *después* de un escape exitoso, pero no el escape mismo. Ver §12.
+
+**Actualización (2026-07-26):** el riesgo #1 dejó de estar sin mitigar. La jaula
+gVisor está **codificada** en `ContainerRunExecutor`
+(`core/src/run/container-executor.ts:64-102`: `--runtime=runsc --network none
+--read-only --user 65534 --cap-drop ALL --pids-limit --memory --cpus`), detrás
+del mismo puerto `RunExecutor` que el puente de Fase 0 — el swap no toca el
+pipeline. Para la ventana interna/M0 corre el `LocalPythonExecutor` (Fase 0), que
+sí bloquea la fuga de secretos por env y trae un guard anti-producción
+(`core/src/run/executor.ts:121-130`). Lo que falta es **desplegar** el runner
+gVisor y hacer el swap; el código del eslabón portante ya existe.
 
 Este documento deja de afirmar que "hay que romperlas todas": para el
 cross-tenant, **las capas de inyección no aplican y el control portante es el
@@ -174,6 +268,15 @@ BUILD sí (CMA necesita pip). Son dos niveles de contención distintos.
 | Persistencia | Contenedor efímero, raíz de solo lectura | 02 §6 |
 | Fórmula en salidas | Neutralización + regresión | §4 |
 
+**Actualización (2026-07-26):** estas defensas del RUN están **codificadas** en
+`ContainerRunExecutor` (`core/src/run/container-executor.ts:87-102`): `--network
+none` (sin red), `--read-only` + `/out` como único mount de escritura acotado,
+`--pids-limit`/`--memory`/`--cpus` (bombas de recursos y fork-bomb, lo que el
+puente de Fase 0 NO podía cortar a nivel cgroup), contenedor `--rm` efímero y
+`--user 65534 --cap-drop ALL --no-new-privileges`. Falta desplegar el runner
+gVisor (ver §3, Actualización). En la ventana interna, el `LocalPythonExecutor`
+da la contención de bajo costo (`core/src/run/executor.ts`, `verify:sandbox`).
+
 ### En el BUILD (contención más débil — tiene red)
 
 El Builder ejecuta el código que genera contra el archivo **real** del cliente,
@@ -221,6 +324,15 @@ SECURITY` en toda tabla con `org_id`. El test del checklist corre **como ese
 rol real**, no solo verifica que la policy exista. ([docs/04](04-multitenancy.md)
 §2, ya anotado.)
 
+**Actualización (2026-07-26):** HECHO. El rol `automata_app` es `LOGIN
+NOSUPERUSER NOBYPASSRLS` (`core/db/schema.sql:16`) y hay `FORCE ROW LEVEL
+SECURITY` + `aislada_por_org` en las 7 tablas con `org_id`
+(`core/db/schema.sql:773-798`). El test (`verify:pg`, `core/scripts/verify-pg.ts`)
+corre **como ese rol real** por el camino Node→pg→RLS: verifica que sin `conOrg`
+se ven 0 filas (fail-closed) y que `afirmarRolSeguro` rechaza un pool
+superusuario o un rol dueño no-super que podría `DISABLE RLS`
+(`verify-pg.ts:56-79`).
+
 ## 7. Superficie: el pipeline de build
 
 | Vector | Defensa | Doc |
@@ -231,6 +343,14 @@ rol real**, no solo verifica que la policy exista. ([docs/04](04-multitenancy.md
 | Datos del cliente en trazas de CMA | Retención 90 días; el borrado incluye `sessions.delete()` en Anthropic | 04 §4 |
 | API key de Anthropic | Solo servidor, por entorno, jamás en cliente ni contenedor de run; rotación documentada (§11) | 07 §5 |
 | Gasto desbocado en build | `task_budget` + tope de iteraciones + corte a $10/build + contador acumulado + alarmas | 03 §5, 05 §4 |
+
+**Actualización (2026-07-26):** la fila de webhooks falsificados ya NO está
+pendiente. La firma HMAC-SHA256 se verifica sobre el cuerpo **CRUDO** ANTES de
+parsear y ANTES del dedupe (firma inválida → rechazado, nunca se parsea):
+`core/src/webhooks/receptor.ts:85-87` con `core/src/webhooks/firma.ts`
+(standard-webhooks/Svix para CMA con `whsec`, esquema propio de Stripe,
+`crypto.timingSafeEqual`, ventana de tiempo). La org se deriva del recurso
+**firmado**, nunca del payload. Probado en `verify:webhooks:handlers:pg`.
 
 ## 8. Superficie: abuso económico
 
@@ -248,6 +368,16 @@ corte**, no solo alarme. Con el Run a <1¢ el techo puede ser **holgado** (no ap
 al cliente legítimo), pero debe existir y **cortar** — un bucle desatendido acumula
 session-hours igual. Se construye en M3 ([docs/14 §3](14-controles-de-seguridad.md)).
 Ver §12.
+
+**Actualización (2026-07-26):** el tope de ejecuciones que **corta** ya existe en
+la BD. `cobrar_ejecucion` (`core/db/schema.sql:835-848`) cobra al **reservar** vía
+`app_consumir(..., 'ejecuciones')`, enforced por trigger `BEFORE INSERT` en
+`ejecuciones`; sin esto el camino real del run solo disparaba el kill-switch y
+nadie consumía la cuota (el tope no existía). `app_consumir`
+(`core/db/schema.sql:375-402`) exige subscription `activa` y es el único camino
+que sube contadores (sin oversell ni auto-ascenso). Probado en `verify:cuota:pg`
+y `verify:plan:pg`. Queda por fijar el **umbral por plan** contra datos reales de
+uso (§12 #3), pero el mecanismo de corte ya no es plan.
 
 ## 9. Riesgos aceptados e higiene operacional
 

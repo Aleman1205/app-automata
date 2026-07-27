@@ -10,6 +10,72 @@ genera preguntas, cómo decide cerrar, qué produce y cómo se protege.
 
 ---
 
+## Estado de implementación (2026-07-26)
+
+Construido en Fase 1 el **núcleo del intake + planner + el disparo del build**.
+Lo determinista se prueba sin modelo (`verify:intake`, `verify:planner`); el
+camino con modelo se corre en vivo con `intake:live` / `planner:live`.
+
+**Ya construido:**
+
+- **El entrevistador (§1, §2, §3).** `IntakeAgent` llama a **Sonnet** por turno
+  con salida estructurada por tool (`core/src/intake/agent.ts:17` fija
+  `MODELO = "claude-sonnet-5"`; `agent.ts:36` `turno()`). La **unión discriminada
+  de 3 variantes** preguntar/cerrar/rechazar es el tipo `TurnoResultado`
+  (`core/src/intake/schema.ts:38-41`) y la **restricción por turno** de la tabla
+  §2 la impone `toolsDelTurno()` ofreciendo distintas tools, no el prompt
+  (`core/src/intake/schema.ts:177-179`: turno ≥ 3 → solo `[cerrar, rechazar]`).
+- **`validarSpec` determinista (§4).** `core/src/intake/validator.ts:22` — objetivo
+  20–500, ≥1 entrada, ≥1 salida, 2–10 criterios con ambos lados no vacíos, ≤15
+  reglas, tope de longitud "en todo" (`MAX_STR=400`, `validator.ts:12`), y la
+  regla dura confianza `baja` → `ambiguedades_restantes` no vacía
+  (`validator.ts:62`). Corre después del esquema del modelo (best-effort) y no
+  crashea con spec ausente. Probado por `verify:intake`
+  (`core/scripts/verify-intake.ts`).
+- **Presupuesto de cierre = 3 reintentos con feedback (§4).**
+  `core/src/intake/agent.ts:19,40`; si tras agotarse el spec sigue
+  estructuralmente inválido **NO se emite** (ver corrección en §4).
+- **Seguridad del texto hostil (§8).** `mensajeTurno` delimita la idea y las
+  respuestas libres en `<dato_cliente>…` y sanitiza `<`/`>` + recorta a 2100
+  chars (`core/src/intake/prompt.ts:54,59-77`); el clic de opción viaja como
+  "eligió:" (autoridad del servidor), el texto libre como dato hostil
+  (`agent.ts:119-124`). El sistema (`prompt.ts:4-43`) instruye ignorar órdenes
+  dentro de esas marcas.
+- **El spec → el Builder (§4, §8).** `intakeSpecABuildSpec`
+  (`core/src/intake/adapter.ts:7-18`) aplana al **lado técnico** (`criterio`, no
+  `criterio_cliente`) y **no propaga `idea_original`**: aguas abajo solo viaja
+  el objetivo redactado.
+- **El Planner (aludido en §4 como consumidor del spec).** `PlannerAgent` con
+  **Opus** (`core/src/planner/agent.ts:12` `MODELO = "claude-opus-4-8"`,
+  `:21` `planear()`) produce **vista + contrato de resultado** y no devuelve un
+  plan hasta pasar la **puerta de coherencia** determinista
+  (`core/src/planner/coherencia.ts:22` `validarCoherencia`, cableada en
+  `agent.ts:60-65`: toda ref `@resultado.*` respaldada por el contrato, con tipo
+  correcto). Probado por `verify:planner`.
+- **El disparo (§9 "nace al aprobar").** `POST /orgs/:orgId/construir`
+  (`solicitarBuildEP`, `core/src/http/endpoints.ts:131-143`) recibe la spec
+  aprobada + la clave del ejemplo ya subido, valida el cuerpo, exige que el
+  ejemplo esté bajo el prefijo de la propia org (anti cross-org) y **encola** vía
+  el SD `app_solicitar_build` (`core/db/schema.sql:569`) — el planner + arranque
+  del build corren FUERA del request (drainer). Probado por `verify:disparo:pg`.
+
+**Sigue siendo plan (NO construido todavía):**
+
+- **Auditoría barata con Haiku (§5).** No hay ninguna llamada a Haiku en el
+  código; los reintentos de cierre son **solo de Zod** hoy (ver §4/§5).
+- **Persistencia y máquina de estados del intake (§9).** No existe la tabla
+  `intakes` en `core/db/schema.sql`; el intake corre en proceso
+  (`IntakeAgent.entrevistar`, `agent.ts:110`) sin persistir transcript, estados,
+  optimistic locking por turno, ni los campos de autoridad del servidor
+  (`idea_original`, `respuestas`). El outbox del disparo que SÍ existe es
+  `build_pendiente`, no `intakes`.
+- **Pantalla de aprobación y turno de corrección (§6).** No hay backend de
+  aprobación/correcciones (el prototipo del front las simula).
+- **Anti-abuso específico del intake (§8):** 10 intakes/día y el tope de builds
+  2× espacios no están en el código del intake (el tope de espacios de
+  `automations` sí lo imponen los triggers de cuota, por separado).
+- **Métricas del embudo (§10)** y el **spike de entrevista (§11)**.
+
 ## 1. Qué es y qué no es
 
 El intake convierte **texto libre + respuestas de opción múltiple + un archivo
@@ -162,9 +228,26 @@ comparten el contador). Al agotarse: se acepta el último spec que pasó Zod,
 con `confianza: "baja"` y las fallas volcadas a `ambiguedades_restantes` — la
 aprobación ya sabe mostrarlas. **Nunca se deja un intake colgado.**
 
+> **Actualización (implementación):** como la auditoría §5 (Haiku) aún no está
+> construida, el contador de reintentos hoy es **solo de Zod**
+> (`core/src/intake/agent.ts:19,40`). Y al agotarse el presupuesto el
+> comportamiento es más estricto que lo escrito arriba: si el spec sigue
+> **estructuralmente inválido**, la única reparación automática es el caso
+> acotado `confianza:"baja"` sin ambigüedades (se le inyecta una ambigüedad
+> genérica, `agent.ts:86-90`); cualquier otra falla estructural **lanza
+> `IntakeError` y NO emite un spec roto al build** (`agent.ts:91-94`) — la
+> garantía "nunca se deja colgado" se cumple no emitiendo basura, no aceptando
+> un spec inválido.
+
 **Congelado al aprobar.** Inmutable; un ajuste produce spec v2 con el v1 de base.
 
 ## 5. Auditoría barata del cierre (Haiku)
+
+> **Actualización (implementación):** esta auditoría con Haiku **aún no está
+> construida** — no hay ninguna llamada a Haiku en `core/src/intake`. Hoy el
+> cierre solo pasa por `validarSpec` (§4, determinista). Lo de abajo sigue siendo
+> el diseño pendiente; el filtro semántico de reglas (§5.3, citado también en §8)
+> depende de él.
 
 Una llamada de centavos sobre el spec recién generado, tres preguntas:
 
@@ -329,6 +412,15 @@ intakes `en_curso` pre-llenados esperando al cliente.
 contestaría quien hace el proceso a mano"? ¿Los criterios salen verificables Y
 suficientes? ¿El filtro de reglas atrapa una inyección de prueba? Una tarde de
 trabajo; valida la pieza con más contacto con el cliente.
+
+> **Actualización (implementación):** el `spike/entrevista.js` como tal no se
+> escribió; la validación de esta pieza aterrizó en Fase 1 como (a) el núcleo
+> determinista sin modelo en `core/scripts/verify-intake.ts` (`verify:intake`) y
+> (b) la corrida en vivo contra Sonnet sobre una idea real en
+> `core/scripts/intake.ts` (`intake:live`, idea de Vitrales por defecto). La
+> prueba de "una inyección disfrazada de regla se elimina" sigue pendiente
+> porque el filtro semántico depende de la auditoría §5 (Haiku), aún no
+> construida.
 
 ## 12. Decisiones abiertas
 

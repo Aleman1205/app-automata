@@ -20,6 +20,85 @@ eso sea visible desde el primer mes.
 
 ---
 
+## Estado de implementación (2026-07-26)
+
+Fase 1 construyó **la mitad de observabilidad que evita quedarse ciego cuando
+algo pasa en silencio**: incidentes durables (con lector), reconciliación por el
+reaper, y reconstrucción del costo del build. **La otra mitad — el panel de
+margen por org (§3) como consulta unificada — sigue siendo plan** (las piezas
+existen a medias; detalle abajo). Este bloque resume qué está construido; el
+resto del documento sigue siendo el diseño objetivo.
+
+### Construido
+
+- **Incidentes durables (reemplazan los `console.error` que se perdían sin
+  lector).** Tabla `incidentes` **append-only a nivel plataforma, sin RLS**
+  (ops la mira cross-org; algunos incidentes nacen sin org), único camino de
+  escritura para el app es el SD `app_registrar_incidente` (`SECURITY DEFINER`,
+  `search_path` blindado, `actor = session_user`, y **anti-forge: si hay
+  contexto de org, ese manda sobre el `p_org` pasado**).
+  Evidencia: `core/db/schema.sql:236` (tabla + índice de abiertos `:250`),
+  `core/db/schema.sql:329` (`REVOKE ALL` al app), `core/db/schema.sql:542`
+  (el SD + `GRANT EXECUTE` `:549`).
+- **API de lectura/escritura y el fix del re-brick.** `registrarIncidente`
+  (autocommit, para el reaper/owner), `emitirEnTx` (**envuelve el INSERT en un
+  `SAVEPOINT` para que un fallo del sink NO aborte la tx** — sin esto,
+  `confirmarAjuste` revertiría `building→lista` y ladrillaría la
+  automatización), `incidentesAbiertos` (el panel pull-based de ops, graves y
+  viejos primero) y `resolverIncidente` (cierre idempotente).
+  Evidencia: `core/src/ops/incidentes.ts:36` / `:50` / `:74` / `:85`.
+- **Tipos de incidente (6):** `pago_no_entregado`, `entrega_sin_ajuste`,
+  `webhook_desconocido`, `build_colgado`, `cosecha_fallida`, `otro` — enum en TS
+  y `CHECK` en la BD, así que un tipo mal escrito revienta el INSERT.
+  Evidencia: `core/src/ops/incidentes.ts:16`, `core/db/schema.sql:238`.
+- **Emisores cableados en todos los puntos de fuga de dinero/entrega:** el
+  reaper (`build_colgado`, `core/src/ciclo/servicio.ts:296`), la cosecha
+  (`cosecha_fallida` si los bytes no quedaron en storage,
+  `core/src/pipeline/cosecha.ts:66`), `confirmarAjuste` (`pago_no_entregado`
+  sobre una versión ya `failed`, `entrega_sin_ajuste` si falla el conteo —
+  `core/src/ciclo/servicio.ts:202` y `:229`), el handler de webhook de CMA
+  (`webhook_desconocido`, `pago_no_entregado` — `core/src/webhooks/handlers.ts:43`
+  y `:58`) y el disparo de builds (`otro` al descartar tras N intentos,
+  `core/src/pipeline/disparo.ts:67`).
+- **El reaper emite y reconcilia.** `reaparBuildsColgados` barre los builds
+  `building` añejos → `failed`, emite un `build_colgado` por fila y limpia el
+  outbox de cosecha. Umbral real: **default 6 h, piso duro de 30 min** (nunca
+  reaper-ea builds frescos), no los 60 min sugeridos en §4.
+  Evidencia: `core/src/ciclo/servicio.ts:286` (constantes `:60`–`:61`).
+- **Reconstrucción de costo del build, best-effort, en la cosecha.**
+  `reconstruirCosto` re-lista los eventos de la sesión de CMA y suma el
+  `model_usage` de cada `span.model_request_end` con el mismo cálculo que el
+  stream síncrono. **Es OBSERVABILIDAD, nunca gatea la entrega**: si el SDK no
+  expone `events.list` o falla, devuelve `0` + log. La consola de Anthropic
+  sigue siendo la fuente autoritativa (`run.js` subcuenta ~1.4×).
+  Evidencia: `core/src/cma/build.ts:307` (llamado desde `cosechar` `:300`,
+  cálculo `costoDe` `:74`, precios `:41`).
+- **Costo del Run persistido por ejecución.** La columna `ejecuciones.costo_usd`
+  se escribe al cerrar cada ejecución; es el ledger de runs (no la puede borrar
+  el app: `REVOKE DELETE`).
+  Evidencia: `core/db/schema.sql:124` / `:360`, `core/src/pipeline/build-pipeline.ts:158`.
+
+Prueba: `npm run verify:incidentes:pg` (`core/scripts/verify-incidentes-pg.ts`)
+cubre grants, anti-forge, `actor=session_user`, enum, append-only, el fix del
+re-brick con `emitirEnTx` y el camino real de `confirmarAjuste` sobre `failed`.
+
+### Todavía plan (no construido)
+
+- **El panel de margen por org (§3) como consulta unificada.** Existen las
+  piezas sueltas (costo de Run por ejecución en `ejecuciones.costo_usd`;
+  incidentes abiertos vía `incidentesAbiertos`) pero **no hay una consulta que
+  reste `precio − Σbuilds − Σruns − almacenamiento` por org**. Faltan: persistir
+  el costo del build (hoy `reconstruirCosto` lo calcula pero **no lo guarda** —
+  el `costoUsd` que devuelve `cosechar` no se escribe en ninguna tabla) y el
+  costo de almacenamiento.
+- **El ledger de uso de tokens del §2 (`registrarUso`).** No existe esa función
+  ni una tabla de `uso` de tokens por fase; el único costo persistido es el de
+  Run por ejecución (arriba).
+- **Las alarmas del §4** (umbrales, corte automático, notificación) y **la suite
+  de regresión / evals del §5.** No construidas en este ciclo.
+
+---
+
 ## 2. Atribución de costos
 
 **Regla no negociable: toda llamada a un modelo se etiqueta en el punto donde
@@ -86,6 +165,19 @@ ignorarlas todas.
 | Cola de builds | > 20 esperando | Falta capacidad |
 
 Las dos primeras son las que te salvan dinero de verdad. Las demás son higiene.
+
+**Actualización (2026-07-26):** ninguna de estas alarmas se construyó todavía,
+pero dos filas cambiaron de forma por la implementación:
+
+- *Build individual caro (> $10 → cortar):* el build corre **asíncrono y blindado
+  en CMA**, así que su costo solo se conoce **después** (`reconstruirCosto` en la
+  cosecha, `core/src/cma/build.ts:307`), no en vivo. No hay hoy un corte por
+  umbral de dólares a mitad del build; lo que existe es el kill-switch global
+  (`trg_kill_build`) y el circuit breaker de reparaciones, no un tope por-build.
+- *Builds atascados (> 60 min → reconciliar):* la reconciliación **sí está
+  construida** — `reaparBuildsColgados` (`core/src/ciclo/servicio.ts:286`) barre
+  los `building` añejos a `failed` y emite un incidente `build_colgado`. El
+  umbral real no son 60 min: **default 6 h, piso duro de 30 min**.
 
 ---
 

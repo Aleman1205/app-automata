@@ -21,6 +21,39 @@ y RLS se materialice en M2. La matriz completa de casos comunes (65, por dominio
 en **[docs/14 — controles de seguridad](14-controles-de-seguridad.md)**; abajo se
 marcan `[SEG]` las tareas que salen de ahí.
 
+## Estado de implementación (2026-07-26)
+
+> El **motor de M0–M4 está construido** como rebanadas framework-agnósticas en
+> `core/src/` (TS + tsx), y el **wiring a Next 16** en `web/`. Lo único que queda de
+> Fase 1 es **activar en producción** (llaves + infra, no código) y el **ancho de
+> catálogo / multi-input de M5**. Las anotaciones `✅ Construido` por milestone (más
+> abajo) siguen vigentes; esta tabla las une y añade lo que faltaba marcar: **M0**
+> (el loop), **M1** (intake+planner) y el **wiring** que cerró los `Abierto (→ wiring)`.
+
+| Milestone | Estado | Evidencia (archivo:línea · verify) |
+|---|---|---|
+| **M0 — loop build→artefacto→run→vista** | ✅ Construido | `core/src/pipeline/build-pipeline.ts:35` (`construir`) + `:113` (`ejecutar`); `core/src/vista/resolver.ts:161` (`resolverVista`, la puerta de calidad de docs/09); `core/src/run/executor.ts:121` (`LocalPythonExecutor`, Run **sin modelo**); demo punta-a-punta `core/scripts/run-m0.ts` (`npm run m0`). `verify`, `verify:sandbox`. |
+| **M1 — intake + planner** | ✅ Construido (motor) | `core/src/intake/agent.ts:32` (`IntakeAgent`, Sonnet; spec validado **antes** de fluir, `:110` `entrevistar`); `core/src/planner/agent.ts:18` (`PlannerAgent`, Opus, puerta de coherencia). `verify:intake`, `verify:planner`. **Falta:** cablear el `/nueva` del front al intake real. |
+| **M2 — aislamiento + auth** | ✅ Motor + wiring | pipeline de 8 capas `core/src/http/pipeline.ts`; RLS/rol no-dueño `core/db/schema.sql` (851 líneas; roles `automata_app` líneas 15-22, `automata_webhook` líneas 515-518) + `core/src/db/pg.ts:25` (`crearPoolApp`) `:41` (`afirmarRolSeguro`) `:75` (`conOrg`); `PgStateRepo` `core/src/state/pg.ts:48`. `verify:http`, `verify:pgstate:pg`, `verify:pg`, `verify:adaptador:pg`, `verify:rutas`. |
+| **M3 — billing + cuota** | ✅ Motor + firma Stripe | `core/src/billing/*` + triggers en `schema.sql`; firma Stripe `core/src/webhooks/firma.ts` + handler `procesarStripe` (`core/src/webhooks/handlers.ts`). `verify:cuota`, `verify:cuota:pg`, `verify:plan:pg`. **Falta:** checkout/portal de Stripe (llaves). |
+| **M4 — ciclo + robustez + entrada hostil** | ✅ Construido | ciclo `core/src/ciclo/servicio.ts`; gate de insumos `core/src/entrada/puente.ts:62` (`gatearEjemplo`) `:77` (`gatearInputs`); kill-switch `core/src/ops/killswitch.ts:54` (`verificarFreno`) `:102` (`purgarOrg`). `verify:ciclo(:pg)`, `verify:ventana:pg`, `verify:reparaciones:pg`, `verify:entrada(:gate)`, `verify:killswitch:pg`, `verify:offboarding:pg`, `verify:incidentes:pg`. |
+| **Wiring Next 16** (cierra los `Abierto (→ wiring)`) | ✅ Construido | `web/lib/automata/wiring.ts` — `ruta()` `:102` (único camino sancionado), `webhook()` `:122`, `subirEjemplo()` `:216` (upload multipart + gate), crons `:167/:186/:205`; 10 `web/app/api/**/route.ts`; `web/vercel.json`. `verify:rutas`, `verify:webhooks(:handlers:pg)`, `verify:cosecha:pg`, `verify:disparo:pg`. |
+| **Data plane** | ✅ Construido | R2 `core/src/storage/r2.ts:52`; CMA async `core/src/cma/build.ts:148` (`arrancar`/`cosechar`/`clasificarSesion`); jaula gVisor `core/src/run/container-executor.ts:64` (`ContainerRunExecutor`: `--runtime=runsc --network none --read-only --cap-drop ALL`). `verify:storage`, `verify:cma`, `verify:sandbox`. |
+| **M5 — ancho de catálogo + multi-input/OCR** | ⬜ Pendiente (plan) | el gate `core/src/entrada/` **valida** formatos, pero el **ruteo por-plan archivo-por-archivo** (XML/QR gratis, foto→OCR) y el mini-spike de OCR **no existen**. |
+
+**Lo que REALMENTE queda de Fase 1 (activación, no código):** credenciales de
+`web/.env.example` en Vercel/Neon (`DATABASE_URL` + variantes de rol, Clerk, R2,
+Stripe, `CRON_SECRET`); alta de webhooks en las consolas de CMA y Stripe; crons de
+Vercel Pro (ya declarados en `web/vercel.json`); desplegar el host con gVisor y
+cambiar `LocalPythonExecutor` → `ContainerRunExecutor`; el email de aviso (Resend)
+**no está cableado** aún. El flujo de subida ya existe (`POST /api/orgs/[orgId]/ejemplo`).
+
+**Residuales de (b) cerrados en M0:** el **Run corre SIN modelo** — confirmado en
+`core/src/run/executor.ts` (el `LocalPythonExecutor` no invoca ningún modelo;
+`costoUsd: 0` local y `costoCmaEquivalente` = solo session-hours, `:181`). La
+garantía anti-escape del sandbox se materializa como la **jaula gVisor** de Fase 2,
+**ya codificada** (`core/src/run/container-executor.ts`) y pendiente solo de host.
+
 ## El stack (decidido)
 
 | Capa | Elección | Nota |
@@ -28,12 +61,22 @@ marcan `[SEG]` las tareas que salen de ahí.
 | Front | Next.js 16 + Tailwind 4 + motion + Recharts | **Ya construido** (el prototipo) |
 | Auth | Clerk (MFA obligatoria owner/facturación) | docs/13 |
 | Base de datos | Postgres en Neon | RLS con **rol no-dueño + FORCE** (docs/04) |
-| Workflows durables / webhooks | Inngest | `step.waitForEvent` para el webhook de CMA (docs/03) |
+| Workflows durables / webhooks | ~~Inngest~~ (ver Actualización) | `step.waitForEvent` para el webhook de CMA (docs/03) |
 | Build + Run | Managed Agents (CMA) | **environment por org**; build con `packages` + `networking: limited` |
 | Blob | Cloudflare R2 (S3-compat) | artefactos + salidas |
 | Email | Resend | avisos de build listo |
 | Billing | Stripe | planes $499/$999/$1,999; webhooks firmados |
-| Hosting | Vercel (front + API) + Inngest | |
+| Hosting | Vercel (front + API + Cron) | ~~+ Inngest~~ (ver Actualización) |
+
+**Actualización (2026-07-26):** **no se usó Inngest.** El loop asíncrono se
+implementó con **Vercel Cron + outboxes en Postgres**: el webhook de CMA es *thin*
+(solo encola), y drainers idempotentes con `FOR UPDATE SKIP LOCKED` hacen el trabajo
+(`build_pendiente`→`drenarBuilds` en `core/src/pipeline/disparo.ts`;
+`cosecha_pendiente`→`drenarCosecha` en `core/src/pipeline/cosecha.ts`). Los crons se
+declaran en `web/vercel.json` y se cablean en `web/lib/automata/wiring.ts`
+(`cronDisparo`/`cronCosecha`/`cronReaper`). No hay `step.waitForEvent`: el éxito del
+build **no** viene del evento, sino de re-consultar la sesión (`clasificarSesion`,
+`core/src/cma/build.ts:130`).
 
 ## La secuencia
 
@@ -43,6 +86,9 @@ infra, no solo en el script del spike.
 **Construyes:**
 - Esqueleto: API routes de Next + Neon (schema mínimo: orgs, automations,
   versions, runs) + Inngest + R2 + integración CMA.
+  **Actualización:** el esqueleto se construyó con **Vercel Cron + outboxes**, no
+  Inngest (ver Actualización bajo el stack). El schema real es más ancho que el
+  mínimo (`core/db/schema.sql`, 851 líneas).
 - **Un usuario/org hardcodeado** (sin auth todavía).
 - El pipeline: spec a mano (como `spike/casos.js`) → **build en CMA** (config
   confirmada: `packages` pre-instalados + `networking: limited` sin hosts) →
@@ -282,6 +328,11 @@ hasta el mini-spike de OCR (`docs/automatizaciones-fichas.md`).
    `networking: limited` sin hosts.
 3. Función de Inngest: dado un spec → crea sesión CMA → `define_outcome` →
    `waitForEvent`(webhook) → extrae artefacto → guarda en R2.
+   **Actualización:** implementado sin Inngest. `arrancarConstruccion`
+   (`core/src/pipeline/build-pipeline.ts:88`) crea la sesión CMA y graba su id
+   (`fijarSesionCma`, write-once); el webhook *thin* encola en `cosecha_pendiente`; el
+   cron de cosecha re-consulta la sesión, extrae el artefacto y lo sube a R2
+   (`drenarCosecha`, `core/src/pipeline/cosecha.ts`). Sin `waitForEvent`.
 4. Endpoint de run: ejecuta el artefacto sobre un archivo → produce
    `resultado.json`.
 5. Cablear la página de resultado del front a un `vista.json` + `resultado.json`

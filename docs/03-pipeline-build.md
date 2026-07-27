@@ -8,10 +8,87 @@ más delicada del sistema.
 
 ---
 
+## Estado de implementación (2026-07-26)
+
+El loop asíncrono de build de este documento **ya está construido** en la Fase 1
+(motor real en `core/`, framework-agnóstico; `web/` es solo el cableado a Next).
+El flujo del papel — «espera un webhook, luego cosecha» — se realizó tal cual,
+con una precisión importante: **el webhook de CMA es *thin*** (no trae el
+resultado, solo avisa que la sesión cambió de estado); el desenlace del build
+solo se sabe **re-consultando la sesión**. Todo lo de abajo tiene su script
+`verify:*:pg` y está en verde (Postgres temporal en 55432; typecheck + build OK).
+
+**El camino real, punta a punta:**
+
+```
+POST /construir           encola en build_pendiente (outbox); NO reserva aún
+  → cron/disparo          drenarBuilds: planner → arrancarConstruccion
+      → arrancarConstruccion  gate → reserva versión 'building' (cobra generación)
+                              → arranca sesión CMA → graba cma_session_id (write-once)
+  → CMA construye          (asíncrono; nadie espera con la conexión abierta)
+  → webhook (thin)         status_idled → ENCOLA en cosecha_pendiente (outbox)
+                           status_terminated → fallarAjuste in-tx (libera el 'en vuelo')
+  → cron/cosecha           drenarCosecha: re-consulta la sesión (clasifica el
+                           desenlace real) → descarga código → sube a storage
+                           → guard de bytes → confirma → versión 'lista'
+  reaper                   backstop: 'building' colgado > N min → 'failed' + incidente
+```
+
+| Pieza del doc | Estado | Evidencia (archivo:línea) | Verify |
+|---|---|---|---|
+| Encolar el build (§1, reserva) | **Hecho** | `core/src/http/endpoints.ts:131` (`solicitarBuildEP` → `app_solicitar_build`), outbox `core/db/schema.sql:332`, SD `core/db/schema.sql:569` | `verify:rutas` |
+| Build-start: reservar antes de gastar (§1, §2 pasos 1–4) | **Hecho** | `core/src/pipeline/build-pipeline.ts:88` (`arrancarConstruccion`), cobro al arrancar `core/db/schema.sql:675`, drainer `core/src/pipeline/disparo.ts:31` | `verify:disparo:pg`, `verify:cuota:pg`, `verify:plan:pg` |
+| Esperar sin bloquear worker (§2 paso 5) | **Hecho** (outbox + cron, no Inngest) | `core/src/cma/build.ts:283` (`arrancar` no espera), webhook `core/src/webhooks/handlers.ts:35` | `verify:webhooks:handlers:pg` |
+| Cosechar el artefacto (§2 pasos 6–9) | **Hecho** | `core/src/pipeline/cosecha.ts:38` (`cosecharYConfirmar` / `drenarCosecha`), re-consulta `core/src/cma/build.ts:291` | `verify:cosecha:pg` |
+| Éxito **solo por re-consulta**, no por el webhook | **Hecho** | `clasificarSesion` `core/src/cma/build.ts:130` | `verify:cma` |
+| Webhooks: dedupe, orden, no-llegan (§3) | **Hecho** | dedupe/firma `core/src/webhooks/receptor.ts`, guard monótono Stripe `core/src/webhooks/handlers.ts:111`, reaper `core/src/ciclo/servicio.ts:286` | `verify:webhooks:handlers:pg`, `verify:incidentes:pg` |
+| Reserva→confirma / build fallido libera (§1, §4) | **Hecho** | `fallarAjuste`/`confirmarAjuste` `core/src/pipeline/cosecha.ts:44,72`, compensación `core/src/pipeline/build-pipeline.ts:106` | `verify:ciclo:pg` |
+| Circuit breaker de reparaciones (§4, §6) | **Hecho** (no estaba en el papel) | `cobrar_build` `core/db/schema.sql:638` | `verify:reparaciones:pg` |
+| `task_budget` / `max_iterations` (§5) | **Parcial** | `MAX_ITERACIONES = 4` `core/src/cma/build.ts:39`, `TIMEOUT_MIN = 15` `core/src/cma/build.ts:40` | `verify:cma` |
+| Tope de gasto acumulado en USD (§5) | **No** — el costo es best-effort de observabilidad, NO gatea | `reconstruirCosto` `core/src/cma/build.ts:307` | — |
+| Métricas (§7) y decisiones abiertas (§8) | **Plan** | — | — |
+
+**La corrección grande frente al plan original:** el webhook de CMA **no trae el
+resultado**. Sus `data.type` reales son `session.status_idled`,
+`session.status_terminated` y `session.outcome_evaluation_ended`
+(`core/src/cma/build.ts:34`, allowlist en `core/src/webhooks/handlers.ts:20`) —
+ninguno dice si el build *pasó*. El éxito solo se conoce re-consultando la sesión
+y leyendo `outcome_evaluations[].result === "satisfied"`
+(`clasificarSesion`, `core/src/cma/build.ts:130`). Por eso el handler del webhook
+es deliberadamente tonto (solo encola) y la decisión de entrega vive en la
+cosecha, fuera de la transacción del receptor. Esto **corrige** la suposición de
+`docs/13` de nombres de evento tipo `session.completed` que traían el veredicto.
+
+**Diferencias de forma con el papel (no son deudas, son cómo quedó):**
+
+- **No hay Inngest.** Donde §2 dice `step.waitForEvent`, la implementación usa un
+  **outbox + drainer por cron**: el webhook encola (`cosecha_pendiente` /
+  `build_pendiente`), y un cron drena con `FOR UPDATE SKIP LOCKED`
+  (`core/src/pipeline/cosecha.ts:96`, `core/src/pipeline/disparo.ts:37`). Mismo
+  efecto (worker no bloqueado), sin dependencia de Inngest.
+- **Los estados persistidos son `building` → `lista`/`ready` → `failed`.** No
+  existe una fila en `queued` ni un estado `validating` en la BD: la cola entre
+  «pedir» y «arrancar» es el outbox `build_pendiente`, y la puerta de calidad
+  (Verifier) corre **dentro de CMA**, clasificada al cosechar
+  (`clasificarSesion`). El schema acepta `lista` y `ready` a propósito
+  (`core/db/schema.sql:812`).
+
+---
+
 ## 1. Máquina de estados
 
 La entrevista vive completa en la tabla `intakes` ([docs/10](10-intake.md) §9)
 — la fila de `automations` **nace al aprobar**, directamente en `queued`:
+
+> **Actualización (impl):** el estado persistido `queued` **no existe** en la BD.
+> `POST /construir` encola en el outbox `build_pendiente`
+> (`core/src/http/endpoints.ts:131`, tabla `core/db/schema.sql:332`) y la fila de
+> automatización + versión nace directamente en `building` cuando el drainer
+> arranca el build (`arrancarConstruccion`, `core/src/pipeline/build-pipeline.ts:88`;
+> cobro de la generación en `cobrar_build`, `core/db/schema.sql:675`). La reserva
+> de cuota, por tanto, ocurre **al arrancar** (en el drainer), no antes.
+> `validating` tampoco es un estado propio en la BD: el Verifier corre dentro de
+> CMA y su desenlace se clasifica al cosechar (`core/src/cma/build.ts:130`).
 
 ```
   queued ──► building ──┬──► validating ──► ready ──► (archived)
@@ -70,6 +147,15 @@ abierta ni de hacer polling**: registras el webhook `session.status_idled` de
 Anthropic y el trabajo se suspende hasta que llega. Con Inngest es
 `step.waitForEvent`; el worker no está ocupado mientras tanto.
 
+> **Actualización (impl):** el mecanismo quedó como **outbox + drainer por cron**,
+> no Inngest. `arrancar()` abre la sesión y devuelve sin esperar
+> (`core/src/cma/build.ts:283`); el webhook *thin* solo encola en `cosecha_pendiente`
+> (`core/src/webhooks/handlers.ts:69`) y un cron drena con `FOR UPDATE SKIP LOCKED`
+> (`core/src/pipeline/cosecha.ts:96`). Y ojo: el paso 6 **no** puede dispararse solo
+> con que llegue el `status_idled` — ese evento no dice si el build pasó; hay que
+> re-consultar la sesión (`clasificarSesion`, `core/src/cma/build.ts:130`), que
+> además distingue un idle terminal de uno bloqueado en `requires_action`.
+
 Un build que espera dos horas con un worker bloqueado es un worker perdido. Con
 veinte builds simultáneos, es tu servicio caído.
 
@@ -104,6 +190,16 @@ cada 10 min:
 Sin ese barrido, un webhook perdido es una automatización muerta y un cliente
 que nunca recibe su correo. Es la clase de fallo que no ves en desarrollo y te
 muerde en producción.
+
+> **Actualización (impl):** el barrido existe como **`reaparBuildsColgados`**
+> (`core/src/ciclo/servicio.ts:286`), pero es un **backstop que FALLA**, no uno
+> que continúa desde el paso 6: marca `building` colgado > N min → `failed`, emite
+> un incidente `build_colgado` por fila (generación pagada sin entregable) y limpia
+> el outbox de cosecha. El camino que *continúa* el pipeline es el normal
+> (webhook → `cosecha_pendiente` → `drenarCosecha`); el reaper es la red para
+> cuando ese camino no ocurrió. Un `status_idled` que llega **después** de que el
+> reaper ya marcó `failed` se detecta y levanta un incidente `pago_no_entregado`
+> (`core/src/webhooks/handlers.ts:57`).
 
 ---
 
@@ -147,6 +243,17 @@ y los tres puestos:
 El tercero no es redundante: es el único que ve el gasto **acumulado entre
 reintentos**. Un build que falla tres veces a $4 cada uno son $12 aunque ninguno
 haya pasado su límite individual.
+
+> **Actualización (impl):** hoy están puestos el (2) `max_iterations` (= 4,
+> `core/src/cma/build.ts:39`) y un timeout de sesión (15 min,
+> `core/src/cma/build.ts:40`). El **corte por USD acumulado (3) NO está
+> implementado como freno**: el costo se reconstruye *best-effort* re-listando los
+> eventos de la sesión y es solo observabilidad — nunca gatea la entrega
+> (`reconstruirCosto`, `core/src/cma/build.ts:307`; la fuente autoritativa del
+> costo es la consola). El límite económico duro real hoy es la **cuota de
+> generaciones por plan**, cobrada al arrancar (`cobrar_build`,
+> `core/db/schema.sql:675`), más el circuit breaker de reparaciones
+> (`core/db/schema.sql:638`).
 
 Vigila también el **gasto por organización y día**. Un cliente que lanza treinta
 builds en una tarde puede ser entusiasmo o puede ser un script. En ambos casos

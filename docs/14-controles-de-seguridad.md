@@ -12,6 +12,47 @@
 > profesional en los 5 dominios; lo que falta es construcción** — salvo RLS y las
 > primitivas de autorización, que ya están **probadas en código** (M2).
 
+## Estado de implementación (2026-07-26)
+
+> **Actualización de fondo.** Cuando se escribió este doc (auditoría 2026-07-21) la
+> conclusión era "el diseño es profesional; lo que falta es construcción". **Eso ya
+> no aplica.** La Fase 1 construyó el motor real (`core/`, framework-agnóstico;
+> `web/` es el cableado a Next 16), con una suite de **28 scripts `verify:*`**
+> (`core/package.json:26-58`) que corre verde contra Postgres. Muchas filas marcadas
+> abajo 🟡/📝 **ya están construidas y probadas**; las tablas conservan su símbolo
+> original y cada sección lleva un bloque **"Actualización (2026-07-26)"** que dice
+> qué pasó a implementado y con qué `verify:*` se prueba. Lo que sigue **deferido**
+> es *activación de producción* (llaves/infra: credenciales, webhooks en consola
+> CMA/Stripe, crons de Vercel, runner gVisor desplegado), **no código**.
+
+Lo construido este ciclo, con evidencia y su prueba:
+
+| Control | Evidencia (archivo:línea) | Prueba |
+|---|---|---|
+| **Pipeline HTTP de 8 capas** (`withEfecto`/`autorizar`), fail-closed | `core/src/http/pipeline.ts:51` (autorizar), `:106` (withEfecto) | `verify:http`, `verify:adaptador:pg` |
+| **Cobertura anti-olvido**: enumerador que falla si un handler con efecto se salta `withEfecto` | `core/scripts/verify-rutas.ts` | `verify:rutas` |
+| **Rol no-dueño + guard obligatorio** (rechaza super/BYPASSRLS y DUEÑO) | `core/db/schema.sql:14-20`; `core/src/db/pg.ts:28`, `:41`, `:54-66` | `verify:pg` |
+| **RLS FORCE + policy por org en 7 tablas** | `core/db/schema.sql:774-798` | `verify:pg` |
+| **Blindaje `pg_temp`** (`SET search_path = public, pg_temp` en todas las funciones + REVOKE TEMPORARY/CREATE) | `core/db/schema.sql:290-303` | `verify:ventana:pg` |
+| **REVOKE INSERT/DELETE ON orgs** (anti-reciclador de tenant) + **purgarOrg** owner-only con bitácora sobreviviente | `core/db/schema.sql:314-315`; `core/src/ops/killswitch.ts:102` | `verify:offboarding:pg` |
+| **Kill-switch DB-enforced** (guard temprano `verificar_freno` + triggers backstop) + suspensión por-org + bitácora append-only | `core/db/schema.sql:413` (verificar_freno), `:821-833` (triggers); `core/src/ops/killswitch.ts:54` | `verify:killswitch:pg` |
+| **Cuota DB-enforced** (`app_consumir` solo-suma; cobro al ARRANCAR el build y al RESERVAR el run; sin oversell/auto-ascenso/reset) | `core/db/schema.sql:375` (app_consumir), `:627` (cobrar_build), `:841` (cobrar_ejecucion) | `verify:cuota:pg`, `verify:plan:pg`, `verify:pgstate:pg` |
+| **Circuit breaker de reparaciones** con LATCH persistente (`en_revision`), ventana rodante 30d, ledger no reescribible | `core/db/schema.sql:627-679`; `core/src/ciclo/servicio.ts:274` (limpiarRevision) | `verify:reparaciones:pg` |
+| **Ventana de 30 días** anclada a la ENTREGA (sellada una vez) + entrega garantizada anti-brick | `core/db/schema.sql:440` (en_ventana_gratis), `:684` (marcar_entrega); `core/src/ciclo/servicio.ts:190` (confirmarAjuste) | `verify:ventana:pg`, `verify:ciclo:pg` |
+| **Reaper de builds colgados** + `fallarAjuste` cableado al webhook de fallo de CMA (cierra el brick por versión huérfana) | `core/src/ciclo/servicio.ts:286` (reaper), `:139` (auto-sana); `core/src/webhooks/handlers.ts:66` | `verify:ciclo:pg`, `verify:webhooks:handlers:pg` |
+| **Incidentes durables** (tabla append-only + SD; `emitirEnTx` con SAVEPOINT anti re-brick) — reemplazan los `console.error` sin lector | `core/db/schema.sql:236` (tabla), `:542` (app_registrar_incidente); `core/src/ops/incidentes.ts:36`, `:50` | `verify:incidentes:pg` |
+| **Cosecha** (outbox `cosecha_pendiente` + guard de bytes con `existe()` antes de marcar 'lista') | `core/db/schema.sql:256`; `core/src/pipeline/cosecha.ts:38`, `:65`; `core/src/storage/r2.ts:98` | `verify:cosecha:pg`, `verify:storage` |
+| **Disparo de build** (outbox `build_pendiente` + SD `app_solicitar_build` que fija la org; drainer fuera del request) | `core/db/schema.sql:269`, `:569`; `core/src/pipeline/disparo.ts:31` | `verify:disparo:pg` |
+| **Firma de webhooks** (HMAC sobre cuerpo CRUDO: standard-webhooks + Stripe, `timingSafeEqual`, ventana ±5 min) + dedupe atómico + guard monótono anti out-of-order de Stripe | `core/src/webhooks/firma.ts:38`; `core/src/webhooks/receptor.ts`; `core/src/webhooks/handlers.ts`; `core/db/schema.sql:282` (webhook_events) | `verify:webhooks`, `verify:webhooks:handlers:pg` |
+| **Gate de insumos CABLEADO** al build/run/upload (magic-bytes/spoofing, XXE, zip-bomb, pixel-flood, sobre de lote) | `core/src/entrada/validador.ts:54`, `:58` (magic bytes); `core/src/entrada/puente.ts:62`, `:69`, `:77` | `verify:entrada`, `verify:entrada:gate` |
+| **Sandbox del Run** — Fase 0 endurecido (env allowlist anti-fuga de secretos, `ulimit -t/-f`, kill de grupo, lectura acotada) + Fase 2 jaula gVisor cableada | `core/src/run/executor.ts:121`, `:61`, `:87`, `:97`, `:109`; `core/src/run/container-executor.ts:64`, `:87-102` | `verify:sandbox` |
+
+Sigue como **plan/deferido** (activación, no código): el corte de gasto por build de $10
+con `task_budget` acumulado (🟡), el push/alerta a ops al enganchar el latch (📝), el
+semáforo de builds concurrentes por org (📝), el mini-spike y gating de OCR (🟡 M5), las
+cabeceras de seguridad CSP/HSTS explícitas (📝) y el test de inyección de prompt del
+intake (🟡). Ver detalle en cada sección.
+
 ## Leyenda de estado
 
 | | Significado |
@@ -59,6 +100,14 @@ step-up, membresía viva). **Casi nada construido**: Clerk aún no es dependenci
 `middleware.ts` ni verificación server-side del JWT. Varios vectores canónicos estaban
 **sin declarar** (se delegaban a Clerk en silencio).
 
+> **Actualización (2026-07-26):** ya NO es "casi nada". La **capa de autenticación** del
+> pipeline está construida y probada (capa 1: `core/src/http/pipeline.ts:63-65`,
+> `verify:http`), el **puerto de sesión de Clerk** está cableado con verificación
+> server-side (issuer + JWKS) en `web/lib/automata/wiring.ts:39`, y **`middleware.ts`
+> existe** con default-deny anti forced-browsing (`web/middleware.ts:21`). Lo que sigue
+> deferido es la *activación* con llaves de Clerk (session token con recencia de MFA), no
+> el código.
+
 | Caso común (OWASP) | Crit | Defensa / postura | Capa | Milestone | Estado |
 |---|:--:|---|:--:|:--:|:--:|
 | **Verificación server-side del JWT de Clerk** — sin esto assertCan y RLS son evadibles (atacante pone cualquier user_id/org_id) | alta | `clerkMiddleware` + `auth()` por request; issuer + JWKS, no secreto compartido | 1 | M2 | 🟡 |
@@ -75,6 +124,19 @@ step-up, membresía viva). **Casi nada construido**: Clerk aún no es dependenci
 | **OAuth/social login + JWKS** | media | **decisión de alcance**: ¿login social (Google) en MVP? Si sí, verificar vía JWKS con rotación | 1 | M2 (decisión) | 📝 |
 | **Gestión de secretos de auth** (signing keys, DB del rol app) | media | inventario + rotación; **el repo es público** → nada de secretos en git | — | M2/M3 | 📝 |
 
+> **Actualización (2026-07-26) — filas ya implementadas (código):**
+> - **Firma de webhooks entrantes** → ✅ `verify:webhooks` / `verify:webhooks:handlers:pg`
+>   (`core/src/webhooks/firma.ts:38`, receptor+handlers): HMAC sobre cuerpo crudo, ±5 min,
+>   dedupe atómico (`core/db/schema.sql:282`).
+> - **Step-up MFA** → la *lógica de enforcement* está construida y probada
+>   (`core/src/http/pipeline.ts:90-93`, doble cota anti timestamp futuro, `verify:http`); el
+>   challenge real de Clerk + recencia del factor difiere a las llaves.
+> - **Membresía viva / expulsión** ya era ✅ y sigue: `core/src/http/pipeline.ts:86`.
+> - **Verificación server-side del JWT** → código cableado (`web/lib/automata/wiring.ts:39`);
+>   activación difiere a llaves de Clerk.
+> Duración/rotación de sesión, password reset con MFA, cookie flags, brute-force y OAuth
+> siguen dependiendo de *configurar* Clerk (checklist), no de código.
+
 ---
 
 ## 2. Autorización — veredicto: huecos menores
@@ -84,6 +146,12 @@ Las **primitivas están probadas**: `assertCan` (matriz de rol + cross-org) y
 Postgres (`verify-pg.ts`). El hueco: **nada está cableado** — los únicos importadores
 son los scripts `verify-*`. Faltan los controles *estructurales* de OWASP API que
 evitan el olvido.
+
+> **Actualización (2026-07-26):** ya está cableado. `withEfecto`
+> (`core/src/http/pipeline.ts:106`) llama SIEMPRE a `leerMembresia`+`assertCan` dentro de
+> `conOrg` (`:83-96`), y `ruta()` es el único camino sancionado. El control estructural
+> anti-olvido existe: un **enumerador de rutas** (`core/scripts/verify-rutas.ts`,
+> `verify:rutas`) falla si un handler con efecto se salta `withEfecto`.
 
 | Caso común (OWASP API) | Crit | Defensa / postura | Capa | Milestone | Estado |
 |---|:--:|---|:--:|:--:|:--:|
@@ -97,6 +165,20 @@ evitan el olvido.
 | Deny-by-default / fail-closed | alta | sin membresía → 403 (**probado**). Endurecer: `accion` fuera de tipo → 403 controlado, no `TypeError` 500 | 4 | M2 | ✅ |
 | Rol contra membresía VIVA (no claim horneado) | alta | `leerMembresia` dentro de `conOrg(org)` (**probado**, incl. revocación en caliente) | 4 | **M2** | ✅ |
 | Matriz de rol completa vs docs/13 §2 | media | código = doc (`admin` todo / `operador` ejecuta+descarga; +`exportar_codigo`) | 4 | **M2** | ✅ |
+
+> **Actualización (2026-07-26) — filas ya implementadas (código):**
+> - **BOLA / IDOR** → ✅ `verify:http` incluye "IDOR cross-org por HTTP → 403"; RLS +
+>   cross-org en `assertCan` (`core/src/http/pipeline.ts:86-87`).
+> - **BFLA** y **Enforcement server-side en cada endpoint** → ✅: `withEfecto`
+>   (`core/src/http/pipeline.ts:106`) obliga a `assertCan` en todo handler con efecto.
+> - **Cobertura uniforme (anti-olvido)** → ✅ `verify:rutas` (`core/scripts/verify-rutas.ts`).
+> - **Forced browsing** → ✅ middleware default-deny (`web/middleware.ts:21`).
+> - **Confused deputy** → ✅: los jobs derivan la org del **recurso firmado** vía SDs
+>   cross-org (`core/db/schema.sql:501` `resolver_sesion_cma`, `:506` `resolver_org_stripe`),
+>   nunca del payload; probado en `verify:webhooks:handlers:pg`.
+> Sigue 📝: **BOPLA/mass-assignment** con allowlist de campos de escritura por DTO (el
+> esquema de frontera existe —`core/src/http/pipeline.ts:110`— pero la allowlist por-DTO no
+> está formalizada).
 
 ---
 
@@ -143,6 +225,32 @@ ver §8 de docs/11). El genérico por IP/org sigue siendo el más flaco: solo vi
 | Sondeo del clasificador (`no_procede` repetido) | baja | contador/alerta por org; decidir cuáles pasan de alarma a **corte** | 0 | M3 | 📝 |
 | Gating de costo del rung de OCR (único formato que cuesta) | media | gatear por plan + contar egress en la cuota | 6 | M5 (tras mini-spike) | 🟡 |
 
+> **Actualización (2026-07-26) — filas ya implementadas (código):**
+> - **Rate-limit por IP/usuario/org** → la *capa 0 del pipeline* está construida
+>   (`core/src/http/pipeline.ts:60-61`, `verify:http`) y el store real (Upstash, fail-closed)
+>   cableado en `web/lib/automata/wiring.ts:53`. Ya no "solo vive en prosa"; falta afinar
+>   cubetas por-org y el WAF.
+> - **Brick por versión `building` huérfana** → ✅ cerrado: `fallarAjuste` cableado al webhook
+>   de fallo de CMA (`core/src/webhooks/handlers.ts:66`) + reaper
+>   (`core/src/ciclo/servicio.ts:286`) + auto-sana en `iniciarAjuste` (`:139`).
+>   `verify:ciclo:pg`, `verify:webhooks:handlers:pg`.
+> - **Reconciliación de entregas sin contar** → ✅ asiento durable (no `console.error`):
+>   `emitirEnTx` registra `entrega_sin_ajuste`/`pago_no_entregado`
+>   (`core/src/ciclo/servicio.ts:202`, `:229`; `core/src/ops/incidentes.ts:50`).
+>   `verify:incidentes:pg`.
+> - **Límite de tamaño/número de archivos (sobre de lote)** → ✅ gate cableado
+>   (`core/src/entrada/puente.ts:77` `gatearInputs`, `validarLote`). `verify:entrada`.
+> - **Límites de recursos del Run** → ✅ Fase 0 (`ulimit`/kill de grupo/lectura acotada,
+>   `core/src/run/executor.ts`) + jaula gVisor Fase 2 (`core/src/run/container-executor.ts`).
+>   `verify:sandbox`.
+> - **Kill-switch global** → ✅ DB-enforced (dos capas): `verificar_freno`
+>   (`core/db/schema.sql:413`) + triggers (`:821-833`); palancas de ops con bitácora
+>   (`core/src/ops/killswitch.ts`). `verify:killswitch:pg`.
+> - **Retry storm / webhooks duplicados / replay** → ✅ dedupe atómico
+>   (`core/db/schema.sql:282`) + firma + guard monótono de Stripe. `verify:webhooks`.
+> Siguen deferidos (activación/no-código): corte de gasto por build $10 (🟡), push a ops al
+> latch (📝), semáforo de builds concurrentes por org (📝), gating de OCR (🟡 M5).
+
 ---
 
 ## 4. Row-level security (Postgres) — veredicto: huecos menores (el más maduro)
@@ -188,6 +296,23 @@ como `automata_app`; `verify-pg.ts` por el camino real Node→pg→RLS). Los hue
 > se le revocan `TEMPORARY` (no crea tablas temporales) y `CREATE ON SCHEMA public`.
 > Ambas capas se prueban por separado en `verify-ventana-pg.ts`.
 
+> **Actualización (2026-07-26) — filas ya implementadas (código):**
+> - **Guard de arranque `afirmarRolSeguro`** → ✅ ya es **obligatorio**: `crearPoolApp` lo llama
+>   al construir el pool (`core/src/db/pg.ts:28`) y además rechaza al rol **DUEÑO** de tablas,
+>   no solo super/BYPASSRLS (`:54-66`). `verify:pg`.
+> - **Rol de app no-dueño** y **separación rol de migración vs app** → ✅ en código: el schema
+>   crea `automata_app` y `automata_webhook` NOSUPERUSER NOBYPASSRLS
+>   (`core/db/schema.sql:14-20`, `:514-520`) y el pool de `web` conecta como no-dueño
+>   (`web/lib/automata/wiring.ts:71`). Que `DATABASE_URL` apunte al rol correcto sigue siendo
+>   paso de despliegue.
+> - Nuevo control de este ciclo, no en la tabla original: **REVOKE INSERT/DELETE ON orgs**
+>   (`core/db/schema.sql:314-315`) cierra el que el rol de app se auto-cree/borre un tenant y
+>   arrastre el ledger por CASCADE; la baja de tenant es owner-only (`purgarOrg`,
+>   `core/src/ops/killswitch.ts:102`). `verify:offboarding:pg`.
+> Siguen 📝/🟡 (despliegue, no código): probar aislamiento contra la **URL del pooler** de
+> Neon, el test que recorra `pg_class` para cazar una tabla-futura sin FORCE RLS, y correr los
+> tests en CI contra Neon.
+
 ---
 
 ## 5. Validación server-side — veredicto: huecos menores
@@ -197,6 +322,13 @@ determinista**: `validarSpec` (topes de longitud/reglas), `sanitizar` (strip `<>
 puerta de coherencia con reintentos, `resolverVista` como quality gate. Las queries
 son **parametrizadas**. La validación **de frontera HTTP** (Zod en cada endpoint) sigue
 sin construir (no hay capa HTTP). Zod es hoy solo dep transitiva del SDK.
+
+> **Actualización (2026-07-26):** la capa de frontera HTTP **ya existe** (capa 4 del
+> pipeline): `withEfecto` corre `ep.esquema.analizar(cuerpo)` y devuelve **400** ante entrada
+> inválida, DENTRO de `conOrg` (`core/src/http/pipeline.ts:110-111`). Es una abstracción
+> `Esquema` propia (dependency-free), no literalmente Zod; el efecto —"todo input pasa por un
+> parser en la frontera o se rechaza"— es el mismo. Lo que falta formalizar es la allowlist de
+> campos de escritura por-DTO (ver §2, BOPLA).
 
 > **Actualización M4 (2026-07-21): el gate de validación de INSUMOS está construido y
 > probado** (`core/src/entrada/`, `verify:entrada` 34/34). Dependency-free; nunca
@@ -224,6 +356,24 @@ sin construir (no hay capa HTTP). Zod es hoy solo dep transitiva del SDK.
 | **Cabeceras de seguridad** (CSP/HSTS/X-Content-Type-Options) | media | configurar explícitamente (Next+Clerk no las pone todas) | 2 | M0/M2 | 📝 |
 | Egress/SSRF de OCR + pixel-flood en imágenes | media | diferido (M5); el pixel-flood (M4) aterriza **antes** que el OCR | 6 | M4/M5 | 🟡 |
 
+> **Actualización (2026-07-26) — filas ya implementadas (código):**
+> - **Firma de webhooks entrantes** → ✅ `core/src/webhooks/firma.ts:38` (HMAC crudo,
+>   standard-webhooks + Stripe, `timingSafeEqual`, ±5 min). `verify:webhooks`.
+> - **XXE/SSRF en XML del CFDI** y **ZIP-bomb / path traversal / sobre de lote** → ✅ gate
+>   construido Y cableado: `core/src/entrada/validador.ts` (XXE incl. dentro de XLSX inflado;
+>   zip-bomb inflando de verdad con `node:zlib`) + `core/src/entrada/puente.ts:62`, `:77`.
+>   `verify:entrada`, `verify:entrada:gate`.
+> - **Content-type spoofing / magic bytes** → ✅ (pasa de 📝): valida por magic bytes contra
+>   lista blanca y caza ejecutable disfrazado (`core/src/entrada/validador.ts:54`, `:58`).
+> - **Límites de tamaño/longitud/tipo** y **Nunca confiar en el cliente** → ✅: topes de la
+>   capa de modelo + tope de upload/lote en la frontera (`core/src/entrada/puente.ts:50`,
+>   `:70`); flags/rol/org derivados de la sesión y de la ruta, nunca del body
+>   (`core/src/http/pipeline.ts:78`).
+> - **Pixel-flood** → ya cubierto por el gate (M4), como afirma la propia fila del OCR.
+> Siguen 🟡/📝: el **test** de inyección de prompt del intake (la defensa existe; falta el
+> test), las **cabeceras de seguridad** (CSP/HSTS) explícitas, el **email HTML/XSS** (M3) y el
+> **egress de OCR** (M5, tras mini-spike).
+
 ---
 
 ## Los 7 huecos que abrió esta auditoría (📝 → agendados)
@@ -239,6 +389,18 @@ agendar**. Ya reflejados en [plan-fase-1](plan-fase-1.md) y en el checklist de
 5. **Cobertura uniforme de autorización** — `withAuthz` obligatorio + test enumerador de rutas (M2).
 6. **Rate-limit genérico por IP/org** — elegir store y cablear en middleware (M2). *El más flaco.*
 7. **Pooling de Neon vs `SET LOCAL`** — probar aislamiento contra la URL del pooler, no solo local (M2). *La más crítica.*
+
+> **Actualización (2026-07-26) — 3 de los 7 ya cerrados en código:**
+> - **#1 CSRF** → ✅ capa 2 del pipeline (`core/src/http/pipeline.ts:71-75`, fail-closed).
+>   `verify:http`.
+> - **#5 Cobertura uniforme de autorización** → ✅ `withEfecto` obligatorio + enumerador de
+>   rutas (`core/src/http/pipeline.ts:106`, `core/scripts/verify-rutas.ts`). `verify:rutas`.
+> - **#6 Rate-limit genérico** → ✅ la capa está construida (`core/src/http/pipeline.ts:60-61`)
+>   y el store (Upstash, fail-closed) cableado (`web/lib/automata/wiring.ts:53`); resta afinar
+>   cubetas por-org y WAF.
+> Siguen abiertos por *configuración/despliegue* (no código): #2 session fixation, #3
+> brute-force y #4 OAuth (config de Clerk + checklist), y **#7 pooling de Neon** (probar contra
+> la URL del pooler) — la más crítica.
 
 ## Regla operativa
 

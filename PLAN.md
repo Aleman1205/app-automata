@@ -23,6 +23,66 @@ Esta lista existe para volver a ella cuando aparezca la tentación de ampliar.
 El riesgo de este producto no es quedarse corto: es intentar hacer todo y no
 hacer bien nada.
 
+## Estado de implementación (2026-07-26)
+
+> Este doc se escribió como **plan**. A esta fecha, el **motor real del MVP
+> (M0→M4) ya está construido y probado**: núcleo `core/` framework-agnóstico
+> (TS + `.tsx`) más `web/` como cableado de Next 16. Suite de **verify** (22
+> scripts) en verde; `typecheck` + `next build` OK; Postgres de prueba en 55432.
+> Lo que sigue siendo plan (no construido) va marcado abajo. Esta sección es un
+> mapa de "qué del plan ya existe"; el detalle vive en `ARQUITECTURA.md` y los
+> docs por pieza.
+
+| Pieza del plan | Estado | Evidencia (archivo:línea) | Prueba |
+|---|---|---|---|
+| **Separación Build / Run** (§1) | Construido | `core/src/cma/build.ts` (build async), `core/src/run/executor.ts` (Run sin modelos) | `verify:cma`, `verify:sandbox` |
+| **Modelos del pipeline** (§2): intake Sonnet 5, planner/builder Opus 4.8 | Construido | `core/src/intake/agent.ts:17`, `core/src/planner/agent.ts:12`, `core/src/cma/build.ts:38` | `verify:intake`, `verify:planner`, `verify:cma` |
+| **Verifier con contexto fresco** (§2) vía Outcomes de CMA | Construido | `core/src/cma/build.ts:205-216` (`define_outcome` + rubric), `clasificarSesion` `:130-146` | `verify:cma` |
+| **SPEC → rubric** (§2) | Construido | `core/src/cma/build.ts:81-95` (`rubricDesde` desde `criterios_exito`) | `verify:cma` |
+| **Environment CMA blindado** (§2): deps pre-horneadas + `networking: limited` sin hosts | Construido | `core/src/cma/build.ts:161-171` | — |
+| **Modelo de datos** (§3) | Construido (nombres en español, + tablas de billing/ciclo/ops) | `core/db/schema.sql` (`orgs`, `memberships`, `automatizaciones`, `versiones`, `ejecuciones`) | `verify:pg` |
+| **Multitenancy / aislamiento** (implícito en §3, docs/04) | Construido | RLS FORCE + `aislada_por_org` en 7 tablas `core/db/schema.sql:773-798`; roles no-dueños `:14-20`, `:514-520`; `conOrg` `core/src/db/pg.ts` | `verify:pg`, `verify:pgstate:pg` |
+| **Cuota por plan** (§3, §6, Fase 1) | Construido, DB-enforced | `planes` `:141-165`, `app_consumir` `:375-402`, triggers `cobrar_build` `:627-679` / `cobrar_ejecucion` `:841-847` | `verify:cuota:pg`, `verify:plan:pg` |
+| **`input_manifest`** (§3) | Parcial | El build **produce el manifiesto de entrada** (`Manifiesto`/`EntradaManifiesto` en `core/src/types.ts`, parseado de `manifiesto.json` en `core/src/cma/build.ts`). El **formulario automático** que lo consume vive solo en el prototipo demo (`web/`), aún **no cableado** al motor. (No confundir con `versiones.vista`, que es la vista de SALIDA del planner.) | `verify` (M0) |
+| **Ciclo de vida: 3 ajustes + congelado + reparaciones gratis** (§0, §5) | Construido, DB-enforced | `app_consumir_ajuste` `:459-491`, `en_ventana_gratis` `:440-447`, breaker en `cobrar_build` `:638-673`; `core/src/ciclo/servicio.ts` | `verify:ciclo:pg`, `verify:ventana:pg`, `verify:reparaciones:pg` |
+| **Guardrails de build** (§5): tope duro, presupuesto | Construido | `MAX_ITERACIONES`/`TIMEOUT_MIN` `core/src/cma/build.ts:39-40`; topes de cuota en BD | `verify:cuota:pg` |
+| **Auth + orgs + pipeline HTTP** (Fase 1) | Construido | 8 capas en `core/src/http/pipeline.ts` + `adaptador.ts` + `endpoints.ts`; `core/src/auth/` | `verify:http`, `verify:adaptador:pg`, `verify:rutas` |
+| **Camino de Stripe** (Fase 1) | Cableado (motor); requiere llaves | `subscriptions` `:168-178`, `resolver_org_stripe` `:506-509`, `core/src/webhooks/handlers.ts` (guard monótono) | `verify:webhooks:handlers:pg` |
+| **Webhooks hacia CMA** (§2, Stack) | Construido | receptor/firma/handlers `core/src/webhooks/`; `webhook_events` `:282-288` | `verify:webhooks`, `verify:webhooks:handlers:pg` |
+| **Loop asíncrono de build** (§2, §4): disparo → CMA → cosecha | Construido (outbox + crons) | `core/src/pipeline/disparo.ts` + `cosecha.ts`; `build_pendiente` `:269-277`, `cosecha_pendiente` `:256-263` | `verify:disparo:pg`, `verify:cosecha:pg` |
+| **Blob S3 / R2** (Stack) | Construido | `core/src/storage/r2.ts` (S3-compat) | `verify:storage` |
+| **Sandbox de ejecución** (§5) | Construido (2 backends) | `LocalPythonExecutor` `core/src/run/executor.ts`; jaula gVisor `core/src/run/container-executor.ts` | `verify:sandbox` |
+| **Insumos multi-formato + gate de entrada** (docs/11 §4bis) | Construido | `core/src/entrada/` (validar + `puente.ts` cableado a build/run/upload) | `verify:entrada`, `verify:entrada:gate` |
+| **Kill-switch / suspensión / offboarding** (docs/11, docs/14) | Construido | `interruptores` `:196-203`, `suspensiones` `:207-211`, `verificar_freno` `:413-429`; `core/src/ops/killswitch.ts` | `verify:killswitch:pg`, `verify:offboarding:pg` |
+| **Observabilidad de costo/incidentes** (Fase 2) | Parcial | `incidentes` `:236-250` + `app_registrar_incidente` `:542-549`; costo reconstruido best-effort `core/src/cma/build.ts:307-320` | `verify:incidentes:pg` |
+| **Runner propio y barato para el Run** (Fase 2) | Construido, no desplegado | `core/src/run/container-executor.ts` (gVisor `--runtime=runsc --network none --read-only`) — falta swap en prod | `verify:sandbox` |
+| **Cableado a Next 16** (Stack) | Construido | `web/lib/automata/wiring.ts`, rutas `web/app/api/**`, crons `web/vercel.json` | `next build` |
+
+**Sigue siendo PLAN (no construido):**
+
+- **Entrevista de intake en la UI** y **pantalla de aprobación** (§2, Fase 1):
+  el agente de intake existe (`core/src/intake/`), pero el flujo de pantallas
+  del cliente no está cableado — el front (`web/`) es demo (ver CLAUDE.md).
+- **Portafolio con polling y pantalla de Detalle** (§1, Fase 1): son front; el
+  prototipo las simula con datos falsos, no consumen el motor.
+- **Email "ya está lista" (Resend)** (Stack): no cableado.
+- **`nombre_generado` con Haiku** (§3): el esquema usa `automatizaciones.nombre`;
+  el nombrado automático con modelo barato no está construido.
+- **Fase 3 completa** (cron/webhooks como disparadores del CLIENTE, OAuth): los
+  crons que existen (`reaper`/`cosecha`/`disparo`) son **operativos internos**,
+  no disparadores del cliente — no cruzan el alcance del MVP.
+- **Activación en producción**: credenciales/llaves, alta de webhooks en la
+  consola de CMA/Stripe, crons en Vercel Pro y despliegue del runner gVisor
+  quedan **deferidos** (necesitan infra, no código).
+
+**Hallazgo de CMA que corrige una asunción previa:** el webhook de CMA es
+**thin**. Sus `data.type` reales son `session.status_idled`,
+`session.status_terminated` y `session.outcome_evaluation_ended`
+(`core/src/cma/build.ts:31-35`); **el éxito NO se sabe por el evento**, solo
+re-consultando la sesión (`outcome_evaluations[].result === "satisfied"`, ver
+`clasificarSesion` `:130-146`). Esto corrige los nombres inventados
+(`session.completed`, etc.) que docs/13 daba por buenos.
+
 ## 1. Qué es el producto
 
 El cliente escribe su idea de automatización y da a un botón. **No ve nada más.**
@@ -241,6 +301,13 @@ de CMA (una sesión de agente por ejecución es caro y lento). Ver §4.
 | Notificación | Email (Resend) | El único canal de "ya está lista". |
 | Auth + billing | Clerk/Auth.js + Stripe | Estándar, no reinventar. |
 
+**Actualización (Stack, construido):** el cableado real corre sobre **Next.js
+16.2.10** (`web/package.json:19`), no 15 — hay cambios de fondo en 16 (params
+como Promise, etc.), ver `web/CLAUDE.md`/`web/AGENTS.md`. Para la **cola** se
+tomó la opción "**Postgres + worker**" (outbox `build_pendiente`/`cosecha_pendiente`
+en `core/db/schema.sql:256-277` drenado por crons de Vercel `web/vercel.json`),
+no Inngest. Auth es **Clerk**; el blob es **R2** (`core/src/storage/r2.ts`).
+
 **Webhooks, no polling, hacia CMA.** Registra `session.status_idled` y
 `session.status_terminated` para que Anthropic te avise cuando el build termina,
 en vez de tener un worker esperando horas con una conexión abierta.
@@ -279,12 +346,31 @@ comprometidos (`queued`+`building`+`ready`); `failed` y `archived` liberan
 ([docs/10](docs/10-intake.md) §9). Un build fallido no consume cuota — si no,
 el cliente paga por algo que no recibió.
 
+**Actualización (motor construido):** hay **dos cuotas distintas** y el enforcement
+vive en la BD, no en el código de la app. (1) **Espacios** (stock): las
+automatizaciones `activa` cuentan contra el plan (trigger `verificar_cuota_espacio`,
+`core/db/schema.sql:715-731`). (2) **Generaciones** (flujo): se cobra **una
+generación al ARRANCAR el build**, no al aprobar la entrevista ni al confirmar
+(trigger `cobrar_build` → `app_consumir`, `core/db/schema.sql:611-679`). Por esa
+decisión ("el que falla mucho", docs/06 §3), **un build que arranca y falla SÍ
+consume la generación de flujo** — al revés de lo que dice el párrafo de arriba;
+lo que no consume el ajuste del ciclo es un build fallido (`fallarAjuste`,
+`core/src/ciclo/servicio.ts`).
+
 `input_manifest` es la pieza que hace todo funcionar: el agente de build declara
 qué necesita el proceso (un CSV con estas columnas, un PDF, un texto), y el
 frontend **genera el formulario de ejecución automáticamente** a partir de ese
 schema. El cliente nunca ve código.
 
 ## 4. Fases
+
+**Actualización (2026-07-26):** este apartado se escribió a futuro; el estado
+real está en "Estado de implementación" arriba. En corto: **Fase 0 (spike):
+hecha** (3/3, ~$1.8/build — `spike/RESULTADO.md`). **Fase 1 (MVP): el motor está
+construido y probado** (aislamiento, cuota, ciclo, kill-switch, pipeline HTTP,
+data plane, cosecha, upload); falta el **cableado de las pantallas del cliente**
+(intake/aprobación/portafolio/detalle) y el email. **Fase 2: adelantada en
+parte** — el runner gVisor y la tabla de incidentes ya existen, sin desplegar.
 
 ### Fase 0 — Spike técnico (3–5 días) · antes de escribir producto
 Un script, sin UI. Objetivo: probar que el núcleo funciona.
@@ -347,6 +433,16 @@ aunque esté mal. Tres defensas:
 3. **Botón "Pedir ajuste"** en la automatización lista: el cliente describe qué
    está mal, se relanza el build sobre el mismo spec corregido, sin consumir
    cuota. Convierte un fallo en una iteración barata.
+
+   **Actualización (motor construido):** "sin consumir cuota" aplica **solo a las
+   reparaciones**. El motor **deriva el tipo de la regresión, no del llamador**
+   (`iniciarAjuste` en `core/src/ciclo/servicio.ts`): una **reparación** (algo que
+   se rompió) es gratis e ilimitada, acotada por un **circuit breaker** que
+   engancha un latch persistente si una automatización se repara en bucle
+   (`cobrar_build`, `core/db/schema.sql:638-673`); un **cambio** (funcionalidad
+   nueva) sí consume 1 de los 3 ajustes, salvo dentro de la **ventana de 30 días**
+   desde la entrega (`app_consumir_ajuste` + `en_ventana_gratis`,
+   `core/db/schema.sql:440-491`).
 
 Las tres van en el MVP. Son baratas y son la diferencia entre un producto que
 funciona y uno que entrega basura convincente.

@@ -16,8 +16,9 @@ import { resolverVista } from "../vista/resolver.ts";
 import { gatearEjemplo, gatearInputs, type MetaEntrada } from "../entrada/puente.ts";
 
 // El pipeline teje los puertos: build -> guardar artefacto -> run -> resolver
-// vista. En producción cada paso es un `step` de Inngest con webhooks (docs/03);
-// en M0 corre directo.
+// vista. En producción el build es ASÍNCRONO: outbox en Postgres (build_pendiente/
+// cosecha_pendiente) + drainers en crons de Vercel + webhooks (docs/03; NO Inngest).
+// En M0 corre directo.
 
 export interface Deps {
   storage: Storage;
@@ -123,8 +124,8 @@ export async function ejecutar(
   // ANTES de esto para no inflar zips grandes delante del kill-switch (DoS).
   await gatearInputs(args.inputs, args.metas);
   // Carga el artefacto desde el Storage por su clave. Ejerce el hop
-  // artefacto→Storage→run de ida y vuelta: en producción, build y run son steps
-  // separados de Inngest y el run NO tiene el objeto en memoria (docs/03).
+  // artefacto→Storage→run de ida y vuelta: en producción, build y run son pasos
+  // separados (drainers de cron) y el run NO tiene el objeto en memoria (docs/03).
   // La clave se RECOMPUTA de version.id (determinista), NO se lee de version.artefactoKey:
   // con el rol de app escribible (GRANT UPDATE(artefacto_key)) y el Storage sin org-scope,
   // confiar en la columna dejaría a un app comprometido apuntar al artefacto de otra org.

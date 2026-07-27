@@ -4,6 +4,74 @@ Detalle de [ARQUITECTURA.md](../ARQUITECTURA.md) §5.
 
 ---
 
+## Estado de implementación (2026-07-26)
+
+Fase 1 construyó el **núcleo de aislamiento** de este documento. Lo que sigue está
+en el código (`core/`), no en papel; cada punto trae el archivo:línea y el script
+de verificación que lo prueba. Lo que **sigue siendo plan** está marcado abajo para
+no confundirlo con lo hecho.
+
+**Aislamiento por datos — HECHO.** RLS `ENABLE` + `FORCE` con la política
+`aislada_por_org (org_id = app_current_org())` en las **7 tablas** org-scoped
+(`orgs`, `memberships`, `automatizaciones`, `versiones`, `ejecuciones`,
+`subscriptions`, `uso_periodo`) — `core/db/schema.sql:773-798`. La app conecta con
+el rol dedicado **no-dueño** `automata_app` (`LOGIN NOSUPERUSER NOBYPASSRLS`),
+creado en `core/db/schema.sql:14-20`. `app_current_org()` es **fail-closed**: sin
+contexto o con `''` → `NULL` → 0 filas (`core/db/schema.sql:363-366`). El contexto
+de org se pone por transacción en `conOrg()` (`core/src/db/pg.ts:75-90`).
+`afirmarRolSeguro()` rechaza al arrancar un rol superusuario, `BYPASSRLS` **o dueño
+de tablas** (un dueño podría `ALTER TABLE ... DISABLE RLS`) — `core/src/db/pg.ts:41-69`.
+Prueba por el **camino de código real** (Node → pg → RLS, como `automata_app`):
+`verify:pg` (`core/scripts/verify-pg.ts`), más el test SQL puro
+`core/db/test-aislamiento.sql`. Ambos confirman que una query cross-org devuelve 0
+filas, que el `INSERT`/`UPDATE` cross-org se bloquea (`WITH CHECK`), y que sin
+`conOrg` el pool ve 0 filas.
+
+**Enlace cruzado por FK — HECHO.** El `org_id` denormalizado de `versiones` está
+atado a su automatización padre con una **FK compuesta** `(automatizacion_id,
+org_id) → automatizaciones (id, org_id)` (`core/db/schema.sql:96-98`): `conOrg(A)`
+no puede colgar una versión de la automatización de B (probado en
+`core/scripts/verify-pg.ts:159-168`). Cierra el riesgo #4 de la §6.
+
+**Grants column-scoped — HECHO.** El rol de app pierde el `UPDATE` amplio y solo
+puede tocar columnas seguras: `automatizaciones` a `(nombre, activa)`
+(`core/db/schema.sql:694-695`), `versiones` a `(estado, artefacto_key)`
+(`core/db/schema.sql:350`). El ciclo (`entregada`, `ajustes_usados`,
+`ciclo_estado`, `cma_session_id`) solo se muta por funciones `SECURITY DEFINER`.
+
+**Dos roles — HECHO.** `memberships.rol CHECK (rol IN ('admin','operador'))`
+(`core/db/schema.sql:37`). La autorización por rol vive en `assertCan()` + la
+política exhaustiva `POLITICA` (`core/src/auth/roles.ts:38-76`), separada de RLS:
+RLS aísla por org, `assertCan` decide qué puede el rol. La membresía se lee **viva
+por request** (expulsar pega al instante, probado en `verify-pg.ts:170-178`).
+
+**Borrado / offboarding — PARCIAL (la parte de BD, HECHA).** El app tiene
+`REVOKE DELETE, INSERT ON orgs` (`core/db/schema.sql:314-315`): **no puede crear ni
+borrar un tenant** (probado: `42501` en `verify-pg.ts:128-144`). El único camino de
+baja es `purgarOrg()`, **owner-only** (`core/src/ops/killswitch.ts:102-119`): borra
+la org y el `ON DELETE CASCADE` arrasa todos los hijos en una operación; el asiento
+`'purgar'` de `bitacora_kill` **sobrevive** (esa tabla no tiene FK a `orgs` a
+propósito, `core/db/schema.sql:217-219`). Probado en `verify:offboarding:pg`
+(`core/scripts/verify-offboarding-pg.ts`): cascade completo, evidencia que
+sobrevive, org vecina intacta, y el app no puede purgar. **Falta** el borrado de los
+blobs en R2 y el `sessions.delete()` de CMA (paso 5 de la §4): `purgarOrg` los
+asume limpiados **antes** por un orquestador de offboarding que **aún no existe**.
+
+**Sigue siendo PLAN (no confundir con hecho):**
+
+- **URLs firmadas de descarga (§2 "Archivos").** No implementadas. Lo único
+  firmado hoy es la verificación HMAC de webhooks entrantes
+  (`core/src/webhooks/firma.ts`), que es otra cosa.
+- **Política de retención y ciclo de vida de blobs (§4).** No hay expiración
+  automática ni por-dato todavía.
+- **`audit_log` general (§5).** No existe la tabla `audit_log` de la §5. Sí hay dos
+  tablas append-only relacionadas: `bitacora_kill` (operaciones del kill-switch,
+  `core/db/schema.sql:221-229`) e `incidentes` (`core/db/schema.sql:236-249`), pero
+  cubren ops/incidentes, no la bitácora de acceso por usuario que pide la §5.
+- **Anonimización del ejemplo (§4, §7).** No implementada.
+
+---
+
 ## 1. Lo que estás guardando
 
 Antes de la técnica, mira el inventario. Tus clientes suben **facturas, nóminas,
@@ -82,6 +150,18 @@ organización.
 
 Poner el `org_id` como primer segmento no es estético: te deja aplicar políticas
 de ciclo de vida y borrar todo lo de un cliente con una sola operación.
+
+> **Actualización (Fase 1):** el esquema de claves implementado **diverge** de este
+> plan. El **ejemplo** sí va org-prefijado —`ejemplos/<orgId>/<archivo>`— y el
+> endpoint de build exige que el prefijo sea el de la org de la ruta
+> (`core/src/http/endpoints.ts:117,139`). En cambio los **artefactos** NO llevan
+> `org_id`: la clave es `artefactos/<versionId>.json`, con `versionId` un UUID
+> inadivinable (`core/src/pipeline/build-pipeline.ts:30-31`). El aislamiento del
+> artefacto NO depende del prefijo, sino de que la clave se **deriva de datos ya
+> acotados por RLS** (nunca de entrada del cliente) y se **recomputa** de
+> `version.id` en vez de leerse de la fila (`core/src/pipeline/build-pipeline.ts:128-132`).
+> Las **URLs firmadas de 5 min** aún no están implementadas (ver "Estado de
+> implementación").
 
 ### Ejecución
 

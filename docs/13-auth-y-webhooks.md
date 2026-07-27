@@ -9,6 +9,84 @@
 
 ---
 
+## Estado de implementación (2026-07-26)
+
+> **IMPLEMENTADO en Fase 1.** El motor real vive en `core/` (framework-agnóstico,
+> TS+tsx) y el wiring de Next 16 en `web/`. Lo de esta sección ya está construido y
+> verde en la suite `verify:*` (typecheck + `next build` OK). Lo que sigue siendo
+> plan se marca al final; las afirmaciones que la implementación volvió falsas llevan
+> una nota **Actualización:** en línea, en su sección.
+
+**El pipeline de 8 capas (§3) — construido, en un solo camino.** La cadena vive
+completa en `autorizar()` (`core/src/http/pipeline.ts:51`), fail-closed en cada capa,
+y `withEfecto()` le cuelga validación (esquema) + handler DENTRO de la misma tx
+`conOrg` (`core/src/http/pipeline.ts:106`). El orden real **corrige** el del diseño:
+la autorización (membresía VIVA → `assertCan` → step-up) corre DENTRO de `conOrg` y
+ANTES de step-up y validación, para que un no-miembro reciba 403 uniforme sin poder
+enumerar esquemas ni provocar prompts de MFA (`pipeline.ts:81-96`). Traduce
+`NoAutorizado`→403, `CuotaExcedida`→402, `ServicioSuspendido`→503 (`pipeline.ts:98-103`);
+step-up con doble cota anti clock-skew: un `mfaVerificadoEn` en el FUTURO no cuenta
+(`pipeline.ts:90-93`). Prueba: `verify:http` (8 capas E2E, IDOR cross-org, y los
+fail-closed que cazó la revisión: CSRF sin Origin, step-up con timestamp futuro,
+invitar-admin exige MFA).
+
+**El adaptador Request→Response y el upload binario — construidos.** `adaptar()`
+traduce entre el `Request` web y la `Solicitud` framework-agnóstica sin tomar NINGUNA
+decisión de seguridad (`core/src/http/adaptador.ts:71`); el `orgId` llega de la RUTA,
+nunca del cuerpo (anti IDOR/confused deputy). `adaptarUpload()` pasa por las MISMAS
+capas vía `autorizar()` pero sin materializar el cuerpo — es el archivo, lo lee el
+gate dentro de la tx (`adaptador.ts:108`). El error inesperado → 500 genérico sin
+stack, nunca 200. Pruebas: `verify:adaptador:pg`; y la garantía anti-olvido de §3 es
+real: `verify:rutas` escanea `web/app/api/**/route.ts` y falla si un verbo mutante no
+pasa por `ruta()`.
+
+**Los webhooks (§4) — construidos.** La cadena firma → parse → recurso firmado →
+dedupe+despacho ATÓMICO vive en `recibir()` (`core/src/webhooks/receptor.ts:80`): el
+INSERT de idempotencia y el efecto del handler commitean/rollbackean JUNTOS, así un
+handler que falla LIBERA el id para el reintento (at-least-once, no at-most-once —
+`receptor.ts:110-130`). Firma HMAC-SHA256 sobre el cuerpo CRUDO, comparación de tiempo
+CONSTANTE y ventana ±5 min, para standard-webhooks/Svix (CMA) y Stripe
+(`core/src/webhooks/firma.ts:62,98`). La org SIEMPRE se deriva del recurso FIRMADO por
+resolvers SECURITY DEFINER, jamás del `organization_id` del payload (`receptor.ts:48-73`).
+Pruebas: `verify:webhooks` (firmas válidas/inválidas ancladas al KAT oficial de
+standard-webhooks + el receptor) y `verify:webhooks:handlers:pg`.
+
+**Rol `automata_webhook` + resolvers SECURITY DEFINER — construidos.** El pool de
+webhooks corre con un rol DEDICADO no-super, no-dueño, sujeto a FORCE RLS
+(`core/db/schema.sql:514-520`), con privilegios MÍNIMOS (`schema.sql:524-534`). Como
+no puede leer cross-org por sí mismo, descubre la org con `resolver_sesion_cma` /
+`resolver_org_stripe` (SECURITY DEFINER, `REVOKE EXECUTE ... FROM PUBLIC`,
+`schema.sql:501-509,536`), luego fija `app.current_org` y reusa
+`confirmarAjuste`/`fallarAjuste` bajo RLS. El wiring lo cablea con
+`crearPoolApp(DATABASE_URL_WEBHOOK)` (`web/lib/automata/wiring.ts:116`), NO con el rol
+dueño — antes se usaba dueño y los handlers eran no-op bajo FORCE RLS (hallazgo ALTA de
+la revisión). `verify:webhooks:handlers:pg` corre justamente como este rol no-super,
+no como superusuario, para cazar de verdad ese no-op silencioso.
+
+**Guard MONÓTONO de Stripe — construido (más allá del diseño).** El diseño solo
+preveía frescura ±5 min contra replay; la implementación añade además un guard
+anti out-of-order: el UPDATE solo aplica si el `created` del evento es ESTRICTAMENTE
+más nuevo que el último aplicado (`ultimo_evento_ts`), así un `payment_failed`
+retrasado NO regresa a `morosa` una org que ya pagó (`core/src/webhooks/handlers.ts:111-114`;
+columna `subscriptions.ultimo_evento_ts` en `schema.sql:176`).
+
+**Incidentes durables vía `app_registrar_incidente` — construidos.** Único camino de
+escritura de la tabla append-only `incidentes` (app y webhook tienen `REVOKE ALL`):
+SECURITY DEFINER, anti-forge (si hay contexto de org, ESE manda sobre el `p_org`, así
+el app bajo `conOrg` no puede atribuir a otra org), `actor = session_user`
+(`core/db/schema.sql:542-549`). Los handlers de webhook lo usan para el tipo
+`webhook_desconocido` (build que podría colgarse) y para `pago_no_entregado` (idle de
+CMA tras el reaper: entregable pagado no entregado) (`core/src/webhooks/handlers.ts:43,58`).
+Prueba: `verify:incidentes:pg`.
+
+**Sigue como PLAN (no implementado como código):** activación en producción (secretos
+en Vercel/Neon, alta de los endpoints de webhook en las consolas de CMA/Stripe); el
+CAMBIO DE PLAN de Stripe (necesita el `price` del evento o re-fetch al SDK —
+`handlers.ts:88-90`) y la discriminación entre productos del mismo customer;
+OAuth/social login sigue como decisión de alcance del MVP (§1).
+
+---
+
 ## 1. Autenticación (Clerk)
 
 **Proveedor: Clerk** (PLAN.md §2). No construimos contraseñas ni sesiones a mano.
@@ -105,10 +183,22 @@ un **test enumera el árbol de rutas** y falla si alguna con efecto no pasa por 
 webhook entrante (§4) se salta 0–6 pero se autentica por **firma HMAC** y deriva su
 org del **recurso firmado**, no del payload (anti *confused deputy*).
 
+**Actualización (2026-07-26):** el wrapper obligatorio se implementó como `withEfecto`
+(endpoints JSON) sobre `autorizar` (la cadena compartida de 8 capas, que también sirve
+el upload binario vía `adaptarUpload`), no con el nombre `withAuthz`. El test que
+enumera el árbol de rutas y falla si un verbo mutante se salta el camino es
+`verify:rutas`. Ver `core/src/http/pipeline.ts:51,106` y
+`core/src/http/adaptador.ts:108`.
+
 ## 4. Verificación de firma de webhooks
 
 Dos emisores, dos secretos. Hoy solo existe el dedupe por `event.id`
 ([docs/03](03-pipeline-build.md) §3); falta la firma **antes** del dedupe.
+
+**Actualización (2026-07-26):** ya no falta. La firma va **antes** del dedupe, dentro
+de `recibir()` (`core/src/webhooks/receptor.ts:80`): firma sobre el cuerpo crudo →
+parse → dedupe atómico (`webhook_events`, PK `(fuente, id)` — `schema.sql:282-288`) →
+despacho en la MISMA tx. Construido y probado (`verify:webhooks`).
 
 | Emisor | Secreto | Riesgo si no se verifica | Aterriza en |
 |---|---|---|---|
@@ -130,6 +220,19 @@ Dos emisores, dos secretos. Hoy solo existe el dedupe por `event.id`
    → si el proceso falla DESPUÉS de la firma → 5xx para que reintenten
      (la idempotencia evita el doble-procesado en el reintento)
 ```
+
+**Actualización (2026-07-26) — el webhook de CMA es THIN.** El paso 5 **no procesa el
+resultado en línea**, porque el webhook de CMA NO dice si el build pasó. Los `data.type`
+reales son `session.status_idled`, `session.status_terminated` y
+`session.outcome_evaluation_ended` (`core/src/webhooks/handlers.ts:20-22`); se **descartó**
+el supuesto previo de un `session.completed`/`succeeded` que trajera el desenlace. El
+ÉXITO solo se sabe **re-consultando la sesión** (sus `outcome_evaluations`), no por el
+evento. Por eso el despacho es en dos tiempos: un `status_idled` sobre una versión
+`building` se **encola en el outbox `cosecha_pendiente`** (idempotente por `session_id`)
+y un **drainer** (rol dueño, FUERA de la tx del receptor, para que el I/O a CMA/R2 no
+cuelgue el pool) hace el fetch + `confirmarAjuste`; `status_terminated` falla el ajuste
+in-tx; un tipo desconocido levanta un incidente y hace no-op (falla seguro). Ver
+`core/src/webhooks/handlers.ts:35-75`; pruebas en `verify:webhooks:handlers:pg`.
 
 **Notas de implementación (Next 16):**
 - La API route del webhook debe leer el **cuerpo crudo** (`await req.text()`),
