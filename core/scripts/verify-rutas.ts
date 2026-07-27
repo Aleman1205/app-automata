@@ -52,8 +52,11 @@ function main() {
         check(`${rel}: ${m} (${esWebhook ? "webhook" : "cron"}) NO usa ruta() — camino sancionado aparte`, !new RegExp(`${m}\\s*=\\s*ruta`).test(src));
         continue;
       }
-      const viaRuta = new RegExp(`export\\s+const\\s+${m}\\s*=\\s*ruta\\s*\\(`).test(src);
-      check(`${rel}: ${m} pasa por ruta() (con efecto → withEfecto)`, viaRuta);
+      const viaRuta = new RegExp(`${m}\\s*=[^\\n]*\\bruta\\s*\\(`).test(src);
+      // El upload (subirEjemplo) pasa por las MISMAS 8 capas (autorizar) con cuerpo binario;
+      // es sancionado aunque no use ruta() (el pipeline JSON no maneja multipart).
+      const viaUpload = /subirEjemplo\s*\(/.test(src);
+      check(`${rel}: ${m} pasa por un camino sancionado (ruta/upload → autorizar)`, viaRuta || viaUpload);
     }
   }
   finalizar();

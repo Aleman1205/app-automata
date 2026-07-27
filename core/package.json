@@ -18,6 +18,7 @@
     "./planner/agent": "./src/planner/agent.ts",
     "./storage/r2": "./src/storage/r2.ts",
     "./storage/local": "./src/storage/local.ts",
+    "./entrada/puente": "./src/entrada/puente.ts",
     "./webhooks/receptor": "./src/webhooks/receptor.ts",
     "./webhooks/firma": "./src/webhooks/firma.ts",
     "./webhooks/handlers": "./src/webhooks/handlers.ts"

@@ -1,5 +1,7 @@
-import { withEfecto, type Deps, type Endpoint } from "./pipeline.ts";
-import { type Metodo, type Solicitud } from "./tipos.ts";
+import { type PoolClient } from "pg";
+import { autorizar, withEfecto, type Deps, type Endpoint } from "./pipeline.ts";
+import { type Accion } from "../auth/roles.ts";
+import { type Metodo, type Respuesta, type Solicitud } from "./tipos.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Adaptador HTTP: convierte un Endpoint (+ Deps + config) en un handler de ruta web
@@ -88,6 +90,41 @@ export function adaptar<T>(ep: Endpoint<T>, deps: Deps, cfg: ConfigAdaptador): (
         cuerpo: MUTANTES.has(metodo) ? await req.json().catch(() => undefined) : undefined,
       };
       const r = await correr(solicitud);
+      return jsonResponse(r.status, r.cuerpo);
+    } catch {
+      return jsonResponse(500, { error: "error_interno" });
+    }
+  };
+}
+
+/**
+ * Adaptador para subidas de ARCHIVO (cuerpo binario/multipart). El pipeline JSON no sirve
+ * (materializa req.json()), así que aquí NO se toca el cuerpo: se construye la Solicitud sin
+ * `cuerpo` y se pasa por `autorizar` (las MISMAS 8 capas que withEfecto). El callback `procesar`
+ * recibe el `req` intacto (para leer el archivo), el orgId y el cliente de la tx, y corre DENTRO
+ * de la autorización — solo tras pasar rate/authn/CSRF/membresía/rol. Cualquier error tipado del
+ * gate (EntradaRechazada/EnRevision) lo mapea `procesar` a su Respuesta; lo inesperado → 500.
+ */
+export function adaptarUpload(
+  deps: Deps,
+  cfg: ConfigAdaptador,
+  meta: { metodo: Metodo; accion: Accion },
+  procesar: (req: Request, orgId: string, cliente: PoolClient) => Promise<Respuesta>,
+): (req: Request, orgId?: string) => Promise<Response> {
+  if (!cfg.appOrigin) throw new Error("adaptarUpload: falta appOrigin (hostEsperado).");
+  return async (req, orgId) => {
+    try {
+      const metodo = req.method.toUpperCase();
+      const s: Solicitud = {
+        metodo: metodo as Metodo,
+        orgId,
+        sesionToken: leerCookie(req, cfg.cookieSesion),
+        origen: req.headers.get("origin") ?? undefined,
+        hostEsperado: cfg.appOrigin,
+        ip: cfg.ipDe(req),
+        cuerpo: undefined, // el cuerpo es el ARCHIVO; lo lee `procesar`, no aquí
+      };
+      const r = await autorizar(s, deps, meta, (c) => procesar(req, orgId as string, c));
       return jsonResponse(r.status, r.cuerpo);
     } catch {
       return jsonResponse(500, { error: "error_interno" });

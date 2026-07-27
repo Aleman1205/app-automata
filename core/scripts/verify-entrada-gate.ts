@@ -8,7 +8,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { gatearEjemplo, gatearInputs, EntradaRechazada } from "../src/entrada/puente.ts";
+import { gatearEjemplo, gatearInputs, gatearArchivoBytes, EntradaRechazada } from "../src/entrada/puente.ts";
 import { construir, ejecutar, type Deps } from "../src/pipeline/build-pipeline.ts";
 import type { StateRepo, Storage, BuildClient, RunExecutor, Spec, Vista, Version } from "../src/types.ts";
 
@@ -35,6 +35,14 @@ async function main() {
     check("una extensión no permitida (.exe) → EntradaRechazada", await lanzaRechazo(() => gatearEjemplo(EXE)));
     check("gatearInputs con un input hostil → EntradaRechazada", await lanzaRechazo(() => gatearInputs({ a: ELF })));
     check("gatearInputs con inputs legítimos pasa", await gatearInputs({ a: CSV }).then(() => true).catch(() => false));
+
+    console.log("\n1b. gatearArchivoBytes (variante en memoria, para el upload):");
+    const lanzaBytes = (fn: () => void) => { try { fn(); return false; } catch (e) { return e instanceof EntradaRechazada; } };
+    check("bytes de CSV legítimos → pasan", (() => { try { gatearArchivoBytes("bueno.csv", "csv", Buffer.from("producto,ingreso\nTaco,100\n")); return true; } catch { return false; } })());
+    const elfBytes = Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]), Buffer.alloc(64)]);
+    check("bytes de ejecutable disfrazado de .csv → EntradaRechazada", lanzaBytes(() => gatearArchivoBytes("malo.csv", "csv", elfBytes)));
+    check("bytes vacíos → EntradaRechazada", lanzaBytes(() => gatearArchivoBytes("vacio.csv", "csv", Buffer.alloc(0))));
+    check("extensión no permitida (.exe) → EntradaRechazada", lanzaBytes(() => gatearArchivoBytes("app.exe", "exe", Buffer.from("x"))));
 
     console.log("\n2. construir() CORTA antes de crear la automatización:");
     let creoAuto = false;

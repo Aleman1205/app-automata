@@ -11,7 +11,11 @@ import { drenarBuilds, type DisparoDeps } from "automata-core/pipeline/disparo";
 import { CmaBuildClient } from "automata-core/cma/build";
 import { PlannerAgent } from "automata-core/planner/agent";
 import { R2Storage, crearClienteR2 } from "automata-core/storage/r2";
-import { adaptar, type ConfigAdaptador } from "automata-core/http/adaptador";
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { adaptar, adaptarUpload, type ConfigAdaptador } from "automata-core/http/adaptador";
+import { gatearArchivoBytes, EntradaRechazada, EntradaEnRevision } from "automata-core/entrada/puente";
+import { R } from "automata-core/http/tipos";
 import { type Deps, type Endpoint } from "automata-core/http/pipeline";
 import { type Sesion, type RateLimiter } from "automata-core/http/tipos";
 import { recibir } from "automata-core/webhooks/receptor";
@@ -138,6 +142,15 @@ function getPoolOwner(): Pool {
   return (poolOwner ??= crearPool(env("DATABASE_URL_OWNER")));
 }
 
+// R2Storage lazy (reutilizado por cosecha, disparo y upload). No toca env al importar.
+let storageInst: R2Storage | undefined;
+function getStorage(): R2Storage {
+  return (storageInst ??= new R2Storage(
+    crearClienteR2({ accountId: env("R2_ACCOUNT_ID"), accessKeyId: env("R2_ACCESS_KEY_ID"), secretAccessKey: env("R2_SECRET_ACCESS_KEY"), bucket: env("R2_BUCKET") }),
+    env("R2_BUCKET"),
+  ));
+}
+
 // Comparación en tiempo constante del secreto del cron (Vercel Cron manda `Authorization:
 // Bearer <CRON_SECRET>`). Fail-closed: longitudes distintas o header ausente → false.
 function autorizadoCron(req: Request): boolean {
@@ -164,10 +177,7 @@ function getCosechaDeps(): CosechaDeps {
   return {
     pool: getPoolOwner(),
     cosechador: new CmaBuildClient(),
-    storage: new R2Storage(
-      crearClienteR2({ accountId: env("R2_ACCOUNT_ID"), accessKeyId: env("R2_ACCESS_KEY_ID"), secretAccessKey: env("R2_SECRET_ACCESS_KEY"), bucket: env("R2_BUCKET") }),
-      env("R2_BUCKET"),
-    ),
+    storage: getStorage(),
   };
 }
 
@@ -185,10 +195,7 @@ function getDisparoDeps(): DisparoDeps {
     pool: getPoolOwner(),
     planeador: new PlannerAgent(),
     cosechador: new CmaBuildClient(),
-    storage: new R2Storage(
-      crearClienteR2({ accountId: env("R2_ACCOUNT_ID"), accessKeyId: env("R2_ACCESS_KEY_ID"), secretAccessKey: env("R2_SECRET_ACCESS_KEY"), bucket: env("R2_BUCKET") }),
-      env("R2_BUCKET"),
-    ),
+    storage: getStorage(),
     ahora: () => new Date().toISOString(),
   };
 }
@@ -199,5 +206,41 @@ export async function cronDisparo(req: Request): Promise<Response> {
   if (!autorizadoCron(req)) return new Response(JSON.stringify({ error: "no_autorizado" }), { status: 401, headers: { "content-type": "application/json" } });
   const r = await drenarBuilds(getDisparoDeps());
   return new Response(JSON.stringify(r), { status: 200, headers: { "content-type": "application/json" } });
+}
+
+// ── Subida de ejemplos a R2 (a3-s6 / upload binario) ──
+// Camino sancionado APARTE del pipeline JSON: pasa por las MISMAS 8 capas (autorizar, vía
+// adaptarUpload) pero con cuerpo multipart. Valida el archivo con el GATE (a4) ANTES de
+// guardarlo (nunca se almacenan bytes hostiles) y lo sube a una clave org-scopeada que
+// POST /construir consume. El cliente sube el archivo, recibe la ejemploKey, y la manda a construir.
+export async function subirEjemplo(req: Request, orgId: string): Promise<Response> {
+  const handler = adaptarUpload(await getDeps(), getCfg(), { metodo: "POST", accion: "crear_build" }, async (r, org) => {
+    // Cota temprana por Content-Length ANTES de materializar el archivo en RAM (anti-DoS).
+    const len = Number(r.headers.get("content-length") ?? "0");
+    if (Number.isFinite(len) && len > 55 * 1024 * 1024) return { status: 413, cuerpo: { error: "archivo_muy_grande" } };
+    let bytes: Buffer;
+    let nombre: string;
+    try {
+      const form = await r.formData();
+      const archivo = form.get("archivo");
+      if (!(archivo instanceof File)) return R.malParametro("falta el archivo (campo 'archivo')");
+      nombre = archivo.name || "ejemplo";
+      bytes = Buffer.from(await archivo.arrayBuffer());
+    } catch {
+      return R.malParametro("cuerpo no es multipart válido");
+    }
+    const ext = path.extname(nombre).replace(/^\./, "").toLowerCase();
+    try {
+      gatearArchivoBytes(nombre, ext, bytes); // GATE: hostil → EntradaRechazada; ilegible → EnRevision
+    } catch (e) {
+      if (e instanceof EntradaRechazada) return { status: 422, cuerpo: { error: "entrada_rechazada", motivo: e.motivo } };
+      if (e instanceof EntradaEnRevision) return { status: 422, cuerpo: { error: "a_revision", nombre } };
+      throw e;
+    }
+    const key = `ejemplos/${org}/${randomUUID()}.${ext}`;
+    await getStorage().put(key, bytes);
+    return R.creado({ ejemploKey: key }); // el cliente la pasa a POST /construir
+  });
+  return handler(req, orgId);
 }
 

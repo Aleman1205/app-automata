@@ -63,6 +63,14 @@ export async function gatearEjemplo(ruta: string, meta?: MetaEntrada, lim: Limit
   exigirAceptado(validarArchivo(await leerParaGate(ruta, meta, lim), lim));
 }
 
+/** Gate de bytes EN MEMORIA (upload): valida un Buffer ya recibido, sin tocar el filesystem.
+ *  La extensión viene del meta declarado (nombre del archivo subido). Lanza EntradaRechazada
+ *  (hostil) / EntradaEnRevision (ilegible); retorna si pasa. Lo usa el endpoint de subida. */
+export function gatearArchivoBytes(nombre: string, extension: string, bytes: Buffer, lim: Limites = LIMITES): void {
+  if (bytes.length > lim.maxBytesArchivo) throw new EntradaRechazada("excede_tamano", nombre, `${bytes.length} bytes`);
+  exigirAceptado(validarArchivo({ nombre, extension: extension.toLowerCase(), bytes }, lim));
+}
+
 /** Gate del RUN: valida el SOBRE agregado de insumos (docs/11 §4bis). Lanza al primer
  *  hostil o si el lote excede; a_revisar → EntradaEnRevision (no corre). En M0 todos los
  *  inputs son rutas de archivo; cuando existan inputs de texto/número se filtran por tipo. */
