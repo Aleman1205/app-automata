@@ -10,6 +10,7 @@ import { verificarStandardWebhook, verificarStripe, verificadorStandard, verific
 import { recibir, type Entrega, type Evento } from "../src/webhooks/receptor.ts";
 import { crearPool } from "../src/db/pg.ts";
 import { type PoolClient } from "pg";
+import { KAT_STANDARD_WEBHOOKS as KAT } from "./fixtures/webhooks-kat.ts";
 
 const NOW = 1_700_000_000_000;
 const TS = Math.floor(NOW / 1000);
@@ -33,9 +34,8 @@ const rechaza = (v: { ok: boolean }) => v.ok === false;
 async function main() {
   console.log("1. standard-webhooks — incl. VECTOR OFICIAL (KAT):");
   // Vector canónico de standard-webhooks (no fabricado por nosotros): ancla el HMAC al estándar.
-  const kat = verificarStandardWebhook('{"test": 2432232314}',
-    { "webhook-id": "msg_p5jXN8AQM9LWM0D4loKWxJek", "webhook-timestamp": "1614265330", "webhook-signature": "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=" },
-    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw", 1614265330 * 1000);
+  // Aislado en scripts/fixtures/webhooks-kat.ts (dato público del spec, marcado gitleaks:allow).
+  const kat = verificarStandardWebhook(KAT.payload, KAT.headers, KAT.secret, KAT.timestampMs);
   check("KAT (id.ts.body, base64, clave base64-decodificada) → ok", kat.ok === true);
 
   const cuerpo = cuerpoCma("sesn_XYZ");
