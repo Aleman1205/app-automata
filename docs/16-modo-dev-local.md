@@ -68,8 +68,12 @@ storage local, para que el Run las corra de verdad.
 | Cuenta: plan + barras de uso | **Real** (`GET /cuenta`: límites del plan + consumo del mes) |
 | Equipo: roster (rol, "tú") | **Real** (`GET /miembros`; el `user_id` se prettifica) |
 | Detalle: nombre/estado/ejecuciones | **Real** (`GET /automatizacion?id=`) |
-| **Ejecutar**: archivo → resultado | **Real** — sube CSV, corre en `LocalPythonExecutor`, muestra el Resultado resuelto |
-| Cuenta: precio, método de pago, historial | **Falso** — vive en Stripe (no en el backend) |
+| Detalle: historial de corridas | **Real** (`GET /ejecuciones?id=`; duración/estado reales, archivo/quién van "—") |
+| **Ejecutar**: archivo → resultado | **Real** — sube CSV, corre en `LocalPythonExecutor`, muestra el Resultado; el resultado **se persiste** (`ejecuciones.resultado_key` + storage) |
+| Descargar resultado | **Real** — baja el JSON del Resultado (client-side) |
+| Hacer definitiva (congelar) | **Real** (`POST /congelar`; `app_congelar`, cambio en vuelo → 409) |
+| Cuenta: precio, método de pago, historial de pagos | **Falso** — vive en Stripe (no en el backend) |
+| Pedir un cambio (ajuste) | **Falso** — dispara un build → necesita CMA/Anthropic |
 | Equipo/cuenta: nombre y correo de personas | **Falso** — el perfil vive en Clerk; el backend solo guarda `user_id`+`rol` |
 
 El front cae a los datos falsos de `web/lib/datos.ts` cuando no hay backend (sin
@@ -104,8 +108,10 @@ ejecutarAutomatizacion (core/src/pipeline/run.ts)
   4. LocalPythonExecutor.run(artefacto, inputs)  [Python real; SIN modelo; sin red/secretos]
   5. resolverVista(vista, datos)                 [aterriza @resultado.* → Resultado]
   6. confirmar la ejecución ('ok')
+  7. persistir el Resultado en storage + ejecuciones.resultado_key  [best-effort; historial/descarga]
   ▼
 Respuesta { resultado, ejecucionId, ms }  →  el front lo pinta con <Resultado>
+(El historial se lee luego con GET /ejecuciones; "Descargar" baja ese Resultado.)
 ```
 
 Probado por curl y por `javascript_tool` (fetch multipart desde el origen de la página, CSRF

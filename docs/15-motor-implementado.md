@@ -57,7 +57,7 @@ Cada fila: qué hace el módulo y qué `verify` lo cubre. Rutas relativas a `cor
 |---|---|---|
 | `src/http/pipeline.ts` | `autorizar()` + `withEfecto()`: **las 8 capas** (`pipeline.ts:51-104`), fail-closed. Traduce `NoAutorizado→403`, `CuotaExcedida→402`, `ServicioSuspendido→503`. | `verify:http` |
 | `src/http/adaptador.ts` | `adaptar()` (Request→Solicitud→Response, sin fugas; 500 genérico) y `adaptarUpload()` (cuerpo binario por las mismas 8 capas). | `verify:adaptador:pg` |
-| `src/http/endpoints.ts` | Los `Endpoint` reales: **efecto** (`crearAutomatizacionEP`, `invitarEP`, `quitarMiembroEP`, `ejecutarEP`, `solicitarBuildEP`) + **lectura GET** (`listarAutomatizacionesEP`, `verAutomatizacionEP`, `listarEquipoEP`, `verCuentaEP`) — acción `ver`, por RLS. | `verify:http`, `verify:rutas`, `verify:lectura:pg`, `verify:cuenta:pg` |
+| `src/http/endpoints.ts` | Los `Endpoint` reales: **efecto** (`crearAutomatizacionEP`, `invitarEP`, `quitarMiembroEP`, `ejecutarEP`, `solicitarBuildEP`, `congelarEP`) + **lectura GET** (`listarAutomatizacionesEP`, `verAutomatizacionEP`, `listarEquipoEP`, `verCuentaEP`, `listarEjecucionesEP`) — acción `ver`, por RLS. | `verify:http`, `verify:rutas`, `verify:lectura:pg`, `verify:cuenta:pg` |
 | `src/http/tipos.ts` | `Solicitud`/`Respuesta`/`R` (helpers de status), puertos `Sesion`/`RateLimiter`. | (transversal) |
 | `src/auth/roles.ts` | `assertCan` (rol por acción, `Record` exhaustivo), `necesitaStepUp` (step-up MFA). 2 roles: `admin`/`operador`. | `verify:auth` |
 | `src/auth/membresia.ts` | `leerMembresia`: el rol **vivo** por request (expulsar pega al siguiente request). | `verify:http` |
@@ -91,7 +91,7 @@ Cada fila: qué hace el módulo y qué `verify` lo cubre. Rutas relativas a `cor
 | Módulo | Qué hace | Verify |
 |---|---|---|
 | `src/pipeline/build-pipeline.ts` | `construir` (M0 síncrono, con compensación), `arrancarConstruccion` (build-start async: reserva + arranca + fija sesión), `ejecutar` (reserva→corre→confirma; el Run puro, sin `BuildClient`). | `verify:pgstate:pg`, `verify:entrada:gate` |
-| `src/pipeline/run.ts` | `ejecutarAutomatizacion`: orquesta el **RUN** (freno temprano → versión ejecutable por RLS → reserva con cuota+kill → executor → resolver vista → confirmar). Recibe el pool + storage + executor; lo invoca el runner / el endpoint HTTP `correrAutomatizacion`. | `verify:ejecutar:pg` |
+| `src/pipeline/run.ts` | `ejecutarAutomatizacion`: orquesta el **RUN** (freno → versión ejecutable por RLS → reserva con cuota+kill → executor → resolver vista → confirmar → **persiste el Resultado** en storage + `ejecuciones.resultado_key`, para historial/descarga). Recibe el pool + storage + executor; lo invoca el runner / el endpoint HTTP `correrAutomatizacion`. | `verify:ejecutar:pg` |
 | `src/pipeline/disparo.ts` | `drenarBuilds`: drena `build_pendiente` → planner → `arrancarConstruccion` (fuera del request, pool dueño, `FOR UPDATE SKIP LOCKED`). | `verify:disparo:pg` |
 | `src/pipeline/cosecha.ts` | `cosecharYConfirmar`/`drenarCosecha`: drena `cosecha_pendiente` → re-consulta CMA → sube a R2 → guard de bytes con `existe()` → confirma. Idempotente. | `verify:cosecha:pg` |
 | `src/vista/resolver.ts` | `resolverVista`: aterriza `vista.json` (refs `@resultado.*`) sobre los datos del run → `Resultado` (contrato de docs/09). | `verify` (run-vista) |
@@ -305,7 +305,9 @@ Todo se cablea en `web/lib/automata/wiring.ts`; cada `route.ts` queda en 1-2 lí
 | `/api/orgs/[orgId]/automatizacion` | GET | `verAutomatizacionEP` | `ver` — detalle (versiones+vista+ejecuciones) | `automatizacion/route.ts` |
 | `/api/orgs/[orgId]/miembros` | GET | `listarEquipoEP` | `ver` — equipo (con `esTu`) | `miembros/route.ts` |
 | `/api/orgs/[orgId]/cuenta` | GET | `verCuentaEP` | `ver` — plan+límites+uso del mes | `cuenta/route.ts` |
+| `/api/orgs/[orgId]/ejecuciones` | GET | `listarEjecucionesEP` | `ver` — historial de corridas (`tieneResultado`) | `ejecuciones/route.ts` |
 | `/api/orgs/[orgId]/construir` | POST | `solicitarBuildEP` | `crear_build` (admin) | `construir/route.ts` |
+| `/api/orgs/[orgId]/congelar` | POST | `congelarEP` | `ajustar` (admin) — hacer definitiva; cambio en vuelo → 409 | `congelar/route.ts` |
 | `/api/orgs/[orgId]/miembros` | POST | `invitarEP` | `invitar` (admin, **step-up MFA**) | `miembros/route.ts` |
 | `/api/orgs/[orgId]/miembros` | DELETE | `quitarMiembroEP` | `quitar_gente` (admin, step-up; no deja sin admin) | `miembros/route.ts` |
 | `/api/orgs/[orgId]/ejemplo` | POST | `subirEjemplo` (upload) | `crear_build`, multipart + gate | `ejemplo/route.ts` |
