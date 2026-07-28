@@ -218,7 +218,66 @@ export const verAutomatizacionEP: Endpoint<{ id: string }> = {
   },
 };
 
+// ── Equipo (GET): miembros de la org ────────────────────────────────────────
+// Pantalla de equipo. RLS acota a la org (una fila por miembro). `memberships` es solo
+// user_id + rol — NO hay estado "pendiente" (eso era dato falso del prototipo; el modelo
+// real no tiene invitaciones a medias). `esTu` marca al usuario que pide, para la UI.
+export const listarEquipoEP: Endpoint<Record<string, never>> = {
+  nombre: "GET /orgs/:orgId/miembros",
+  metodo: "GET",
+  accion: "ver",
+  esquema: esquemaLista,
+  handler: async ({ cliente, identidad }) => {
+    const r = await cliente.query<{ user_id: string; rol: Rol }>(
+      "SELECT user_id, rol FROM memberships ORDER BY rol, user_id", // admin antes que operador (orden alfabético)
+    );
+    return R.ok({
+      miembros: r.rows.map((f) => ({ userId: f.user_id, rol: f.rol, esTu: f.user_id === identidad.userId })),
+      total: r.rows.length,
+    });
+  },
+};
+
+// ── Cuenta / uso (GET): plan + límites + consumo del periodo ─────────────────
+// Panel de cuenta. Une subscription (plan/estado/fin de periodo) + los límites del plan
+// (tabla `planes`, global) + el consumo: espacios ACTIVOS y usuarios (stock, contados vivos)
+// y generaciones/ejecuciones del MES actual (flujo, de uso_periodo). El periodo se computa
+// con to_char(now(),'YYYY-MM') — el MISMO que cobra la cuota (cobrar_ejecucion), así lo que
+// muestra el panel y lo que se cobra nunca divergen. Todo bajo RLS: solo la org del contexto.
+export const verCuentaEP: Endpoint<Record<string, never>> = {
+  nombre: "GET /orgs/:orgId/cuenta",
+  metodo: "GET",
+  accion: "ver",
+  esquema: esquemaLista,
+  handler: async ({ cliente }) => {
+    const r = await cliente.query(
+      `SELECT s.plan, s.estado, s.periodo_fin,
+         p.espacios, p.generaciones, p.ejecuciones, p.usuarios, p.exportar_codigo, p.reparaciones,
+         to_char(now(),'YYYY-MM') AS periodo,
+         (SELECT count(*)::int FROM automatizaciones a WHERE a.activa) AS espacios_usados,
+         (SELECT count(*)::int FROM memberships m)                    AS usuarios_usados,
+         coalesce((SELECT u.generaciones FROM uso_periodo u WHERE u.periodo = to_char(now(),'YYYY-MM')), 0) AS gen_periodo,
+         coalesce((SELECT u.ejecuciones  FROM uso_periodo u WHERE u.periodo = to_char(now(),'YYYY-MM')), 0) AS ejec_periodo
+       FROM subscriptions s JOIN planes p ON p.plan = s.plan`,
+    );
+    const f = r.rows[0];
+    if (!f) return { status: 404, cuerpo: { error: "sin_cuenta" } }; // org sin subscription (estado roto): RLS 0 filas
+    return R.ok({
+      plan: { clave: f.plan, estado: f.estado, periodoFin: iso(f.periodo_fin) },
+      limites: {
+        espacios: f.espacios, usuarios: f.usuarios, generaciones: f.generaciones,
+        ejecuciones: f.ejecuciones, exportarCodigo: f.exportar_codigo, reparaciones: f.reparaciones,
+      },
+      uso: {
+        periodo: f.periodo,
+        espacios: f.espacios_usados, usuarios: f.usuarios_usados,
+        generaciones: f.gen_periodo, ejecuciones: f.ejec_periodo,
+      },
+    });
+  },
+};
+
 // Registro central. NOTA (revisión): esto NO es la garantía anti-olvido completa —
 // en Next hace falta un test que ESCANEE app/api/**/route.ts y falle si algún handler
 // con efecto no delega en withEfecto. Aquí registrarse es la convención.
-export const ENDPOINTS = [crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, solicitarBuildEP, listarAutomatizacionesEP, verAutomatizacionEP] as const;
+export const ENDPOINTS = [crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, solicitarBuildEP, listarAutomatizacionesEP, verAutomatizacionEP, listarEquipoEP, verCuentaEP] as const;

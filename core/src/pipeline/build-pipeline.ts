@@ -110,9 +110,11 @@ export async function arrancarConstruccion(
   }
 }
 
-/** Ejecuta un artefacto sobre insumos y devuelve el Resultado ya resuelto. */
+/** Ejecuta un artefacto sobre insumos y devuelve el Resultado ya resuelto. El Run NO usa
+ *  el Builder: pide solo storage/state/run/ahora (no un BuildClient), así el orquestador
+ *  del Run (pipeline/run.ts) lo invoca sin cablear un build inútil. */
 export async function ejecutar(
-  deps: Deps,
+  deps: Pick<Deps, "storage" | "state" | "run" | "ahora">,
   args: { version: Version; inputs: Record<string, string>; metas?: Record<string, MetaEntrada> },
 ): Promise<{ resultado: Resultado; datos: unknown; ejecucion: Ejecucion; ms: number }> {
   if (!args.version.artefactoKey) {
