@@ -1,5 +1,10 @@
 import type { DatosTarjeta } from "@/app/portafolio/_componentes/tarjeta-automatizacion";
-import type { EstadoAuto } from "@/lib/datos";
+import type {
+  Automatizacion,
+  CambioVersion,
+  EstadoAuto,
+  ResultadoDemo,
+} from "@/lib/datos";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Capa de LECTURA del front: pega a las APIs reales (GET) y mapea la respuesta a las formas
@@ -124,4 +129,69 @@ export async function listarEquipo(): Promise<MiembroVista[] | null> {
   } catch {
     return null;
   }
+}
+
+// ── Detalle de una automatización + ejecución real ───────────────────────────
+// El endpoint de detalle da nombre/estado/versiones/conteo, pero NO el manifiesto ni el
+// resultado (el manifiesto vive en el artefacto; el resultado nace de una corrida). Para el
+// form usamos una entrada de archivo genérica (CSV) y el resultado llega del Run real.
+export async function verAutomatizacion(id: string): Promise<Automatizacion | null> {
+  if (!ORG) return null;
+  try {
+    const r = await fetch(`/api/orgs/${ORG}/automatizacion?id=${encodeURIComponent(id)}`, { headers: { accept: "application/json" }, cache: "no-store" });
+    if (!r.ok) return null;
+    const d = (await r.json()) as {
+      id: string; nombre: string; estado: EstadoAuto; creada: string | null; ejecuciones: number;
+      ultimaEjecucion: string | null; ajustesUsados: number;
+      versiones: { numero: number; tipo: string | null; creada: string | null }[];
+    };
+    const cambios: CambioVersion[] = d.versiones
+      .slice()
+      .sort((a, b) => a.numero - b.numero)
+      .map((v) => ({
+        version: v.numero,
+        titulo: v.tipo === "ajuste" ? "Ajuste aplicado" : "Construcción inicial",
+        fecha: fechaCorta(v.creada),
+        tipo: v.tipo === "ajuste" ? "ajuste" : "construccion",
+      }));
+    return {
+      id: d.id,
+      nombre: d.nombre,
+      descripcion: DESCRIPCION[d.estado] ?? "",
+      estado: d.estado,
+      creada: fechaCorta(d.creada),
+      ejecuciones: d.ejecuciones,
+      ultimaEjecucion: d.ultimaEjecucion ? fechaCorta(d.ultimaEjecucion) : undefined,
+      ajustesUsados: d.ajustesUsados,
+      entradas: [
+        { id: "archivo", tipo: "archivo", etiqueta: "Tu archivo de ventas", ayuda: "CSV con columnas: vendedor, monto", formatos: ["csv"] },
+      ],
+      resultado: undefined, // llega del Run real
+      historial: [], // el detalle no trae historial por-ejecución (otro slice)
+      cambios,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Ejecuta la automatización subiendo un archivo real → devuelve el Resultado resuelto. */
+export async function ejecutarArchivo(automatizacionId: string, file: File): Promise<{ resultado: ResultadoDemo; ms: number }> {
+  if (!ORG) throw new Error("No hay backend configurado.");
+  const form = new FormData();
+  form.append("automatizacionId", automatizacionId);
+  form.append("archivo", file);
+  const r = await fetch(`/api/orgs/${ORG}/ejecutar`, { method: "POST", body: form });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string };
+    const msg =
+      err.error === "entrada_rechazada" ? "El archivo no pasó la validación de seguridad."
+      : err.error === "a_revision" ? "El archivo es ilegible; no lo procesamos para no inventar datos."
+      : err.error === "cuota_excedida" ? "Alcanzaste el límite de ejecuciones de tu plan este mes."
+      : err.error === "sin_version_ejecutable" ? "Esta automatización aún no está lista para ejecutar."
+      : "No se pudo ejecutar. Revisa que el archivo tenga las columnas correctas.";
+    throw new Error(msg);
+  }
+  const d = (await r.json()) as { resultado: ResultadoDemo; ms: number };
+  return { resultado: d.resultado, ms: d.ms };
 }

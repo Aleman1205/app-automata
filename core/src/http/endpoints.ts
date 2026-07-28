@@ -207,11 +207,13 @@ export const verAutomatizacionEP: Endpoint<{ id: string }> = {
     if (!auto) return { status: 404, cuerpo: { error: "no_encontrada" } }; // RLS: ajena/inexistente → 0 filas
     const vs = await cliente.query("SELECT numero, estado, tipo, creada FROM versiones WHERE automatizacion_id = $1 ORDER BY numero DESC", [input.id]);
     const vista = await cliente.query("SELECT vista FROM versiones WHERE automatizacion_id = $1 AND estado = 'lista' AND vista IS NOT NULL ORDER BY numero DESC LIMIT 1", [input.id]);
+    const ejec = await cliente.query("SELECT count(*)::int AS n, max(e.creada) AS ultima FROM ejecuciones e JOIN versiones v ON e.version_id = v.id WHERE v.automatizacion_id = $1", [input.id]);
     return R.ok({
       id: auto.id, nombre: auto.nombre, activa: auto.activa, cicloEstado: auto.ciclo_estado,
       ajustesUsados: auto.ajustes_usados, creada: iso(auto.creada), entregada: iso(auto.entregada),
       enRevision: !!auto.en_revision,
       estado: estadoAuto(vs.rows[0]?.estado ?? null, auto.ciclo_estado),
+      ejecuciones: ejec.rows[0]?.n ?? 0, ultimaEjecucion: iso(ejec.rows[0]?.ultima ?? null),
       versiones: vs.rows.map((v) => ({ numero: v.numero, estado: v.estado, tipo: v.tipo, creada: iso(v.creada) })),
       vista: vista.rows[0]?.vista ?? null, // el layout de la última versión lista; los DATOS del resultado son otro slice (ejecución)
     });

@@ -13,7 +13,13 @@ import { useAviso } from "@/components/ui/aviso";
 import { Reveal } from "@/components/motion/reveal";
 import { TextoRevelado } from "@/components/motion/texto-revelado";
 import { CheckDibujado } from "@/components/motion/check-dibujado";
-import { obtenerAutomatizacion, type EntradaManifiesto } from "@/lib/datos";
+import {
+  obtenerAutomatizacion,
+  type Automatizacion,
+  type EntradaManifiesto,
+  type ResultadoDemo,
+} from "@/lib/datos";
+import { verAutomatizacion, ejecutarArchivo } from "@/lib/automata/lectura";
 import { Volver } from "../_componentes/volver";
 import { TablaHistorial } from "../_componentes/tabla-historial";
 import { TimelineCambios } from "../_componentes/timeline-cambios";
@@ -59,60 +65,85 @@ function Girador() {
   );
 }
 
-// Dropzone compacta: un clic simula subir el archivo.
+// Dropzone compacta. En modo demo un clic simula la subida; en modo real (onArchivo) abre un
+// selector de archivo de verdad y captura el File para el Run.
 function ZonaArchivo({
   entrada,
   cargado,
   alCargar,
+  onArchivo,
+  nombreCargado,
 }: {
   entrada: EntradaManifiesto;
   cargado: boolean;
   alCargar: () => void;
+  onArchivo?: (archivo: File) => void;
+  nombreCargado?: string;
 }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const accept = entrada.formatos?.map((f) => `.${f}`).join(",");
   return (
-    <button
-      type="button"
-      onClick={alCargar}
-      className={`flex w-full items-center gap-4 rounded-xl border-2 border-dashed px-5 py-4 text-left transition-colors duration-300 ${
-        cargado
-          ? "border-oliva/60 bg-papel"
-          : "border-linea hover:border-tinta"
-      }`}
-    >
-      {cargado ? (
-        <CheckDibujado tamano={30} />
-      ) : (
-        <Upload className="size-5 shrink-0 text-sepia" strokeWidth={2} />
+    <>
+      {onArchivo && (
+        <input
+          ref={inputRef}
+          type="file"
+          accept={accept}
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) {
+              onArchivo(f);
+              alCargar();
+            }
+          }}
+        />
       )}
-      <span className="flex flex-col gap-0.5">
+      <button
+        type="button"
+        onClick={onArchivo ? () => inputRef.current?.click() : alCargar}
+        className={`flex w-full items-center gap-4 rounded-xl border-2 border-dashed px-5 py-4 text-left transition-colors duration-300 ${
+          cargado
+            ? "border-oliva/60 bg-papel"
+            : "border-linea hover:border-tinta"
+        }`}
+      >
         {cargado ? (
-          <>
-            <span className="font-mono text-sm font-semibold">
-              {entrada.ejemploNombre ??
-                `${entrada.id}-marzo.${entrada.formatos?.[0] ?? "xlsx"}`}
-            </span>
-            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-oliva">
-              {entrada.multiple ? "Archivos listos" : "Archivo listo"}
-            </span>
-          </>
+          <CheckDibujado tamano={30} />
         ) : (
-          <>
-            <span className="text-sm font-semibold">{entrada.etiqueta}</span>
-            <span className="text-xs text-sepia">
-              {entrada.ayuda ??
-                (entrada.multiple
-                  ? "Haz clic para elegir tus archivos"
-                  : "Haz clic para elegir tu archivo")}
-              {entrada.formatos && (
-                <span className="ml-2 font-mono uppercase tracking-[0.12em]">
-                  {entrada.formatos.join(" · ")}
-                </span>
-              )}
-            </span>
-          </>
+          <Upload className="size-5 shrink-0 text-sepia" strokeWidth={2} />
         )}
-      </span>
-    </button>
+        <span className="flex flex-col gap-0.5">
+          {cargado ? (
+            <>
+              <span className="font-mono text-sm font-semibold">
+                {nombreCargado ??
+                  entrada.ejemploNombre ??
+                  `${entrada.id}-marzo.${entrada.formatos?.[0] ?? "xlsx"}`}
+              </span>
+              <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-oliva">
+                {entrada.multiple ? "Archivos listos" : "Archivo listo"}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="text-sm font-semibold">{entrada.etiqueta}</span>
+              <span className="text-xs text-sepia">
+                {entrada.ayuda ??
+                  (entrada.multiple
+                    ? "Haz clic para elegir tus archivos"
+                    : "Haz clic para elegir tu archivo")}
+                {entrada.formatos && (
+                  <span className="ml-2 font-mono uppercase tracking-[0.12em]">
+                    {entrada.formatos.join(" · ")}
+                  </span>
+                )}
+              </span>
+            </>
+          )}
+        </span>
+      </button>
+    </>
   );
 }
 
@@ -122,14 +153,38 @@ export default function PaginaDetalle({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const a = obtenerAutomatizacion(id);
   const { avisar, elemento } = useAviso();
 
-  // Archivos y selecciones del formulario de ejecución
+  // Modo REAL: id uuid + org de dev/backend → traemos el detalle del API. Modo demo: datos falsos.
+  const esReal =
+    Boolean(process.env.NEXT_PUBLIC_AUTOMATA_DEV_ORG) && /^[0-9a-fA-F-]{36}$/.test(id);
+  const fakeA = obtenerAutomatizacion(id);
+  // undefined = cargando (real); null = sin backend / no encontrada; objeto = detalle real.
+  const [detalleReal, setDetalleReal] = useState<Automatizacion | null | undefined>(
+    undefined,
+  );
+  useEffect(() => {
+    if (!esReal) {
+      setDetalleReal(null);
+      return;
+    }
+    verAutomatizacion(id)
+      .then((d) => setDetalleReal(d))
+      .catch(() => setDetalleReal(null));
+  }, [id, esReal]);
+  const a = esReal ? detalleReal : fakeA;
+  const cargandoReal = esReal && detalleReal === undefined;
+
+  // Estado del Run REAL (archivo subido → resultado resuelto del backend).
+  const [archivoReal, setArchivoReal] = useState<File | null>(null);
+  const [resultadoReal, setResultadoReal] = useState<ResultadoDemo | null>(null);
+  const [errorRun, setErrorRun] = useState<string | null>(null);
+
+  // Archivos y selecciones del formulario de ejecución (demo)
   const [archivos, setArchivos] = useState<Record<string, boolean>>({});
   const [selecciones, setSelecciones] = useState<Record<string, string>>(() => {
     const inicial: Record<string, string> = {};
-    a?.entradas.forEach((en) => {
+    fakeA?.entradas.forEach((en) => {
       if (en.tipo === "seleccion" && en.opciones?.length) {
         inicial[en.id] = en.opciones[0].valor;
       }
@@ -151,6 +206,16 @@ export default function PaginaDetalle({
     const pendientes = temporizadores.current;
     return () => pendientes.forEach((t) => window.clearTimeout(t));
   }, []);
+
+  // Cargando el detalle real: no mostramos aún la guarda de "no encontrada".
+  if (cargandoReal) {
+    return (
+      <div className="mx-auto max-w-5xl px-6 pb-24 pt-36 md:pb-32 md:pt-44">
+        <Etiqueta punto>Tu portafolio</Etiqueta>
+        <p className="mt-6 text-sepia">Cargando…</p>
+      </div>
+    );
+  }
 
   // ── Guardas: id inexistente, generando o con fallo ────────────────────────
   if (!a || a.estado === "generando" || a.estado === "fallo") {
@@ -179,12 +244,46 @@ export default function PaginaDetalle({
 
   const estadoEfectivo = congeladaLocal ? "congelada" : a.estado;
   const entradasArchivo = a.entradas.filter((en) => en.tipo === "archivo");
-  const listaParaEjecutar =
-    entradasArchivo.length > 0 && entradasArchivo.every((en) => archivos[en.id]);
-  const mostrarResultado =
-    Boolean(a.resultado) && (a.ejecuciones > 0 || fase === "hecha");
+  const listaParaEjecutar = esReal
+    ? archivoReal !== null
+    : entradasArchivo.length > 0 && entradasArchivo.every((en) => archivos[en.id]);
+  // El resultado a mostrar: en real, el de la corrida; en demo, el fijo del prototipo.
+  const resultadoMostrar: ResultadoDemo | null = esReal
+    ? resultadoReal
+    : a.resultado ?? null;
+  const mostrarResultado = esReal
+    ? resultadoReal !== null
+    : Boolean(a.resultado) && (a.ejecuciones > 0 || fase === "hecha");
 
-  const ejecutar = () => {
+  const irAlResultado = () => {
+    window.setTimeout(() => {
+      if (refResultado.current) {
+        const lenis = (window as Window & { __lenis?: Lenis }).__lenis;
+        lenis?.scrollTo(refResultado.current, { offset: -120 });
+      }
+    }, 200);
+  };
+
+  const ejecutar = async () => {
+    // Modo REAL: sube el archivo, corre en el backend y muestra el Resultado resuelto.
+    if (esReal) {
+      if (!archivoReal || !a) return;
+      setErrorRun(null);
+      setFase("corriendo");
+      setPaso(1); // avanza los pasos visibles mientras corre (el Run es de milisegundos)
+      try {
+        const { resultado } = await ejecutarArchivo(a.id, archivoReal);
+        setResultadoReal(resultado);
+        setPaso(PASOS_EJECUCION.length);
+        setFase("hecha");
+        irAlResultado();
+      } catch (e) {
+        setErrorRun(e instanceof Error ? e.message : "No se pudo ejecutar.");
+        setFase("quieta");
+      }
+      return;
+    }
+    // Modo demo: animación simulada.
     setFase("corriendo");
     setPaso(0);
     const t1 = window.setTimeout(() => setPaso(1), 1100);
@@ -192,12 +291,7 @@ export default function PaginaDetalle({
     const t3 = window.setTimeout(() => setPaso(3), 3300);
     const t4 = window.setTimeout(() => {
       setFase("hecha");
-      window.setTimeout(() => {
-        if (refResultado.current) {
-          const lenis = (window as Window & { __lenis?: Lenis }).__lenis;
-          lenis?.scrollTo(refResultado.current, { offset: -120 });
-        }
-      }, 200);
+      irAlResultado();
     }, 3600);
     temporizadores.current.push(t1, t2, t3, t4);
   };
@@ -258,6 +352,8 @@ export default function PaginaDetalle({
                       alCargar={() =>
                         setArchivos((prev) => ({ ...prev, [en.id]: true }))
                       }
+                      onArchivo={esReal ? setArchivoReal : undefined}
+                      nombreCargado={esReal ? archivoReal?.name : undefined}
                     />
                   </div>
                 ) : (
@@ -324,6 +420,9 @@ export default function PaginaDetalle({
                       Sube {entradasArchivo.length > 1 ? "tus archivos" : "tu archivo"} para poder ejecutar.
                     </p>
                   )}
+                  {errorRun && (
+                    <p className="mt-3 text-sm text-ladrillo">{errorRun}</p>
+                  )}
                 </motion.div>
               ) : (
                 <motion.div
@@ -388,7 +487,7 @@ export default function PaginaDetalle({
       </section>
 
       {/* ── Resultado ── */}
-      {mostrarResultado && a.resultado && (
+      {mostrarResultado && resultadoMostrar && (
         <section ref={refResultado} className="mt-16 flex flex-col gap-10">
           <Reveal desenfoque={false}>
             <Etiqueta>
@@ -398,7 +497,7 @@ export default function PaginaDetalle({
             </Etiqueta>
           </Reveal>
 
-          <Resultado bloques={a.resultado.bloques} />
+          <Resultado bloques={resultadoMostrar.bloques} />
 
           <Reveal>
             <Boton
@@ -406,7 +505,7 @@ export default function PaginaDetalle({
               icono="descarga"
               onClick={() => avisar("Descargado (demo)")}
             >
-              {`Descargar ${a.resultado.archivoSalida}`}
+              {`Descargar ${resultadoMostrar.archivoSalida}`}
             </Boton>
           </Reveal>
         </section>
