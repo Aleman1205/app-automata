@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { CreditCard, Check } from "lucide-react";
 import { Tarjeta } from "@/components/ui/tarjeta";
 import { Etiqueta } from "@/components/ui/etiqueta";
@@ -16,6 +17,7 @@ import {
   pagos,
   usuarioActual,
 } from "@/lib/datos";
+import { verCuenta, type CuentaVista } from "@/lib/automata/lectura";
 
 // Barra de uso: llenado animado con etiqueta "X de Y".
 function BarraUso({
@@ -53,6 +55,24 @@ export default function Cuenta() {
   const { avisar, elemento } = useAviso();
   const yo = usuarioActual();
 
+  // Plan + uso REALES (fallback a datos falsos si no hay backend). El precio/método de pago/
+  // historial/perfil siguen siendo demo (eso vive en Stripe/Clerk, no en nuestro backend).
+  const [real, setReal] = useState<CuentaVista | null>(null);
+  useEffect(() => {
+    verCuenta().then(setReal).catch(() => setReal(null));
+  }, []);
+  const c: CuentaVista = real ?? {
+    plan: cuenta.plan,
+    precioMes: cuenta.precioMes,
+    proximaRenovacion: cuenta.proximaRenovacion,
+    espaciosUsados: cuenta.automatizacionesActivas,
+    espaciosTotal: cuenta.espaciosTotal,
+    ejecucionesMes: cuenta.ejecucionesMes,
+    ejecucionesTotal: cuenta.ejecucionesTotal,
+    usuariosUsados: equipo.length,
+    usuariosTotal: organizacion.lugaresTotal,
+  };
+
   return (
     <div className="mx-auto max-w-4xl px-6 pt-36 pb-24 md:pt-44">
       <Reveal desenfoque={false} y={12}>
@@ -88,18 +108,20 @@ export default function Cuenta() {
                 <Etiqueta>Plan actual</Etiqueta>
                 <p className="mt-1.5 flex items-baseline gap-2">
                   <span className="text-3xl font-black tracking-tight">
-                    Plan {cuenta.plan}
+                    Plan {c.plan}
                   </span>
                   <span className="text-sepia">
                     <span className="font-semibold text-tinta">
-                      <Contador valor={cuenta.precioMes} formato="entero" prefijo="$" />
+                      <Contador valor={c.precioMes} formato="entero" prefijo="$" />
                     </span>{" "}
                     MXN/mes
                   </span>
                 </p>
-                <p className="mt-1 text-sm text-sepia">
-                  Se renueva el {cuenta.proximaRenovacion}
-                </p>
+                {c.proximaRenovacion && (
+                  <p className="mt-1 text-sm text-sepia">
+                    Se renueva el {c.proximaRenovacion}
+                  </p>
+                )}
               </div>
               <Boton
                 variante="fantasma"
@@ -113,18 +135,18 @@ export default function Cuenta() {
             <div className="mt-8 flex flex-col gap-5 border-t border-linea pt-6">
               <BarraUso
                 etiqueta="Automatizaciones activas"
-                usado={cuenta.automatizacionesActivas}
-                total={cuenta.espaciosTotal}
+                usado={c.espaciosUsados}
+                total={c.espaciosTotal}
               />
               <BarraUso
                 etiqueta="Ejecuciones este mes"
-                usado={cuenta.ejecucionesMes}
-                total={cuenta.ejecucionesTotal}
+                usado={c.ejecucionesMes}
+                total={c.ejecucionesTotal}
               />
               <BarraUso
                 etiqueta="Personas en el equipo"
-                usado={equipo.length}
-                total={organizacion.lugaresTotal}
+                usado={c.usuariosUsados}
+                total={c.usuariosTotal}
               />
             </div>
           </Tarjeta>

@@ -10,7 +10,7 @@ import { useAviso } from "@/components/ui/aviso";
 import { Reveal } from "@/components/motion/reveal";
 import { TextoRevelado } from "@/components/motion/texto-revelado";
 import { automatizaciones, creadoPor, equipo, obtenerMiembro } from "@/lib/datos";
-import { listarAutomatizaciones } from "@/lib/automata/lectura";
+import { listarAutomatizaciones, listarEquipo } from "@/lib/automata/lectura";
 import {
   TarjetaAutomatizacion,
   type DatosTarjeta,
@@ -45,6 +45,12 @@ export default function PaginaPortafolio() {
   useEffect(() => {
     listarAutomatizaciones().then(setReales).catch(() => setReales(null));
   }, []);
+  // Equipo real para el chip "Equipo de N" (fallback a datos falsos).
+  const [equipoReal, setEquipoReal] = useState<{ nombre: string }[] | null>(null);
+  useEffect(() => {
+    listarEquipo().then(setEquipoReal).catch(() => setEquipoReal(null));
+  }, []);
+  const miembrosChip = equipoReal ?? equipo;
 
   useEffect(() => {
     const temporizadores: number[] = [];
@@ -123,9 +129,9 @@ export default function PaginaPortafolio() {
             href="/equipo"
             className="flex items-center gap-2.5 rounded-full border border-linea bg-papel py-1.5 pl-2 pr-4 transition-colors hover:border-tinta"
           >
-            <GrupoAvatares nombres={equipo.map((m) => m.nombre)} max={4} />
+            <GrupoAvatares nombres={miembrosChip.map((m) => m.nombre)} max={4} />
             <span className="text-xs text-sepia">
-              Equipo de {equipo.length}
+              Equipo de {miembrosChip.length}
             </span>
           </Link>
           <div className="flex flex-col items-start gap-2.5 md:items-end">

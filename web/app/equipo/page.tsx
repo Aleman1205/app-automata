@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Mail, Shield, ShieldCheck, UserPlus, X } from "lucide-react";
 import { Tarjeta } from "@/components/ui/tarjeta";
@@ -17,22 +17,43 @@ import {
   type Miembro,
   type RolMiembro,
 } from "@/lib/datos";
+import { listarEquipo } from "@/lib/automata/lectura";
 
 const etiquetaRol: Record<RolMiembro, string> = {
   admin: "Administrador",
   operador: "Operador",
 };
 
+// El miembro que muestra la UI: los datos falsos ya traen nombre/correo/estado; el flag
+// `esTu` (quién soy) sale del API en modo real, o del id fijo en modo demo.
+type MiembroUI = Miembro & { esTu: boolean };
+
 export default function Equipo() {
   const { avisar, elemento } = useAviso();
-  const [miembros, setMiembros] = useState<Miembro[]>(equipoInicial);
+  // null = aún cargando. Empezamos SIN roster (no mostramos falsos y luego reales): al montar
+  // pedimos el real; si el backend responde, ese; si no hay backend, caemos a los datos falsos.
+  const seedFake = (): MiembroUI[] =>
+    equipoInicial.map((m) => ({ ...m, esTu: m.id === usuarioActualId }));
+  const [miembros, setMiembros] = useState<MiembroUI[] | null>(null);
   const [invitando, setInvitando] = useState(false);
   const [correo, setCorreo] = useState("");
   const [rolNuevo, setRolNuevo] = useState<RolMiembro>("operador");
 
-  const soyAdmin =
-    miembros.find((m) => m.id === usuarioActualId)?.rol === "admin";
-  const usados = miembros.length;
+  // Roster REAL desde el API (modo dev/prod). El backend solo da user_id+rol+esTu (sin
+  // nombre/correo — eso es Clerk); lectura.ts prettifica el id. Si no hay backend, datos
+  // falsos. Invitar/quitar siguen siendo demo local (la mutación real exige MFA).
+  useEffect(() => {
+    listarEquipo()
+      .then((reales) =>
+        setMiembros(reales ? reales.map((m) => ({ ...m, estado: "activo" as const })) : seedFake()),
+      )
+      .catch(() => setMiembros(seedFake()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const lista = miembros ?? [];
+  const soyAdmin = lista.find((m) => m.esTu)?.rol === "admin";
+  const usados = lista.length;
   const restantes = organizacion.lugaresTotal - usados;
 
   const invitar = () => {
@@ -42,13 +63,14 @@ export default function Equipo() {
       .replace(/[._]/g, " ")
       .replace(/\b\w/g, (c) => c.toUpperCase());
     setMiembros((prev) => [
-      ...prev,
+      ...(prev ?? []),
       {
-        id: `nuevo-${prev.length}`,
+        id: `nuevo-${(prev ?? []).length}`,
         nombre,
         correo: correo.trim(),
         rol: rolNuevo,
         estado: "pendiente",
+        esTu: false,
       },
     ]);
     setCorreo("");
@@ -57,7 +79,7 @@ export default function Equipo() {
   };
 
   const quitar = (id: string) => {
-    setMiembros((prev) => prev.filter((m) => m.id !== id));
+    setMiembros((prev) => (prev ?? []).filter((m) => m.id !== id));
     avisar("Persona removida del equipo");
   };
 
@@ -184,7 +206,7 @@ export default function Equipo() {
       {/* Lista de miembros */}
       <div className="mt-8 flex flex-col gap-3">
         <AnimatePresence initial={false}>
-          {miembros.map((m, i) => (
+          {lista.map((m, i) => (
             <motion.div
               key={m.id}
               layout
@@ -198,13 +220,15 @@ export default function Equipo() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate font-bold">{m.nombre}</span>
-                    {m.id === usuarioActualId && (
+                    {m.esTu && (
                       <span className="rounded-full border border-linea bg-papel px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-sepia">
                         Tú
                       </span>
                     )}
                   </div>
-                  <span className="truncate text-sm text-sepia">{m.correo}</span>
+                  {m.correo && (
+                    <span className="truncate text-sm text-sepia">{m.correo}</span>
+                  )}
                 </div>
 
                 {/* Rol */}
@@ -224,7 +248,7 @@ export default function Equipo() {
                   <span className="rounded-full border border-linea px-3 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-sepia">
                     Invitación enviada
                   </span>
-                ) : soyAdmin && m.id !== usuarioActualId ? (
+                ) : soyAdmin && !m.esTu ? (
                   <button
                     onClick={() => quitar(m.id)}
                     aria-label={`Quitar a ${m.nombre}`}
