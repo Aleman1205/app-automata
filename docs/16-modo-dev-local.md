@@ -76,8 +76,13 @@ storage local, para que el Run las corra de verdad.
 | Pedir un cambio (ajuste) | **Falso** — dispara un build → necesita CMA/Anthropic |
 | Equipo/cuenta: nombre y correo de personas | **Falso** — el perfil vive en Clerk; el backend solo guarda `user_id`+`rol` |
 
-El front cae a los datos falsos de `web/lib/datos.ts` cuando no hay backend (sin
-`NEXT_PUBLIC_AUTOMATA_DEV_ORG`), así el prototipo sigue funcionando solo.
+La org **ya no** sale de `NEXT_PUBLIC_AUTOMATA_DEV_ORG` (obsoleta): el front la
+resuelve al vuelo desde la **membresía** del usuario vía `GET /api/yo`
+(`web/lib/automata/lectura.ts` → `orgActual()`), que además hace **onboarding
+perezoso** si el usuario aún no tiene org. En dev devuelve la org sembrada de
+`u_dev`; con Clerk real, la del usuario que inició sesión. Si `/api/yo` no da org
+(sin login/sin backend), el front cae a los datos falsos de `web/lib/datos.ts`,
+así el prototipo sigue funcionando solo.
 
 ## Las piezas (código)
 

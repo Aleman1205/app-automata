@@ -35,6 +35,9 @@ export default function Equipo() {
   const seedFake = (): MiembroUI[] =>
     equipoInicial.map((m) => ({ ...m, esTu: m.id === usuarioActualId }));
   const [miembros, setMiembros] = useState<MiembroUI[] | null>(null);
+  // ¿el backend respondió con datos reales? Ya no depende de una env: es true si listarEquipo()
+  // (que resuelve la org del usuario vía /api/yo) devolvió roster. Gate de invitar/quitar reales.
+  const [esReal, setEsReal] = useState(false);
   const [invitando, setInvitando] = useState(false);
   const [correo, setCorreo] = useState("");
   const [rolNuevo, setRolNuevo] = useState<RolMiembro>("operador");
@@ -44,15 +47,14 @@ export default function Equipo() {
   // falsos. Invitar/quitar siguen siendo demo local (la mutación real exige MFA).
   useEffect(() => {
     listarEquipo()
-      .then((reales) =>
-        setMiembros(reales ? reales.map((m) => ({ ...m, estado: "activo" as const })) : seedFake()),
-      )
+      .then((reales) => {
+        setEsReal(!!reales);
+        setMiembros(reales ? reales.map((m) => ({ ...m, estado: "activo" as const })) : seedFake());
+      })
       .catch(() => setMiembros(seedFake()));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // En modo real (backend/dev) invitar y quitar pegan a los endpoints reales; si no, son demo.
-  const esReal = Boolean(process.env.NEXT_PUBLIC_AUTOMATA_DEV_ORG);
   const refrescar = () =>
     listarEquipo()
       .then((reales) => {

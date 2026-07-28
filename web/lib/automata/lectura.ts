@@ -9,13 +9,28 @@ import type {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Capa de LECTURA del front: pega a las APIs reales (GET) y mapea la respuesta a las formas
-// que la UI ya sabe renderizar. Si no hay org configurada (prototipo sin backend) o el fetch
-// falla, devuelve null → el llamador cae a los datos falsos de lib/datos (el prototipo sigue
-// vivo). En modo dev local, NEXT_PUBLIC_AUTOMATA_DEV_ORG apunta a la org sembrada → datos reales.
-// Cuando entre Clerk, la org saldrá de la sesión/organización activa en vez de esta env.
+// que la UI ya sabe renderizar. Si no hay org (sin login / sin backend) o el fetch falla,
+// devuelve null → el llamador cae a los datos falsos de lib/datos (el prototipo sigue vivo).
+//
+// La org YA NO es una env clavada: se resuelve al vuelo desde la MEMBRESÍA del usuario vía
+// GET /api/yo (que además hace onboarding si es su primer acceso). Funciona igual en modo dev
+// (usuario sembrado) y con Clerk real (la org del usuario que inició sesión). Se cachea por
+// carga de página (una sola llamada a /api/yo); null cacheado = sin backend/login → datos falsos.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ORG = process.env.NEXT_PUBLIC_AUTOMATA_DEV_ORG;
+let orgPromesa: Promise<string | null> | undefined;
+async function orgActual(): Promise<string | null> {
+  return (orgPromesa ??= (async () => {
+    try {
+      const r = await fetch("/api/yo", { headers: { accept: "application/json" }, cache: "no-store" });
+      if (!r.ok) return null;
+      const d = (await r.json()) as { orgs?: { id: string }[] };
+      return d.orgs?.[0]?.id ?? null;
+    } catch {
+      return null; // sin backend / red caída → el llamador usa datos falsos
+    }
+  })());
+}
 
 interface AutomatizacionApi {
   id: string;
@@ -47,9 +62,10 @@ function fechaCorta(iso: string | null): string {
 
 /** Lista las automatizaciones de la org (API real). null → sin backend/org: usa datos falsos. */
 export async function listarAutomatizaciones(): Promise<DatosTarjeta[] | null> {
-  if (!ORG) return null;
+  const org = await orgActual();
+  if (!org) return null;
   try {
-    const r = await fetch(`/api/orgs/${ORG}/automatizaciones`, { headers: { accept: "application/json" }, cache: "no-store" });
+    const r = await fetch(`/api/orgs/${org}/automatizaciones`, { headers: { accept: "application/json" }, cache: "no-store" });
     if (!r.ok) return null;
     const data = (await r.json()) as { automatizaciones: AutomatizacionApi[] };
     return data.automatizaciones.map((a) => ({
@@ -83,9 +99,10 @@ const fechaLarga = (iso: string): string =>
   new Date(iso).toLocaleDateString("es-MX", { day: "numeric", month: "long", year: "numeric" });
 
 export async function verCuenta(): Promise<CuentaVista | null> {
-  if (!ORG) return null;
+  const org = await orgActual();
+  if (!org) return null;
   try {
-    const r = await fetch(`/api/orgs/${ORG}/cuenta`, { headers: { accept: "application/json" }, cache: "no-store" });
+    const r = await fetch(`/api/orgs/${org}/cuenta`, { headers: { accept: "application/json" }, cache: "no-store" });
     if (!r.ok) return null;
     const d = (await r.json()) as {
       plan: { clave: string; periodoFin: string | null };
@@ -121,9 +138,10 @@ const prettyUser = (userId: string): string => {
 };
 
 export async function listarEquipo(): Promise<MiembroVista[] | null> {
-  if (!ORG) return null;
+  const org = await orgActual();
+  if (!org) return null;
   try {
-    const r = await fetch(`/api/orgs/${ORG}/miembros`, { headers: { accept: "application/json" }, cache: "no-store" });
+    const r = await fetch(`/api/orgs/${org}/miembros`, { headers: { accept: "application/json" }, cache: "no-store" });
     if (!r.ok) return null;
     const d = (await r.json()) as { miembros: { userId: string; rol: "admin" | "operador"; esTu: boolean }[] };
     return d.miembros.map((m) => ({ id: m.userId, nombre: prettyUser(m.userId), correo: "", rol: m.rol, esTu: m.esTu }));
@@ -137,9 +155,10 @@ export async function listarEquipo(): Promise<MiembroVista[] | null> {
 // resultado (el manifiesto vive en el artefacto; el resultado nace de una corrida). Para el
 // form usamos una entrada de archivo genérica (CSV) y el resultado llega del Run real.
 export async function verAutomatizacion(id: string): Promise<Automatizacion | null> {
-  if (!ORG) return null;
+  const org = await orgActual();
+  if (!org) return null;
   try {
-    const r = await fetch(`/api/orgs/${ORG}/automatizacion?id=${encodeURIComponent(id)}`, { headers: { accept: "application/json" }, cache: "no-store" });
+    const r = await fetch(`/api/orgs/${org}/automatizacion?id=${encodeURIComponent(id)}`, { headers: { accept: "application/json" }, cache: "no-store" });
     if (!r.ok) return null;
     const d = (await r.json()) as {
       id: string; nombre: string; estado: EstadoAuto; creada: string | null; ejecuciones: number;
@@ -179,11 +198,12 @@ export async function verAutomatizacion(id: string): Promise<Automatizacion | nu
 
 /** Ejecuta la automatización subiendo un archivo real → devuelve el Resultado resuelto. */
 export async function ejecutarArchivo(automatizacionId: string, file: File): Promise<{ resultado: ResultadoDemo; ms: number }> {
-  if (!ORG) throw new Error("No hay backend configurado.");
+  const org = await orgActual();
+  if (!org) throw new Error("No hay backend configurado.");
   const form = new FormData();
   form.append("automatizacionId", automatizacionId);
   form.append("archivo", file);
-  const r = await fetch(`/api/orgs/${ORG}/ejecutar`, { method: "POST", body: form });
+  const r = await fetch(`/api/orgs/${org}/ejecutar`, { method: "POST", body: form });
   if (!r.ok) {
     const err = (await r.json().catch(() => ({}))) as { error?: string };
     const msg =
@@ -201,9 +221,10 @@ export async function ejecutarArchivo(automatizacionId: string, file: File): Pro
 /** Historial real de corridas de una automatización → filas para la TablaHistorial. El backend
  *  no guarda el nombre del archivo ni quién la corrió por ejecución, así que van como "—". */
 export async function listarEjecuciones(automatizacionId: string): Promise<EjecucionPrevia[]> {
-  if (!ORG) return [];
+  const org = await orgActual();
+  if (!org) return [];
   try {
-    const r = await fetch(`/api/orgs/${ORG}/ejecuciones?id=${encodeURIComponent(automatizacionId)}`, { headers: { accept: "application/json" }, cache: "no-store" });
+    const r = await fetch(`/api/orgs/${org}/ejecuciones?id=${encodeURIComponent(automatizacionId)}`, { headers: { accept: "application/json" }, cache: "no-store" });
     if (!r.ok) return [];
     const d = (await r.json()) as { ejecuciones: { id: string; estado: string; ms: number; creada: string | null }[] };
     return d.ejecuciones.map((e) => ({
@@ -221,8 +242,9 @@ export async function listarEjecuciones(automatizacionId: string): Promise<Ejecu
 /** Invita a un miembro (POST /miembros). En dev el step-up de MFA pasa (la sesión stub trae
  *  mfaVerificadoEn=ahora). Lanza con mensaje de cliente si la cuota/único-admin/etc. rechaza. */
 export async function invitarMiembro(userId: string, rol: "admin" | "operador"): Promise<void> {
-  if (!ORG) throw new Error("No hay backend configurado.");
-  const r = await fetch(`/api/orgs/${ORG}/miembros`, {
+  const org = await orgActual();
+  if (!org) throw new Error("No hay backend configurado.");
+  const r = await fetch(`/api/orgs/${org}/miembros`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ userId, rol }),
@@ -239,8 +261,9 @@ export async function invitarMiembro(userId: string, rol: "admin" | "operador"):
 
 /** Quita a un miembro (DELETE /miembros). El backend no deja la org sin admin (→ mensaje). */
 export async function quitarMiembro(userId: string): Promise<void> {
-  if (!ORG) throw new Error("No hay backend configurado.");
-  const r = await fetch(`/api/orgs/${ORG}/miembros`, {
+  const org = await orgActual();
+  if (!org) throw new Error("No hay backend configurado.");
+  const r = await fetch(`/api/orgs/${org}/miembros`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ userId }),
@@ -271,8 +294,9 @@ export type TurnoIntake =
 /** Corre UNA ronda del entrevistador. El front manda la idea + el historial acumulado + el
  *  número de turno, y recibe la siguiente ronda de preguntas, o el spec, o un rechazo. */
 export async function intakeTurno(idea: string, historial: EntradaHist[], turno: number): Promise<TurnoIntake> {
-  if (!ORG) throw new Error("No hay backend configurado (¿modo dev / login?).");
-  const r = await fetch(`/api/orgs/${ORG}/intake`, {
+  const org = await orgActual();
+  if (!org) throw new Error("No hay backend configurado (¿modo dev / login?).");
+  const r = await fetch(`/api/orgs/${org}/intake`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ idea, historial, turno }),
@@ -290,8 +314,9 @@ export async function intakeTurno(idea: string, historial: EntradaHist[], turno:
 
 /** Hace definitiva (congela) una automatización. Lanza con mensaje de cliente si no se puede. */
 export async function congelarAutomatizacion(id: string): Promise<void> {
-  if (!ORG) throw new Error("No hay backend configurado.");
-  const r = await fetch(`/api/orgs/${ORG}/congelar`, {
+  const org = await orgActual();
+  if (!org) throw new Error("No hay backend configurado.");
+  const r = await fetch(`/api/orgs/${org}/congelar`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ id }),

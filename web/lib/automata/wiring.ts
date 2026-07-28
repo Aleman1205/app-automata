@@ -22,8 +22,9 @@ import { promises as fsp } from "node:fs";
 import os from "node:os";
 import { R } from "automata-core/http/tipos";
 import { type Deps, type Endpoint } from "automata-core/http/pipeline";
-import { type Sesion, type RateLimiter } from "automata-core/http/tipos";
+import { type Sesion, type RateLimiter, type Solicitud } from "automata-core/http/tipos";
 import { plantillaCorreo, type Notificador, type EventoCorreo, type Correo } from "automata-core/ops/notificaciones";
+import { orgsDeUsuario, provisionarUsuario } from "automata-core/ops/onboarding";
 import { recibir } from "automata-core/webhooks/receptor";
 import { verificarStandardWebhook, verificarStripe, type Verificador } from "automata-core/webhooks/firma";
 import { procesarCma, procesarStripe } from "automata-core/webhooks/handlers";
@@ -45,21 +46,43 @@ function env(k: string): string {
 
 // ── Puerto 1: Sesión (Clerk verifica el JWT en el SERVIDOR: issuer + JWKS) ──
 // Ignora `s`: usa el contexto ambiental del request (headers/cookies) que Clerk lee.
-// mfaVerificadoEn sale de un claim de sesión — configurar en Clerk (session token) que
-// exponga `mfaVerifiedAt`; sin él, el step-up siempre pedirá re-verificación (fail-safe).
-// ⚠️ En DEV (doble-gated) la sesión es un usuario FIJO — bypass de Clerk. mfaVerificadoEn
-// = ahora, así el step-up de acciones peligrosas pasa en local. Fuera de DEV, Clerk real.
+// mfaVerificadoEn (recencia del factor, para el step-up de acciones peligrosas) sale de las
+// claims de Clerk vía mfaDesdeClaims(): `fva` (nativo, sin configurar nada) o el claim custom
+// `mfaVerifiedAt` como respaldo. Sin ninguno → undefined → el step-up pide re-verificación
+// (fail-safe). ⚠️ En DEV (doble-gated) la sesión es un usuario FIJO — bypass de Clerk;
+// mfaVerificadoEn = ahora, así el step-up pasa en local. Fuera de DEV, Clerk real.
 const sesion: Sesion = DEV
   ? { async autenticar() { return { userId: DEV_USER, mfaVerificadoEn: new Date() }; } }
   : {
       async autenticar() {
         const { userId, sessionClaims } = await auth();
         if (!userId) return null;
-        const raw = (sessionClaims as Record<string, unknown> | null)?.["mfaVerifiedAt"];
-        const mfa = typeof raw === "string" || typeof raw === "number" ? new Date(raw) : undefined;
-        return { userId, mfaVerificadoEn: mfa && !Number.isNaN(mfa.getTime()) ? mfa : undefined };
+        return { userId, mfaVerificadoEn: mfaDesdeClaims(sessionClaims as Record<string, unknown> | null) };
       },
     };
+
+// Recencia del factor de verificación desde las claims de Clerk, para el step-up (pipeline: MFA
+// re-verificado hace ≤5 min). Clerk expone `fva` (factor verification age) en el token POR DEFECTO:
+// [edad1erFactor, edad2oFactor] en MINUTOS desde la verificación, -1 si no aplica. Traducimos a un
+// instante: si hay 2º factor (MFA) verificado usamos su edad; si no, la del 1er factor (una
+// reautenticación reciente vale como step-up cuando el usuario aún no configura MFA). Respaldo: un
+// claim custom `mfaVerifiedAt` (ISO/epoch) si se configura en el dashboard. Así invitar/quitar/
+// facturación pasan tras un login o MFA reciente, en vez de dar 403 para siempre.
+function mfaDesdeClaims(claims: Record<string, unknown> | null | undefined): Date | undefined {
+  const fva = claims?.["fva"];
+  if (Array.isArray(fva)) {
+    const primero = typeof fva[0] === "number" ? fva[0] : -1;
+    const segundo = typeof fva[1] === "number" ? fva[1] : -1;
+    const edadMin = segundo >= 0 ? segundo : primero; // 2º factor (MFA) si existe; si no, el 1º
+    if (edadMin >= 0) return new Date(Date.now() - edadMin * 60_000);
+  }
+  const raw = claims?.["mfaVerifiedAt"];
+  if (typeof raw === "string" || typeof raw === "number") {
+    const d = new Date(raw);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return undefined;
+}
 
 // ── Puerto 2: RateLimiter (Upstash), FAIL-CLOSED ──
 // Contrato: si el store está caído, NEGAR (return false), nunca `return true`.
@@ -145,6 +168,75 @@ export async function webhook(fuente: "cma" | "stripe", req: Request): Promise<R
   // rechazado → 401 (firma) / 400 (JSON); ilegible/duplicado/aceptado → 200 (ack, corta reintentos).
   const status = r.estado === "rechazado" ? (r.motivo.startsWith("firma") ? 401 : 400) : 200;
   return new Response(JSON.stringify({ estado: r.estado }), { status, headers: { "content-type": "application/json" } });
+}
+
+const json = (status: number, cuerpo: unknown): Response =>
+  new Response(JSON.stringify(cuerpo), { status, headers: { "content-type": "application/json" } });
+
+// ── Webhook de Clerk: ONBOARDING al registrarse (user.created → org + plan base + admin) ──
+// Clerk firma con Svix, que ES standard-webhooks (mismo HMAC sobre `id.timestamp.body`, secreto
+// whsec_): reusamos el verificador de CMA, solo remapeando sus cabeceras `svix-*` a `webhook-*`.
+// En `user.created` provisiona la org del usuario nuevo (idempotente). Otros eventos → 200 no-op.
+// NO pasa por `ruta`/withEfecto (camino de firma, como CMA); usa el pool de app + la SD acotada.
+export async function webhookClerk(req: Request): Promise<Response> {
+  const rawBody = await req.text(); // CRUDO — jamás req.json() (re-serializar rompe el MAC)
+  const h = Object.fromEntries(req.headers);
+  // Svix → standard-webhooks: mismas firmas, distinto prefijo de cabecera.
+  const headers = {
+    ...h,
+    "webhook-id": h["svix-id"] ?? h["webhook-id"] ?? "",
+    "webhook-timestamp": h["svix-timestamp"] ?? h["webhook-timestamp"] ?? "",
+    "webhook-signature": h["svix-signature"] ?? h["webhook-signature"] ?? "",
+  };
+  const v = verificarStandardWebhook(rawBody, headers, env("CLERK_WEBHOOK_SECRET"), Date.now());
+  if (!v.ok) return json(401, { error: "firma_invalida", motivo: v.motivo });
+  let evt: { type?: string; data?: { id?: string; first_name?: string | null; last_name?: string | null } };
+  try { evt = JSON.parse(rawBody); } catch { return json(400, { error: "json_invalido" }); }
+  if (evt.type !== "user.created") return json(200, { estado: "ignorado", tipo: evt.type ?? null });
+  const userId = evt.data?.id;
+  if (!userId) return json(200, { estado: "sin_user_id" }); // ack para no reintentar en bucle
+  const persona = [evt.data?.first_name, evt.data?.last_name].filter(Boolean).join(" ").trim();
+  const nombre = persona ? `Negocio de ${persona}` : undefined;
+  const { org, creada } = await provisionarUsuario(await getPool(), userId, nombre);
+  return json(200, { estado: creada ? "provisionada" : "ya_existia", orgId: org.orgId });
+}
+
+// ── GET /api/yo: "¿en qué org estoy?" + onboarding perezoso ──────────────────
+// Reemplaza la env clavada NEXT_PUBLIC_AUTOMATA_DEV_ORG: el front pega aquí para saber su org,
+// resuelta desde la MEMBRESÍA del usuario autenticado. Si no tiene ninguna (usuario nuevo cuyo
+// webhook no llegó, o preexistente), lo PROVISIONA al vuelo (idempotente). NO es org-scoped (aún
+// no hay org → no puede pasar por el pipeline de /orgs/:orgId), así que trae su propia auth:
+// rate-limit por IP + sesión de Clerk. Solo devuelve/crea orgs del PROPIO usuario (userId del JWT).
+export async function misOrgs(req: Request): Promise<Response> {
+  const ip = getCfg().ipDe(req) ?? "anon";
+  if (!(await getRate().permitir(ip))) return json(429, { error: "demasiadas_peticiones" });
+  const ident = await sesion.autenticar({ metodo: "GET" } as Solicitud);
+  if (!ident) return json(401, { error: "no_autenticado" });
+  const pool = await getPool();
+  let orgs = await orgsDeUsuario(pool, ident.userId);
+  if (orgs.length === 0) {
+    // Primer acceso sin org → onboarding al vuelo. El nombre lo toma del perfil de Clerk (si hay).
+    const nombre = await nombreSugerido(ident.userId);
+    await provisionarUsuario(pool, ident.userId, nombre);
+    orgs = await orgsDeUsuario(pool, ident.userId);
+  }
+  return json(200, { userId: ident.userId, orgs: orgs.map((o) => ({ id: o.orgId, rol: o.rol, nombre: o.nombre })) });
+}
+
+// Nombre bonito para la org nueva, tomado del perfil de Clerk (si el userId tiene cuenta). En DEV
+// no hay Clerk → undefined → la SD usa 'Mi negocio'. Best-effort: cualquier fallo → sin nombre.
+async function nombreSugerido(userId: string): Promise<string | undefined> {
+  try {
+    const clerk = await clerkClient();
+    const u = await clerk.users.getUser(userId);
+    const persona = [u.firstName, u.lastName].filter(Boolean).join(" ").trim();
+    if (persona) return `Negocio de ${persona}`;
+    const email = u.primaryEmailAddress?.emailAddress ?? u.emailAddresses[0]?.emailAddress;
+    if (email) return `Negocio de ${email.split("@")[0]}`;
+  } catch {
+    /* userId sin cuenta Clerk (dev/sembrado) o Clerk no disponible → sin nombre */
+  }
+  return undefined;
 }
 
 // ── Cron de ops (a2): reaper de builds colgados fuera del camino de request ──

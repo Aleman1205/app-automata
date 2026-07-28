@@ -581,6 +581,48 @@ BEGIN
 END $fn$;
 GRANT EXECUTE ON FUNCTION app_solicitar_build(text, jsonb, text) TO automata_app;
 
+-- ── Onboarding de un usuario nuevo (Clerk user.created / primer acceso) ──────────────────────
+-- Crear un tenant es OWNER-ONLY (REVOKE INSERT ON orgs FROM automata_app): el rol de app NO puede
+-- dar de alta una org directo. Estas dos SD (como resolver_sesion_cma) corren como el DUEÑO
+-- (bypassa RLS) y se exponen al app/webhook con un contrato ACOTADO por user_id — el llamador solo
+-- toca membresías del PROPIO usuario (el userId sale del JWT verificado, nunca del cuerpo del cliente).
+
+-- Orgs del usuario (id + rol + nombre). Cross-org por diseño: resuelve "¿en qué org estoy?" ANTES de
+-- tener contexto de org (el pipeline org-scoped no puede — chicken-and-egg). Admin primero, luego por
+-- antigüedad. STABLE + SECURITY DEFINER: lee memberships/orgs saltándose RLS, filtrado por p_user.
+CREATE OR REPLACE FUNCTION app_orgs_de_usuario(p_user text)
+RETURNS TABLE(org_id uuid, rol text, nombre text)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+  SELECT m.org_id, m.rol, o.nombre
+    FROM memberships m JOIN orgs o ON o.id = m.org_id
+   WHERE m.user_id = p_user
+   ORDER BY (m.rol = 'admin') DESC, o.creada ASC, o.id ASC
+$fn$;
+GRANT EXECUTE ON FUNCTION app_orgs_de_usuario(text) TO automata_app, automata_webhook;
+
+-- Onboarding IDEMPOTENTE: si el usuario ya tiene membresía devuelve su org (sin crear nada); si no,
+-- crea org + subscription (plan base) + membresía admin y devuelve la org. Un advisory lock por-usuario
+-- serializa altas concurrentes (webhook user.created + primer acceso a la vez → 1 org, no 2). SD porque
+-- INSERT orgs es owner-only. La cuota de usuarios NO aplica al primer admin: verificar_cuota_usuario
+-- hace bypass cuando app_current_org() es NULL (que es el caso — esto corre FUERA de conOrg).
+CREATE OR REPLACE FUNCTION app_provisionar_usuario(p_user text, p_nombre text)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_org uuid; v_nombre text;
+BEGIN
+  IF p_user IS NULL OR length(trim(p_user)) = 0 THEN RAISE EXCEPTION 'app_provisionar_usuario: user vacío'; END IF;
+  -- Serializa por usuario: dos altas simultáneas del MISMO user no crean dos orgs (la 2ª ve la 1ª).
+  PERFORM pg_advisory_xact_lock(hashtext(p_user)::int8);
+  SELECT m.org_id INTO v_org FROM memberships m
+    WHERE m.user_id = p_user ORDER BY (m.rol = 'admin') DESC, org_id ASC LIMIT 1;
+  IF v_org IS NOT NULL THEN RETURN v_org; END IF; -- ya pertenece a una org → idempotente
+  v_nombre := left(coalesce(nullif(trim(p_nombre), ''), 'Mi negocio'), 200);
+  INSERT INTO orgs (nombre) VALUES (v_nombre) RETURNING id INTO v_org;
+  INSERT INTO subscriptions (org_id, plan) VALUES (v_org, 'base');
+  INSERT INTO memberships (org_id, user_id, rol) VALUES (v_org, p_user, 'admin');
+  RETURN v_org;
+END $fn$;
+GRANT EXECUTE ON FUNCTION app_provisionar_usuario(text, text) TO automata_app, automata_webhook;
+
 -- Congelado VOLUNTARIO ("esta ya quedó", docs/08 §3). Va por función porque el app
 -- perdió el UPDATE sobre ciclo_estado (si lo tuviera, podría des-congelarse y
 -- seguir ajustando). Idempotente.

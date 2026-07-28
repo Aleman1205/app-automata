@@ -42,3 +42,4 @@ next-env.d.ts
 
 # La plantilla SÍ se versiona (sin secretos); los .env reales no.
 !.env.example
+.env

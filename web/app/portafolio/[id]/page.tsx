@@ -159,9 +159,10 @@ export default function PaginaDetalle({
   const { id } = use(params);
   const { avisar, elemento } = useAviso();
 
-  // Modo REAL: id uuid + org de dev/backend → traemos el detalle del API. Modo demo: datos falsos.
-  const esReal =
-    Boolean(process.env.NEXT_PUBLIC_AUTOMATA_DEV_ORG) && /^[0-9a-fA-F-]{36}$/.test(id);
+  // Modo REAL: un id con forma de uuid viene del portafolio real (los ids demo no lo son) → traemos
+  // el detalle del API (que resuelve la org del usuario vía /api/yo). Si no hay backend/org, el
+  // fetch devuelve null → "no encontrada". Modo demo (ids no-uuid): datos falsos.
+  const esReal = /^[0-9a-fA-F-]{36}$/.test(id);
   const fakeA = obtenerAutomatizacion(id);
   // undefined = cargando (real); null = sin backend / no encontrada; objeto = detalle real.
   const [detalleReal, setDetalleReal] = useState<Automatizacion | null | undefined>(

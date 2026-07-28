@@ -12,7 +12,8 @@
 export const DEV = process.env.NODE_ENV !== "production" && process.env.AUTOMATA_DEV_AUTH === "1";
 
 // Usuario y org fijos del modo dev. DEBEN coincidir con core/scripts/seed-dev-pg.ts (que los
-// siembra) y con NEXT_PUBLIC_AUTOMATA_DEV_ORG (que el front usa para saber a qué org pegar).
+// siembra). El front YA NO clava la org por env: la resuelve de la membresía vía GET /api/yo, que
+// en dev devuelve la org sembrada de este DEV_USER (la env NEXT_PUBLIC_AUTOMATA_DEV_ORG quedó obsoleta).
 export const DEV_USER = "u_dev";
 export const DEV_ORG = "0de00000-0000-0000-0000-0000000de000";
 
