@@ -19,3 +19,6 @@ spike/datos/
 # core (Fase 1)
 core/node_modules/
 core/.artefactos/
+
+# Storage local del modo dev (artefactos sembrados; se regenera con seed:dev)
+.dev-storage/

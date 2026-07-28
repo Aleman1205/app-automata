@@ -61,7 +61,9 @@ function pythonAbs(): string {
 const PASA_SEGURAS = ["LANG", "LC_ALL", "LC_CTYPE", "TZ"] as const;
 function envLimpio(dir: string): NodeJS.ProcessEnv {
   const pyDir = path.dirname(pythonAbs());
-  const env: NodeJS.ProcessEnv = {
+  // Record laxo (NO NodeJS.ProcessEnv): bajo los tipos de Next, ProcessEnv exige NODE_ENV y el
+  // literal de allowlist no lo trae. Se castea al retornar; el runtime (allowlist) no cambia.
+  const env: Record<string, string | undefined> = {
     PATH: `${pyDir}:/usr/bin:/bin`,
     // HOME REAL a propósito: python resuelve su user-site (p.ej. ~/Library/Python/.../
     // site-packages, donde vive openpyxl en dev) a partir de $HOME. El aislamiento de
@@ -74,7 +76,7 @@ function envLimpio(dir: string): NodeJS.ProcessEnv {
   };
   for (const k of PASA_SEGURAS) if (process.env[k]) env[k] = process.env[k];
   if (!env["LANG"] && !env["LC_ALL"]) env["LC_ALL"] = "en_US.UTF-8"; // fallback razonable
-  return env;
+  return env as NodeJS.ProcessEnv;
 }
 
 function correrPython(script: string, args: string[], cwd: string, lim: LimitesRun): Promise<{ code: number; stderr: string }> {

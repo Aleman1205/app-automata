@@ -15,6 +15,11 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { adaptar, adaptarUpload, type ConfigAdaptador } from "automata-core/http/adaptador";
 import { gatearArchivoBytes, EntradaRechazada, EntradaEnRevision } from "automata-core/entrada/puente";
+import { ejecutarAutomatizacion, SinVersionEjecutable } from "automata-core/pipeline/run";
+import { LocalStorage } from "automata-core/storage/local";
+import { LocalPythonExecutor } from "automata-core/run/executor";
+import { promises as fsp } from "node:fs";
+import os from "node:os";
 import { R } from "automata-core/http/tipos";
 import { type Deps, type Endpoint } from "automata-core/http/pipeline";
 import { type Sesion, type RateLimiter } from "automata-core/http/tipos";
@@ -248,6 +253,63 @@ export async function subirEjemplo(req: Request, orgId: string): Promise<Respons
     const key = `ejemplos/${org}/${randomUUID()}.${ext}`;
     await getStorage().put(key, bytes);
     return R.creado({ ejemploKey: key }); // el cliente la pasa a POST /construir
+  });
+  return handler(req, orgId);
+}
+
+// ── Ejecutar una automatización (el RUN real) ────────────────────────────────
+// Camino sancionado APARTE (como subirEjemplo): pasa por las MISMAS 8 capas (autorizar, vía
+// adaptarUpload) con acción "ejecutar", recibe multipart {automatizacionId, archivo}, y corre
+// ejecutarAutomatizacion (core): freno → versión ejecutable (RLS) → reserva (cuota+kill) →
+// LocalPythonExecutor → resolver la vista → confirmar. Devuelve el Resultado ya resuelto.
+//
+// SOLO funciona en DEV (LocalStorage + LocalPythonExecutor, local). En producción el Run va en
+// el runner AISLADO (gVisor/CMA), no en un route serverless → 503 hasta desplegarlo.
+export async function correrAutomatizacion(req: Request, orgId: string): Promise<Response> {
+  const handler = adaptarUpload(await getDeps(), getCfg(), { metodo: "POST", accion: "ejecutar" }, async (r, org) => {
+    if (!DEV) return { status: 503, cuerpo: { error: "runner_no_disponible", detalle: "El Run corre en el runner aislado (gVisor/CMA), no en serverless. Deferido." } };
+    const len = Number(r.headers.get("content-length") ?? "0");
+    if (Number.isFinite(len) && len > 55 * 1024 * 1024) return { status: 413, cuerpo: { error: "archivo_muy_grande" } };
+    let bytes: Buffer;
+    let nombre: string;
+    let automatizacionId: string;
+    try {
+      const form = await r.formData();
+      const archivo = form.get("archivo");
+      const idRaw = form.get("automatizacionId");
+      if (!(archivo instanceof File)) return R.malParametro("falta el archivo (campo 'archivo')");
+      if (typeof idRaw !== "string" || !/^[0-9a-fA-F-]{36}$/.test(idRaw)) return R.malParametro("automatizacionId (uuid) requerido");
+      automatizacionId = idRaw;
+      nombre = archivo.name || "insumo.csv";
+      bytes = Buffer.from(await archivo.arrayBuffer());
+    } catch {
+      return R.malParametro("cuerpo no es multipart válido");
+    }
+    const ext = path.extname(nombre).replace(/^\./, "").toLowerCase() || "csv";
+    const storageDir = process.env.AUTOMATA_DEV_STORAGE_DIR;
+    if (!storageDir) return { status: 500, cuerpo: { error: "falta AUTOMATA_DEV_STORAGE_DIR" } };
+    // Materializa el insumo en un temp; el GATE de entrada lo valida dentro de ejecutarAutomatizacion.
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "automata-run-in-"));
+    const inputPath = path.join(dir, path.basename(nombre));
+    const clave = path.basename(nombre);
+    try {
+      await fsp.writeFile(inputPath, bytes);
+      const { resultado, ejecucion, ms } = await ejecutarAutomatizacion(
+        { pool: await getPool(), storage: new LocalStorage(storageDir), run: new LocalPythonExecutor(), ahora: () => new Date().toISOString() },
+        { orgId: org, automatizacionId, inputs: { [clave]: inputPath }, metas: { [clave]: { extension: ext } } },
+      );
+      return R.ok({ resultado, ejecucionId: ejecucion.id, ms });
+    } catch (e) {
+      if (e instanceof SinVersionEjecutable) return { status: 404, cuerpo: { error: "sin_version_ejecutable" } };
+      if (e instanceof EntradaRechazada) return { status: 422, cuerpo: { error: "entrada_rechazada", motivo: e.motivo } };
+      if (e instanceof EntradaEnRevision) return { status: 422, cuerpo: { error: "a_revision", nombre } };
+      const err = e as { name?: string; message?: string };
+      if (err.name === "CuotaExcedida" || /CUOTA_EXCEDIDA/.test(err.message ?? "")) return R.cuota(err.message ?? "cuota");
+      if (err.name === "ServicioSuspendido" || /SUSPENDIDO/i.test(err.message ?? "")) return R.suspendido();
+      throw e;
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
   });
   return handler(req, orgId);
 }
