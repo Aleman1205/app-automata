@@ -9,16 +9,15 @@
 > y se cablea a Next 16 desde **`web/lib/automata/wiring.ts`** + `web/app/api/**`.
 > El front (`web/` fuera de `lib/automata` y `app/api`) sigue siendo el prototipo demo.
 
-## Estado de implementación (2026-07-26)
+## Estado de implementación (2026-07-26, actualizado 2026-07-27)
 
 Lo de este catálogo **ya está construido y probado**, no es plan:
 
-- **Motor `core/`**: ~43 módulos TS bajo `core/src/**` + el schema de BD en
-  `core/db/schema.sql` (**852 líneas**, idempotente). Framework-agnóstico; `web/`
-  solo lo envuelve.
-- **Suite de verificación**: **28 scripts** `verify:*` en `core/package.json:28-55`
-  (28 archivos `core/scripts/verify-*.ts`), más `typecheck` y el `next build` del front.
-  De los 28, **15 corren contra un Postgres real** (los `*:pg` + `verify:http`) y **13
+- **Motor `core/`**: ~44 módulos TS bajo `core/src/**` + el schema de BD en
+  `core/db/schema.sql` (idempotente). Framework-agnóstico; `web/` solo lo envuelve.
+- **Suite de verificación**: **31 scripts** `verify:*` en `core/package.json`
+  (31 archivos `core/scripts/verify-*.ts`), más `typecheck` y el `next build` del front.
+  De los 31, **18 corren contra un Postgres real** (los `*:pg` + `verify:http`) y **13
   son "gratis"** (lógica pura, sin BD ni credenciales). El Postgres de pruebas se
   levanta temporal (p.ej. puerto 55432).
 - **Lo que NO existe todavía**: las **credenciales/infra de producción** (Clerk, Neon,
@@ -26,9 +25,15 @@ Lo de este catálogo **ya está construido y probado**, no es plan:
   para todo eso está cableado; falta encender las llaves. Ver el
   [checklist para activar](#8-checklist-para-activar-en-producción).
 
-> **Nota sobre la cifra "22".** Rondas previas hablaban de ~22 scripts de verify;
-> el conteo real hoy es **28** (`grep -c '"verify' core/package.json` = 28,
-> `ls core/scripts/verify-*.ts | wc -l` = 28).
+> **Adición 2026-07-27** — "backend que la UI consume" + Run real por HTTP + **modo dev local**:
+> - **API de lectura (GET)**: `listar`/`ver` automatizaciones, `equipo` (`/miembros`) y
+>   `cuenta` (`/cuenta`), todas por RLS. Verifies `verify:lectura:pg`, `verify:cuenta:pg`.
+> - **Run real**: `core/src/pipeline/run.ts` (`ejecutarAutomatizacion`) + el endpoint HTTP
+>   `correrAutomatizacion` (`wiring.ts`). Verify `verify:ejecutar:pg` (corre Python real).
+> - **Modo dev local**: correr el producto **real** (front → backend real) en la máquina
+>   **sin credenciales** (bypass de auth doble-gated a no-producción). Runbook completo en
+>   **[docs/16](16-modo-dev-local.md)**. El front real (`web/lib/automata/lectura.ts` + las
+>   páginas) consume estas APIs con fallback al prototipo demo.
 
 ---
 
@@ -52,7 +57,7 @@ Cada fila: qué hace el módulo y qué `verify` lo cubre. Rutas relativas a `cor
 |---|---|---|
 | `src/http/pipeline.ts` | `autorizar()` + `withEfecto()`: **las 8 capas** (`pipeline.ts:51-104`), fail-closed. Traduce `NoAutorizado→403`, `CuotaExcedida→402`, `ServicioSuspendido→503`. | `verify:http` |
 | `src/http/adaptador.ts` | `adaptar()` (Request→Solicitud→Response, sin fugas; 500 genérico) y `adaptarUpload()` (cuerpo binario por las mismas 8 capas). | `verify:adaptador:pg` |
-| `src/http/endpoints.ts` | Los `Endpoint` reales: `crearAutomatizacionEP`, `invitarEP`, `quitarMiembroEP`, `ejecutarEP`, `solicitarBuildEP`. | `verify:http`, `verify:rutas` |
+| `src/http/endpoints.ts` | Los `Endpoint` reales: **efecto** (`crearAutomatizacionEP`, `invitarEP`, `quitarMiembroEP`, `ejecutarEP`, `solicitarBuildEP`) + **lectura GET** (`listarAutomatizacionesEP`, `verAutomatizacionEP`, `listarEquipoEP`, `verCuentaEP`) — acción `ver`, por RLS. | `verify:http`, `verify:rutas`, `verify:lectura:pg`, `verify:cuenta:pg` |
 | `src/http/tipos.ts` | `Solicitud`/`Respuesta`/`R` (helpers de status), puertos `Sesion`/`RateLimiter`. | (transversal) |
 | `src/auth/roles.ts` | `assertCan` (rol por acción, `Record` exhaustivo), `necesitaStepUp` (step-up MFA). 2 roles: `admin`/`operador`. | `verify:auth` |
 | `src/auth/membresia.ts` | `leerMembresia`: el rol **vivo** por request (expulsar pega al siguiente request). | `verify:http` |
@@ -85,7 +90,8 @@ Cada fila: qué hace el módulo y qué `verify` lo cubre. Rutas relativas a `cor
 
 | Módulo | Qué hace | Verify |
 |---|---|---|
-| `src/pipeline/build-pipeline.ts` | `construir` (M0 síncrono, con compensación), `arrancarConstruccion` (build-start async: reserva + arranca + fija sesión), `ejecutar` (reserva→corre→confirma). | `verify:pgstate:pg`, `verify:entrada:gate` |
+| `src/pipeline/build-pipeline.ts` | `construir` (M0 síncrono, con compensación), `arrancarConstruccion` (build-start async: reserva + arranca + fija sesión), `ejecutar` (reserva→corre→confirma; el Run puro, sin `BuildClient`). | `verify:pgstate:pg`, `verify:entrada:gate` |
+| `src/pipeline/run.ts` | `ejecutarAutomatizacion`: orquesta el **RUN** (freno temprano → versión ejecutable por RLS → reserva con cuota+kill → executor → resolver vista → confirmar). Recibe el pool + storage + executor; lo invoca el runner / el endpoint HTTP `correrAutomatizacion`. | `verify:ejecutar:pg` |
 | `src/pipeline/disparo.ts` | `drenarBuilds`: drena `build_pendiente` → planner → `arrancarConstruccion` (fuera del request, pool dueño, `FOR UPDATE SKIP LOCKED`). | `verify:disparo:pg` |
 | `src/pipeline/cosecha.ts` | `cosecharYConfirmar`/`drenarCosecha`: drena `cosecha_pendiente` → re-consulta CMA → sube a R2 → guard de bytes con `existe()` → confirma. Idempotente. | `verify:cosecha:pg` |
 | `src/vista/resolver.ts` | `resolverVista`: aterriza `vista.json` (refs `@resultado.*`) sobre los datos del run → `Resultado` (contrato de docs/09). | `verify` (run-vista) |
@@ -242,7 +248,7 @@ para `npm run m0` y pruebas locales; gasta dinero y no va en la ruta HTTP.
 
 ---
 
-## 4. La suite de verificación (28 scripts)
+## 4. La suite de verificación (31 scripts)
 
 Comando: `cd core && npm run <script>`. Los `*:pg` (y `verify:http`) necesitan un Postgres
 levantado con el schema aplicado por el rol dueño; los demás corren sin BD ni credenciales.
@@ -270,6 +276,9 @@ levantado con el schema aplicado por el rol dueño; los demás corren sin BD ni 
 | `verify:reparaciones:pg` | `verify-reparaciones-pg.ts` | Circuit breaker de reparaciones (latch persistente, cuenta builds fallidos). |
 | `verify:pgstate:pg` | `verify-pgstate-pg.ts` | `PgStateRepo`: une el pipeline M0 real con el enforcement de la BD. |
 | `verify:adaptador:pg` | `verify-adaptador-pg.ts` | Adaptador HTTP: traducción Request→Response + happy-path real contra Postgres. |
+| `verify:lectura:pg` | `verify-lectura-pg.ts` | API de lectura de automatizaciones (listar/detalle) bajo RLS: solo su org, estado derivado, cross-org → 404. |
+| `verify:cuenta:pg` | `verify-cuenta-pg.ts` | API de equipo + cuenta bajo RLS: roster con `esTu`, plan+límites+consumo del mes, aislamiento cross-org. |
+| `verify:ejecutar:pg` | `verify-ejecutar-pg.ts` | Run de punta a punta (Python real): happy path, cobro en la reserva, freno aborta antes de gastar, sin-versión/cross-org sin cobro. |
 | `verify:rutas` | `verify-rutas.ts` | Anti-olvido: escanea `web/app/api/**/route.ts`, falla si un verbo mutante no pasa por `ruta()`. |
 | `verify:storage` | `verify-storage.ts` | `R2Storage` con doble del cliente S3 (comandos correctos, paginación, `existe`). |
 | `verify:sandbox` | `verify-run-sandbox.ts` | Sandbox puente con python real: fuga de secretos, `ulimit`, timeout, cotas. |
@@ -291,15 +300,22 @@ Todo se cablea en `web/lib/automata/wiring.ts`; cada `route.ts` queda en 1-2 lí
 
 | Ruta | Verbo | Endpoint | Acción / rol | Archivo route |
 |---|---|---|---|---|
+| `/api/orgs/[orgId]/automatizaciones` | GET | `listarAutomatizacionesEP` | `ver` (admin+operador) — portafolio | `automatizaciones/route.ts` |
 | `/api/orgs/[orgId]/automatizaciones` | POST | `crearAutomatizacionEP` | `crear_build` (admin) | `automatizaciones/route.ts` |
+| `/api/orgs/[orgId]/automatizacion` | GET | `verAutomatizacionEP` | `ver` — detalle (versiones+vista+ejecuciones) | `automatizacion/route.ts` |
+| `/api/orgs/[orgId]/miembros` | GET | `listarEquipoEP` | `ver` — equipo (con `esTu`) | `miembros/route.ts` |
+| `/api/orgs/[orgId]/cuenta` | GET | `verCuentaEP` | `ver` — plan+límites+uso del mes | `cuenta/route.ts` |
 | `/api/orgs/[orgId]/construir` | POST | `solicitarBuildEP` | `crear_build` (admin) | `construir/route.ts` |
-| `/api/orgs/[orgId]/ejecutar` | POST | `ejecutarEP` | `ejecutar` (admin+operador) | `ejecutar/route.ts` |
 | `/api/orgs/[orgId]/miembros` | POST | `invitarEP` | `invitar` (admin, **step-up MFA**) | `miembros/route.ts` |
 | `/api/orgs/[orgId]/miembros` | DELETE | `quitarMiembroEP` | `quitar_gente` (admin, step-up; no deja sin admin) | `miembros/route.ts` |
 | `/api/orgs/[orgId]/ejemplo` | POST | `subirEjemplo` (upload) | `crear_build`, multipart + gate | `ejemplo/route.ts` |
+| `/api/orgs/[orgId]/ejecutar` | POST | `correrAutomatizacion` (upload) | `ejecutar` (admin+operador) — **Run real**, multipart. **Solo DEV**; prod → 503 (el Run va en el runner aislado, docs/16) | `ejecutar/route.ts` |
 
-`middleware.ts`: **default-deny** de páginas (Clerk `auth.protect()` salvo allowlist pública);
-la API no la fuerza el middleware — se autentica en el pipeline (401 JSON).
+Los GET de lectura van por `ruta()` (8 capas, acción `ver`, RLS). El Run (`/ejecutar`) va por
+el camino sancionado de upload (`adaptarUpload` → `autorizar`, como `subirEjemplo`): `verify:rutas`
+lo reconoce (no exige `ruta()` para las entradas multipart). `middleware.ts`: **default-deny** de
+páginas (Clerk `auth.protect()` salvo allowlist pública), **salvo en modo dev** (passthrough,
+docs/16); la API nunca la fuerza el middleware — se autentica en el pipeline (401 JSON).
 
 ### 5.2 Webhooks (por firma HMAC, **no** por las 8 capas)
 

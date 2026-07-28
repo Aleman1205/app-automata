@@ -4,8 +4,12 @@
 
 Contexto del proyecto completo: `../CLAUDE.md`. Lo esencial para el front:
 
-- **Es 100% demo.** Datos falsos en `lib/datos.ts`, sin backend. Los
-  formularios y botones animan pero no guardan ni envían nada.
+- **Demo por defecto, backend real en modo dev.** Sin backend, el front usa datos
+  falsos de `lib/datos.ts` (el prototipo, formularios que solo animan). Pero **ya
+  consume el backend real** cuando está en modo dev local (`AUTOMATA_DEV_AUTH=1` +
+  la org sembrada): portafolio, cuenta, equipo, detalle y el **botón Ejecutar** (que
+  corre de verdad) leen/escriben vía `lib/automata/lectura.ts` + las APIs, con
+  fallback a `lib/datos.ts`. Runbook: **`../docs/16-modo-dev-local.md`**.
 - **Sistema de diseño: `DESIGN.md`** — léelo antes de tocar UI. Paleta sepia
   con tokens (nunca hex sueltos), catálogo de componentes con sus props, reglas
   de animación. El acento naranja es SOLO para la acción principal de cada

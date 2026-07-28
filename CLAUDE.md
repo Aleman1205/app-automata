@@ -35,8 +35,11 @@ serie de agentes piensa, planea, programa, ejecuta".
 | Observabilidad / incidentes (docs/05) | **Construido** | `core/src/ops/incidentes.ts` (append-only, SD, reaper emite incidentes) | `verify:incidentes:pg` |
 | Data plane: storage + CMA | **Construido** | `core/src/storage/r2.ts` (R2/S3-compat, `existe()`), `core/src/cma/build.ts` (arrancar/cosechar + clasificarSesion) | `verify:storage`, `verify:cma` |
 | Runner sandbox (docs/02, 11) | **Fase 0 probada; gVisor cableado** | `core/src/run/executor.ts` (`LocalPythonExecutor` endurecido: env allowlist, ulimit, kill de grupo) probado; `core/src/run/container-executor.ts:12-97` (jaula gVisor `runsc`, `--network none`, `--read-only`, `--cap-drop ALL`, `--pids-limit`) **cableado, se prueba al desplegar** | `verify:sandbox` |
+| API de lectura (GET) / UI real (docs/16) | **Construido (2026-07-27)** | `core/src/http/endpoints.ts` (listar/ver automatizaciones, equipo `/miembros`, cuenta `/cuenta`) + `web/lib/automata/lectura.ts` (el front consume las APIs, con fallback al prototipo demo) | `verify:lectura:pg`, `verify:cuenta:pg` |
+| Run real (orquestación + HTTP) (docs/16) | **Construido (2026-07-27)** | `core/src/pipeline/run.ts` (`ejecutarAutomatizacion`) + `web/lib/automata/wiring.ts` (`correrAutomatizacion`: multipart → Run local; prod → 503, runner aislado) | `verify:ejecutar:pg` |
+| Modo dev local (docs/16) | **Construido (2026-07-27)** | `web/lib/automata/dev.ts` (bypass de auth doble-gated a no-producción) + `middleware.ts` + `core/scripts/seed-dev-pg.ts`: el producto real corre local **sin credenciales** | (corre local; runbook docs/16) |
 
-**Marco de pruebas:** 28 scripts `verify:*` en `core/package.json:28-55` (unit +
+**Marco de pruebas:** 31 scripts `verify:*` en `core/package.json` (unit +
 contra Postgres real, sufijo `:pg`). Por el reporte de Fase 1 corren **en verde**;
 `tsc --noEmit` y `next build` OK. La BD de pruebas es un Postgres temporal en el
 puerto **55432**.
@@ -62,7 +65,7 @@ CMA y Stripe; crons en Vercel Pro; desplegar el runner gVisor y cambiar
 | Planeación de arquitectura | **Completa** — 13 documentos, 2 curtidos con crítica adversarial |
 | Prototipo del front | **Funcional** — solo apariencia, datos falsos, para inversionistas |
 | Spike (prueba técnica) | **Corrido ✓ — 3/3 casos, ~$1.8/build real** (ver `spike/RESULTADO.md`) |
-| Backend / producto real | **Actualización (2026-07-26): motor de Fase 1 CONSTRUIDO** — `core/` (TS+tsx, framework-agnóstico) + `web/` (wiring Next 16); 28 `verify:*` en verde, typecheck + `next build` OK. Detalle en la sección "Estado de implementación". Plan original en `docs/plan-fase-1.md`. Falta activar (llaves/infra), no código. |
+| Backend / producto real | **Actualización (2026-07-27): motor de Fase 1 CONSTRUIDO + la UI ya consume el backend real** — `core/` (TS+tsx) + `web/` (wiring Next 16); **31 `verify:*` en verde**, typecheck + `next build` OK. Además del motor: API de lectura (portafolio/equipo/cuenta/detalle), **Run real por HTTP** (archivo → resultado), y un **modo dev local** que corre el producto real **sin credenciales** (docs/16). Detalle en "Estado de implementación". Falta activar producción (llaves/infra), no código. |
 
 ## Los riesgos abiertos (no se resuelven con más papel)
 
@@ -118,7 +121,8 @@ spike/             prueba técnica — Node + npm (raíz)
 | 11 | Threat model | ejecutar código de IA es el producto; escape de contenedor = riesgo #1 |
 | 13 | Auth y webhooks | **IMPLEMENTADO**: pipeline de 8 capas (`core/src/http/pipeline.ts:43-51`), firma de webhooks (`core/src/webhooks/`). **Actualización (2026-07-26):** los nombres de evento de CMA que este doc daba por buenos (`session.completed`, etc.) eran **inventados**; los `data.type` reales accionables son `session.status_idled` / `session.status_terminated` (el resto, `session.outcome_evaluation_ended` etc., es informativo) y el ÉXITO sólo se sabe re-consultando la sesión (webhook *thin*). |
 | 14 | Controles de seguridad | **matriz de casos comunes** (65, 5 dominios) estilo OWASP: caso → postura → capa → milestone → estado; une docs/13+11+04 |
-| 15 | **Motor implementado** | **NUEVO (2026-07-26):** catálogo maestro de lo construido en Fase 1 — módulos de `core/`, modelo de seguridad en la BD, loop async de build de punta a punta, la suite de 28 `verify:*`, rutas/crons y el checklist para activar en producción |
+| 15 | **Motor implementado** | **NUEVO (2026-07-26):** catálogo maestro de lo construido en Fase 1 — módulos de `core/`, modelo de seguridad en la BD, loop async de build de punta a punta, la suite de `verify:*` (31), rutas/crons y el checklist para activar en producción |
+| 16 | **Modo dev local** | **NUEVO (2026-07-27):** runbook para correr el producto **real** (front → backend real: RLS, cuota, Run que ejecuta código) en la máquina **sin credenciales** — bypass de auth doble-gated a no-producción, siembra con `seed:dev`, qué es real vs. falso, y el Run local de punta a punta |
 
 (No hay docs/12; el 13 se numeró así a propósito.)
 
@@ -181,7 +185,15 @@ npm run verify:pg                          # aislamiento / RLS
 npm run verify:cuota:pg                    # cuota (reserva→confirma, sin oversell)
 npm run verify:ciclo:pg                    # ciclo de vida (entrega garantizada)
 npm run verify:killswitch:pg              # freno DB-enforced
-# ...son 28 scripts `verify:*` en core/package.json:28-55 (sufijo :pg = con BD)
+npm run verify:ejecutar:pg                 # Run de punta a punta (Python real)
+# ...son 31 scripts `verify:*` en core/package.json (sufijo :pg = con BD)
+
+# Modo DEV LOCAL — el producto REAL corriendo local, SIN credenciales (runbook: docs/16)
+psql "postgres://postgres@127.0.0.1:55432/postgres" -f core/db/schema.sql  # schema (rol dueño)
+cd core && npm run seed:dev                # siembra org+equipo+automatizaciones EJECUTABLES
+# web/.env.local: AUTOMATA_DEV_AUTH=1, DATABASE_URL=…55432, APP_ORIGIN=http://localhost:3000,
+#   NEXT_PUBLIC_AUTOMATA_DEV_ORG=<org sembrada>, AUTOMATA_DEV_STORAGE_DIR=<abs>/.dev-storage
+cd web && pnpm dev                         # → localhost:3000 (portafolio/cuenta/equipo/detalle REALES + Ejecutar real)
 ```
 
 - **Front, spike y motor son proyectos separados**: front usa `pnpm` en `web/`;
