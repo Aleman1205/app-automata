@@ -1,5 +1,7 @@
 import { crearAutomatizacion, invitarMiembro } from "../billing/cuota.ts";
 import { congelar, AjusteNoPermitido } from "../ciclo/servicio.ts";
+import { IntakeAgent, IntakeError } from "../intake/agent.ts";
+import { type EntradaHistorial } from "../intake/prompt.ts";
 import { verificarFreno } from "../ops/killswitch.ts";
 import { type Rol } from "../auth/roles.ts";
 import { type Endpoint } from "./pipeline.ts";
@@ -140,6 +142,44 @@ export const solicitarBuildEP: Endpoint<SolicitudBuild> = {
     if (!input.ejemploKey.startsWith(`ejemplos/${orgId}/`)) return R.malParametro("ejemploKey fuera de la org");
     const r = await cliente.query<{ id: string }>("SELECT app_solicitar_build($1,$2,$3) AS id", [input.nombre, JSON.stringify(input.spec), input.ejemploKey]);
     return R.creado({ id: r.rows[0]?.id }); // solicitud encolada; el drainer construye
+  },
+};
+
+// ── Intake por-turno (POST): corre UNA ronda del entrevistador (Sonnet) ───────
+// El front maneja la conversación: manda { idea, historial, turno } y recibe la siguiente
+// ronda de preguntas o el spec (o rechazo). Acción "crear_build" (admin). NOTA: la llamada a
+// Sonnet (~5-10s) corre dentro de conOrg, así que retiene una conexión de la BD ese rato; para
+// alto tráfico convendría sacarla de la tx (follow-up). El intake NO usa la BD, solo el modelo.
+const esquemaIntake: Esquema<{ idea: string; historial: EntradaHistorial[]; turno: number }> = {
+  analizar(x) {
+    if (!esObjeto(x)) return { ok: false, problemas: ["cuerpo no es objeto"] };
+    const idea = x["idea"];
+    if (typeof idea !== "string" || idea.trim().length === 0 || idea.length > 2000) return { ok: false, problemas: ["idea requerida (≤2000)"] };
+    const turno = x["turno"];
+    if (typeof turno !== "number" || !Number.isInteger(turno) || turno < 1 || turno > 3) return { ok: false, problemas: ["turno debe ser 1-3"] };
+    const h = x["historial"];
+    if (!Array.isArray(h)) return { ok: false, problemas: ["historial inválido"] };
+    const historial: EntradaHistorial[] = [];
+    for (const e of h) {
+      if (!esObjeto(e) || typeof e["pregunta"] !== "string" || typeof e["eleccion"] !== "string" || typeof e["libre"] !== "boolean") return { ok: false, problemas: ["historial mal formado"] };
+      historial.push({ pregunta: String(e["pregunta"]).slice(0, 400), eleccion: String(e["eleccion"]).slice(0, 400), libre: e["libre"] });
+    }
+    return { ok: true, valor: { idea: idea.trim(), historial, turno } };
+  },
+};
+export const intakeEP: Endpoint<{ idea: string; historial: EntradaHistorial[]; turno: number }> = {
+  nombre: "POST /orgs/:orgId/intake",
+  metodo: "POST",
+  accion: "crear_build",
+  esquema: esquemaIntake,
+  handler: async ({ input }) => {
+    try {
+      const res = await new IntakeAgent().turno(input.idea, input.historial, input.turno);
+      return R.ok(res); // { accion: "preguntar" | "cerrar" | "rechazar", ... }
+    } catch (e) {
+      if (e instanceof IntakeError) return { status: 422, cuerpo: { error: "intake_fallo", motivo: e.message } };
+      throw e;
+    }
   },
 };
 
@@ -325,4 +365,4 @@ export const congelarEP: Endpoint<{ id: string }> = {
 // Registro central. NOTA (revisión): esto NO es la garantía anti-olvido completa —
 // en Next hace falta un test que ESCANEE app/api/**/route.ts y falle si algún handler
 // con efecto no delega en withEfecto. Aquí registrarse es la convención.
-export const ENDPOINTS = [crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, solicitarBuildEP, listarAutomatizacionesEP, verAutomatizacionEP, listarEquipoEP, verCuentaEP, listarEjecucionesEP, congelarEP] as const;
+export const ENDPOINTS = [crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, solicitarBuildEP, intakeEP, listarAutomatizacionesEP, verAutomatizacionEP, listarEquipoEP, verCuentaEP, listarEjecucionesEP, congelarEP] as const;

@@ -8,11 +8,22 @@ import { Reveal } from "@/components/motion/reveal";
 import { TextoRevelado } from "@/components/motion/texto-revelado";
 import { specResumen } from "@/lib/datos";
 
+export interface DatosResumen {
+  objetivo: string;
+  entradas: string[];
+  salidas: string[];
+  reglas: string[];
+  criterios: string[];
+}
+
 // Pantalla de aprobación: lo que la entrevista entendió, en lenguaje llano.
+// `datos` viene del intake real; si no, cae al spec de demo.
 export function PasoResumen({
+  datos = specResumen,
   onCorregir,
   onAprobar,
 }: {
+  datos?: DatosResumen;
   onCorregir: () => void;
   onAprobar: () => void;
 }) {
@@ -34,7 +45,7 @@ export function PasoResumen({
           <Tarjeta className="p-6">
             <Etiqueta>OBJETIVO</Etiqueta>
             <p className="mt-3 text-base leading-relaxed text-tinta md:text-lg">
-              {specResumen.objetivo}
+              {datos.objetivo}
             </p>
           </Tarjeta>
         </Reveal>
@@ -44,7 +55,7 @@ export function PasoResumen({
             <Tarjeta className="h-full p-6">
               <Etiqueta>VAS A SUBIR</Etiqueta>
               <ul className="mt-3 flex flex-col gap-2.5">
-                {specResumen.entradas.map((entrada) => (
+                {datos.entradas.map((entrada) => (
                   <li key={entrada} className="flex items-start gap-2.5">
                     <FileSpreadsheet
                       className="mt-0.5 size-4 shrink-0 text-sepia"
@@ -63,7 +74,7 @@ export function PasoResumen({
             <Tarjeta className="h-full p-6">
               <Etiqueta>VAS A RECIBIR</Etiqueta>
               <ul className="mt-3 flex flex-col gap-2.5">
-                {specResumen.salidas.map((salida) => (
+                {datos.salidas.map((salida) => (
                   <li key={salida} className="flex items-start gap-2.5">
                     <FileCheck2
                       className="mt-0.5 size-4 shrink-0 text-sepia"
@@ -83,7 +94,7 @@ export function PasoResumen({
           <Tarjeta className="p-6">
             <Etiqueta>REGLAS DE TU NEGOCIO</Etiqueta>
             <ul className="mt-3 flex flex-col gap-2.5">
-              {specResumen.reglas.map((regla) => (
+              {datos.reglas.map((regla) => (
                 <li key={regla} className="flex items-start gap-2.5">
                   <span className="mt-2 size-1.5 shrink-0 rounded-full bg-sepia" />
                   <span className="text-sm leading-relaxed text-tinta">
@@ -99,7 +110,7 @@ export function PasoResumen({
           <div className="rounded-2xl border border-linea bg-papel p-6">
             <Etiqueta>LO DAREMOS POR BUENO CUANDO</Etiqueta>
             <ul className="mt-3 flex flex-col gap-2.5">
-              {specResumen.criterios.map((criterio) => (
+              {datos.criterios.map((criterio) => (
                 <li key={criterio} className="flex items-start gap-2.5">
                   <Check
                     className="mt-0.5 size-4 shrink-0 text-oliva"

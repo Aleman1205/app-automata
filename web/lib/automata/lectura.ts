@@ -251,6 +251,43 @@ export async function quitarMiembro(userId: string): Promise<void> {
   }
 }
 
+// ── Intake por-turno (el entrevistador real, Sonnet) ─────────────────────────
+export interface OpcionIntake { id: string; etiqueta: string; detalle: string; recomendada: boolean; }
+export interface PreguntaIntake { id: string; titulo: string; opciones: OpcionIntake[]; permite_otro: boolean; pide_archivo: boolean; }
+export interface SpecIntake {
+  objetivo: string;
+  entradas: { descripcion: string }[];
+  salidas: { descripcion: string }[];
+  reglas: string[];
+  criterios_exito: { criterio_cliente: string }[];
+  ambiguedades_restantes: string[];
+}
+export interface EntradaHist { pregunta: string; eleccion: string; libre: boolean; }
+export type TurnoIntake =
+  | { accion: "preguntar"; reencuadre: string | null; preguntas: PreguntaIntake[] }
+  | { accion: "cerrar"; spec: SpecIntake; saludo: string }
+  | { accion: "rechazar" };
+
+/** Corre UNA ronda del entrevistador. El front manda la idea + el historial acumulado + el
+ *  número de turno, y recibe la siguiente ronda de preguntas, o el spec, o un rechazo. */
+export async function intakeTurno(idea: string, historial: EntradaHist[], turno: number): Promise<TurnoIntake> {
+  if (!ORG) throw new Error("No hay backend configurado (¿modo dev / login?).");
+  const r = await fetch(`/api/orgs/${ORG}/intake`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ idea, historial, turno }),
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string };
+    throw new Error(
+      err.error === "intake_fallo"
+        ? "No pudimos entender del todo tu proceso. Intenta describirlo con otras palabras."
+        : "No se pudo procesar la entrevista. Intenta de nuevo.",
+    );
+  }
+  return (await r.json()) as TurnoIntake;
+}
+
 /** Hace definitiva (congela) una automatización. Lanza con mensaje de cliente si no se puede. */
 export async function congelarAutomatizacion(id: string): Promise<void> {
   if (!ORG) throw new Error("No hay backend configurado.");

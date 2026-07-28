@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ejemplosIdea, rondasEntrevista } from "@/lib/datos";
+import Link from "next/link";
 import { PasoIdea } from "./_componentes/paso-idea";
 import { PasoPensando } from "./_componentes/paso-pensando";
 import {
@@ -10,13 +10,32 @@ import {
   type Respuesta,
   type Respuestas,
 } from "./_componentes/paso-preguntas";
-import { PasoResumen } from "./_componentes/paso-resumen";
+import { PasoResumen, type DatosResumen } from "./_componentes/paso-resumen";
 import { PasoListo } from "./_componentes/paso-listo";
+import { Boton } from "@/components/ui/boton";
+import { Etiqueta } from "@/components/ui/etiqueta";
+import {
+  intakeTurno,
+  type EntradaHist,
+  type PreguntaIntake,
+  type SpecIntake,
+  type TurnoIntake,
+} from "@/lib/automata/lectura";
+import type { PreguntaEntrevista } from "@/lib/datos";
 
-type Paso = "idea" | "pensando" | "preguntas" | "resumen" | "listo";
+type Paso = "idea" | "pensando" | "preguntas" | "resumen" | "listo" | "rechazado";
 
-// Las dos rondas de la entrevista, aplanadas: 5 preguntas en total.
-const preguntas = rondasEntrevista.flat();
+// La Pregunta real (core) → la forma que el componente PasoPreguntas ya sabe pintar.
+function aPreguntaUI(p: PreguntaIntake): PreguntaEntrevista {
+  return {
+    id: p.id,
+    titulo: p.titulo,
+    tipo: p.pide_archivo ? "archivo" : "opciones",
+    permiteOtro: p.permite_otro,
+    opciones: p.opciones.map((o) => ({ id: o.id, etiqueta: o.etiqueta, detalle: o.detalle, recomendada: o.recomendada })),
+    ayuda: p.pide_archivo ? "Sube el archivo que usas en este proceso — con eso entendemos mejor." : undefined,
+  };
+}
 
 // Panel que entra por la derecha y sale por la izquierda (cambio de paso).
 function Panel({ children }: { children: React.ReactNode }) {
@@ -35,37 +54,101 @@ function Panel({ children }: { children: React.ReactNode }) {
 export default function NuevaAutomatizacion() {
   const [paso, setPaso] = useState<Paso>("idea");
   const [idea, setIdea] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  // Conversación con el entrevistador (Sonnet): historial acumulado + turno.
+  const [historial, setHistorial] = useState<EntradaHist[]>([]);
+  const [turno, setTurno] = useState(1);
+  const [preguntas, setPreguntas] = useState<PreguntaEntrevista[]>([]);
   const [indice, setIndice] = useState(0);
   const [respuestas, setRespuestas] = useState<Respuestas>({});
   const [archivoSubido, setArchivoSubido] = useState(false);
-
-  // El paso "pensando" dura 1.4 s y avanza solo a las preguntas.
-  useEffect(() => {
-    if (paso !== "pensando") return;
-    const t = setTimeout(() => setPaso("preguntas"), 1400);
-    return () => clearTimeout(t);
-  }, [paso]);
+  const [spec, setSpec] = useState<SpecIntake | null>(null);
 
   const responder = (preguntaId: string, respuesta: Respuesta) => {
     setRespuestas((previas) => ({ ...previas, [preguntaId]: respuesta }));
   };
 
+  // Aterriza el resultado de un turno: siguiente ronda de preguntas, spec, o rechazo.
+  const procesar = (res: TurnoIntake) => {
+    setError(null);
+    if (res.accion === "preguntar") {
+      setPreguntas(res.preguntas.map(aPreguntaUI));
+      setIndice(0);
+      setRespuestas({});
+      setArchivoSubido(false);
+      setPaso("preguntas");
+    } else if (res.accion === "cerrar") {
+      setSpec(res.spec);
+      setPaso("resumen");
+    } else {
+      setPaso("rechazado");
+    }
+  };
+
+  const fallo = (e: unknown) => {
+    setError(e instanceof Error ? e.message : "Algo salió mal. Intenta de nuevo.");
+    setPaso("idea");
+  };
+
+  // Arranca la entrevista con la idea (turno 1).
+  const arrancar = async () => {
+    if (!idea.trim()) return;
+    setError(null);
+    setHistorial([]);
+    setTurno(1);
+    setPaso("pensando");
+    try {
+      procesar(await intakeTurno(idea, [], 1));
+    } catch (e) {
+      fallo(e);
+    }
+  };
+
+  // Respondida la última pregunta de la ronda → arma el historial y pide el siguiente turno.
+  const avanzarRonda = async () => {
+    const nuevas: EntradaHist[] = preguntas.map((p) => {
+      const r = respuestas[p.id];
+      if (p.tipo === "archivo") return { pregunta: p.titulo, eleccion: archivoSubido ? "Sí, tengo ese archivo" : "(sin archivo)", libre: false };
+      if (r?.opcionId === "otro" && r.otroTexto.trim()) return { pregunta: p.titulo, eleccion: r.otroTexto.trim(), libre: true };
+      const op = p.opciones?.find((o) => o.id === r?.opcionId);
+      return { pregunta: p.titulo, eleccion: op?.etiqueta ?? "(sin respuesta)", libre: false };
+    });
+    const hist = [...historial, ...nuevas];
+    const t = turno + 1;
+    setHistorial(hist);
+    setTurno(t);
+    setPaso("pensando");
+    try {
+      procesar(await intakeTurno(idea, hist, t));
+    } catch (e) {
+      fallo(e);
+    }
+  };
+
   const atras = () => {
-    if (indice === 0) setPaso("idea");
-    else setIndice(indice - 1);
+    if (indice > 0) setIndice(indice - 1);
+    else setPaso("idea"); // desde la 1ª pregunta, volver a la idea (reinicia la entrevista)
   };
 
   const continuar = () => {
-    if (indice === preguntas.length - 1) setPaso("resumen");
-    else setIndice(indice + 1);
+    if (indice < preguntas.length - 1) setIndice(indice + 1);
+    else void avanzarRonda();
   };
 
+  const datosResumen: DatosResumen | undefined = spec
+    ? {
+        objetivo: spec.objetivo,
+        entradas: spec.entradas.map((e) => e.descripcion),
+        salidas: spec.salidas.map((s) => s.descripcion),
+        reglas: spec.reglas,
+        criterios: spec.criterios_exito.map((c) => c.criterio_cliente),
+      }
+    : undefined;
+
   const aprobar = () => {
-    const nombre =
-      idea.trim() === ejemplosIdea[0]
-        ? "Reporte mensual de ventas"
-        : idea.trim().slice(0, 46).trimEnd();
-    localStorage.setItem("demo_nueva", JSON.stringify({ nombre }));
+    // El BUILD (que construye el resultado) corre en CMA + guarda en R2 — aún no activados.
+    // El spec ya quedó entendido; mostramos el cierre. (Cablear intake→build es el siguiente paso.)
     setPaso("listo");
   };
 
@@ -74,11 +157,12 @@ export default function NuevaAutomatizacion() {
       <AnimatePresence mode="wait">
         {paso === "idea" && (
           <Panel key="idea">
-            <PasoIdea
-              texto={idea}
-              onCambiar={setIdea}
-              onContinuar={() => setPaso("pensando")}
-            />
+            {error && (
+              <div className="mb-6 rounded-xl border border-linea bg-papel px-4 py-3 text-sm text-ladrillo">
+                {error}
+              </div>
+            )}
+            <PasoIdea texto={idea} onCambiar={setIdea} onContinuar={arrancar} />
           </Panel>
         )}
 
@@ -88,7 +172,7 @@ export default function NuevaAutomatizacion() {
           </Panel>
         )}
 
-        {paso === "preguntas" && (
+        {paso === "preguntas" && preguntas.length > 0 && (
           <Panel key="preguntas">
             <PasoPreguntas
               preguntas={preguntas}
@@ -106,10 +190,8 @@ export default function NuevaAutomatizacion() {
         {paso === "resumen" && (
           <Panel key="resumen">
             <PasoResumen
-              onCorregir={() => {
-                setIndice(0);
-                setPaso("preguntas");
-              }}
+              datos={datosResumen}
+              onCorregir={() => setPaso("idea")}
               onAprobar={aprobar}
             />
           </Panel>
@@ -118,6 +200,30 @@ export default function NuevaAutomatizacion() {
         {paso === "listo" && (
           <Panel key="listo">
             <PasoListo />
+          </Panel>
+        )}
+
+        {paso === "rechazado" && (
+          <Panel key="rechazado">
+            <div className="flex flex-col items-start gap-6">
+              <Etiqueta punto>No es para nosotros</Etiqueta>
+              <h2 className="text-3xl font-black tracking-tight md:text-5xl">
+                Esto no lo podemos construir.
+              </h2>
+              <p className="max-w-xl leading-relaxed text-sepia">
+                Automata convierte procesos de tipo &ldquo;archivo → resultado&rdquo;. Lo que
+                describiste queda fuera de eso (o necesita algo que hoy no hacemos). Prueba
+                describiendo un proceso donde subes un archivo y quieres un reporte de vuelta.
+              </p>
+              <div className="flex flex-wrap gap-4">
+                <Boton variante="oscuro" icono="flecha" onClick={() => { setError(null); setPaso("idea"); }}>
+                  Describir otro proceso
+                </Boton>
+                <Link href="/portafolio" className="self-center text-sm text-sepia underline-offset-4 hover:underline">
+                  Volver al portafolio
+                </Link>
+              </div>
+            </div>
           </Panel>
         )}
       </AnimatePresence>
