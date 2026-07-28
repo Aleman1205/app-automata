@@ -100,7 +100,7 @@ async function main() {
     console.log("\n7. Cobertura de registro:");
     const acciones = new Set(["ver", "crear_build", "invitar", "quitar_gente", "ejecutar", "descargar", "ajustar", "facturacion", "exportar_codigo", "gestionar_espacios", "borrar_org"]);
     check("todo endpoint declara método + acción válida", ENDPOINTS.every((e) => acciones.has(e.accion) && !!e.metodo));
-    check("los 9 endpoints están registrados (5 con efecto + 4 de lectura)", ENDPOINTS.length === 9 && ENDPOINTS.includes(invitarEP));
+    check("los 11 endpoints están registrados (6 con efecto + 5 de lectura)", ENDPOINTS.length === 11 && ENDPOINTS.includes(invitarEP));
   } finally {
     await admin.query("DELETE FROM orgs WHERE id = ANY($1)", [[A, B, Q]]).catch(() => {});
     await admin.end();

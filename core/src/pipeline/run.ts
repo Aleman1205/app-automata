@@ -78,5 +78,16 @@ export async function ejecutarAutomatizacion(
     { storage: deps.storage, state, run: deps.run, ahora: deps.ahora },
     { version, inputs: args.inputs, metas: args.metas },
   );
+
+  // Persiste el Resultado resuelto (para historial/descarga). Best-effort: si el put falla, la
+  // corrida YA quedó 'ok' y el cliente ya tiene el resultado inline — no la tumbamos por esto.
+  const resultadoKey = `resultados/${ejecucion.id}.json`;
+  try {
+    await deps.storage.put(resultadoKey, JSON.stringify(resultado));
+    await state.actualizarEjecucion(ejecucion.id, { resultadoKey });
+  } catch {
+    /* el resultado quedó inline; solo se pierde su historial-con-descarga */
+  }
+
   return { resultado, ejecucion, ms };
 }

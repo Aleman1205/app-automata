@@ -2,6 +2,7 @@ import type { DatosTarjeta } from "@/app/portafolio/_componentes/tarjeta-automat
 import type {
   Automatizacion,
   CambioVersion,
+  EjecucionPrevia,
   EstadoAuto,
   ResultadoDemo,
 } from "@/lib/datos";
@@ -154,6 +155,7 @@ export async function verAutomatizacion(id: string): Promise<Automatizacion | nu
         fecha: fechaCorta(v.creada),
         tipo: v.tipo === "ajuste" ? "ajuste" : "construccion",
       }));
+    const historial = await listarEjecuciones(id); // corridas reales, para la tabla del detalle
     return {
       id: d.id,
       nombre: d.nombre,
@@ -167,7 +169,7 @@ export async function verAutomatizacion(id: string): Promise<Automatizacion | nu
         { id: "archivo", tipo: "archivo", etiqueta: "Tu archivo de ventas", ayuda: "CSV con columnas: vendedor, monto", formatos: ["csv"] },
       ],
       resultado: undefined, // llega del Run real
-      historial: [], // el detalle no trae historial por-ejecución (otro slice)
+      historial,
       cambios,
     };
   } catch {
@@ -194,4 +196,38 @@ export async function ejecutarArchivo(automatizacionId: string, file: File): Pro
   }
   const d = (await r.json()) as { resultado: ResultadoDemo; ms: number };
   return { resultado: d.resultado, ms: d.ms };
+}
+
+/** Historial real de corridas de una automatización → filas para la TablaHistorial. El backend
+ *  no guarda el nombre del archivo ni quién la corrió por ejecución, así que van como "—". */
+export async function listarEjecuciones(automatizacionId: string): Promise<EjecucionPrevia[]> {
+  if (!ORG) return [];
+  try {
+    const r = await fetch(`/api/orgs/${ORG}/ejecuciones?id=${encodeURIComponent(automatizacionId)}`, { headers: { accept: "application/json" }, cache: "no-store" });
+    if (!r.ok) return [];
+    const d = (await r.json()) as { ejecuciones: { id: string; estado: string; ms: number; creada: string | null }[] };
+    return d.ejecuciones.map((e) => ({
+      fecha: fechaCorta(e.creada),
+      archivo: "—",
+      duracion: e.ms >= 1000 ? `${(e.ms / 1000).toFixed(1)} s` : `${e.ms} ms`,
+      estado: e.estado === "ok" ? "Correcta" : "Falló",
+      por: "—", // el backend no guarda quién por ejecución (Clerk); TablaHistorial lo pinta como "—"
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/** Hace definitiva (congela) una automatización. Lanza con mensaje de cliente si no se puede. */
+export async function congelarAutomatizacion(id: string): Promise<void> {
+  if (!ORG) throw new Error("No hay backend configurado.");
+  const r = await fetch(`/api/orgs/${ORG}/congelar`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error === "no_se_puede_congelar" ? "No se puede: tiene un cambio en curso." : "No se pudo hacer definitiva.");
+  }
 }

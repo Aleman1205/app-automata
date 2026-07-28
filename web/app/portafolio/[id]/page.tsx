@@ -19,7 +19,11 @@ import {
   type EntradaManifiesto,
   type ResultadoDemo,
 } from "@/lib/datos";
-import { verAutomatizacion, ejecutarArchivo } from "@/lib/automata/lectura";
+import {
+  verAutomatizacion,
+  ejecutarArchivo,
+  congelarAutomatizacion,
+} from "@/lib/automata/lectura";
 import { Volver } from "../_componentes/volver";
 import { TablaHistorial } from "../_componentes/tabla-historial";
 import { TimelineCambios } from "../_componentes/timeline-cambios";
@@ -296,10 +300,36 @@ export default function PaginaDetalle({
     temporizadores.current.push(t1, t2, t3, t4);
   };
 
-  const congelar = () => {
+  const congelar = async () => {
     setConfirmando(false);
+    // Modo REAL: congela en el backend (app_congelar); si tiene un cambio en curso, avisa.
+    if (esReal && a) {
+      try {
+        await congelarAutomatizacion(a.id);
+        setCongeladaLocal(true);
+        avisar("Automatización definitiva");
+      } catch (e) {
+        avisar(e instanceof Error ? e.message : "No se pudo hacer definitiva");
+      }
+      return;
+    }
     setCongeladaLocal(true);
     avisar("Automatización definitiva");
+  };
+
+  // Descarga el resultado: en real, baja el JSON de verdad; en demo, solo avisa.
+  const descargar = () => {
+    if (esReal && resultadoMostrar) {
+      const blob = new Blob([JSON.stringify(resultadoMostrar, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const enlace = document.createElement("a");
+      enlace.href = url;
+      enlace.download = resultadoMostrar.archivoSalida || "resultado.json";
+      enlace.click();
+      URL.revokeObjectURL(url);
+      return;
+    }
+    avisar("Descargado (demo)");
   };
 
   return (
@@ -503,7 +533,7 @@ export default function PaginaDetalle({
             <Boton
               variante="oscuro"
               icono="descarga"
-              onClick={() => avisar("Descargado (demo)")}
+              onClick={descargar}
             >
               {`Descargar ${resultadoMostrar.archivoSalida}`}
             </Boton>

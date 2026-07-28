@@ -1,4 +1,5 @@
 import { crearAutomatizacion, invitarMiembro } from "../billing/cuota.ts";
+import { congelar, AjusteNoPermitido } from "../ciclo/servicio.ts";
 import { verificarFreno } from "../ops/killswitch.ts";
 import { type Rol } from "../auth/roles.ts";
 import { type Endpoint } from "./pipeline.ts";
@@ -279,7 +280,49 @@ export const verCuentaEP: Endpoint<Record<string, never>> = {
   },
 };
 
+// ── Historial de ejecuciones (GET): las corridas de una automatización ───────
+// Para el detalle. RLS acota a la org. `tieneResultado` = si esa corrida dejó su Resultado
+// persistido (descargable). El id (uuid de la automatización) llega por ?id=.
+export const listarEjecucionesEP: Endpoint<{ id: string }> = {
+  nombre: "GET /orgs/:orgId/ejecuciones",
+  metodo: "GET",
+  accion: "ver",
+  esquema: esquemaVerId,
+  handler: async ({ cliente, input }) => {
+    const r = await cliente.query(
+      `SELECT e.id, e.estado, e.ms, e.creada, e.resultado_key
+         FROM ejecuciones e JOIN versiones v ON e.version_id = v.id
+        WHERE v.automatizacion_id = $1 ORDER BY e.creada DESC LIMIT 50`,
+      [input.id],
+    );
+    return R.ok({
+      ejecuciones: r.rows.map((f) => ({
+        id: f.id, estado: f.estado, ms: f.ms, creada: iso(f.creada), tieneResultado: !!f.resultado_key,
+      })),
+    });
+  },
+};
+
+/** Congelar una automatización ("hacerla definitiva", admin). Ya no acepta ajustes, pero se
+ *  ejecuta igual. `app_congelar` no congela con un cambio en vuelo (anti-brick) → AjusteNoPermitido
+ *  se mapea a 409. Se define aquí (después de esquemaVerId) por el orden de evaluación del módulo. */
+export const congelarEP: Endpoint<{ id: string }> = {
+  nombre: "POST /orgs/:orgId/congelar",
+  metodo: "POST",
+  accion: "ajustar",
+  esquema: esquemaVerId,
+  handler: async ({ cliente, input }) => {
+    try {
+      await congelar(cliente, input.id);
+      return R.ok({ ok: true, cicloEstado: "frozen" });
+    } catch (e) {
+      if (e instanceof AjusteNoPermitido) return { status: 409, cuerpo: { error: "no_se_puede_congelar", motivo: e.message } };
+      throw e;
+    }
+  },
+};
+
 // Registro central. NOTA (revisión): esto NO es la garantía anti-olvido completa —
 // en Next hace falta un test que ESCANEE app/api/**/route.ts y falle si algún handler
 // con efecto no delega en withEfecto. Aquí registrarse es la convención.
-export const ENDPOINTS = [crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, solicitarBuildEP, listarAutomatizacionesEP, verAutomatizacionEP, listarEquipoEP, verCuentaEP] as const;
+export const ENDPOINTS = [crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, solicitarBuildEP, listarAutomatizacionesEP, verAutomatizacionEP, listarEquipoEP, verCuentaEP, listarEjecucionesEP, congelarEP] as const;

@@ -21,7 +21,7 @@ import { comoSuspension } from "../ops/killswitch.ts";
 
 interface AutoRow { id: string; org_id: string; nombre: string }
 interface VerRow { id: string; automatizacion_id: string; numero: number; estado: EstadoBuild; artefacto_key: string | null; vista: unknown; cma_session_id: string | null; creada: Date | string }
-interface EjecRow { id: string; version_id: string; estado: string; ms: number; costo_usd: string | number; creada: Date | string }
+interface EjecRow { id: string; version_id: string; estado: string; ms: number; costo_usd: string | number; resultado_key: string | null; creada: Date | string }
 
 const iso = (v: Date | string): string => (v instanceof Date ? v.toISOString() : String(v));
 const aAutomatizacion = (r: AutoRow): Automatizacion => ({ id: r.id, orgId: r.org_id, nombre: r.nombre });
@@ -34,7 +34,7 @@ const aVersion = (r: VerRow): Version => ({
 });
 const aEjecucion = (r: EjecRow): Ejecucion => ({
   id: r.id, versionId: r.version_id, estado: r.estado as Ejecucion["estado"],
-  ms: r.ms, costoUsd: Number(r.costo_usd), creada: iso(r.creada),
+  ms: r.ms, costoUsd: Number(r.costo_usd), resultadoKey: r.resultado_key ?? undefined, creada: iso(r.creada),
 });
 
 /** Traduce los RAISE de los triggers del build a errores tipados; re-lanza lo demás. */
@@ -116,7 +116,7 @@ export class PgStateRepo implements StateRepo {
     // de ejecuciones muerde aquí, no post-hoc).
     const r = await conOrg(this.pool, this.orgId, (c) =>
       c.query<EjecRow>(
-        "INSERT INTO ejecuciones (version_id, org_id, estado, ms, costo_usd) VALUES ($1, app_current_org(), $2, $3, $4) RETURNING id, version_id, estado, ms, costo_usd, creada",
+        "INSERT INTO ejecuciones (version_id, org_id, estado, ms, costo_usd) VALUES ($1, app_current_org(), $2, $3, $4) RETURNING id, version_id, estado, ms, costo_usd, resultado_key, creada",
         [e.versionId, e.estado, e.ms, e.costoUsd],
       ),
     ).catch(traducirBuild); // trg_kill_run (SERVICIO_SUSPENDIDO) + cobrar_ejecucion (CUOTA_EXCEDIDA)
@@ -131,9 +131,10 @@ export class PgStateRepo implements StateRepo {
     if (cambios.estado !== undefined) { vals.push(cambios.estado); sets.push(`estado = $${vals.length}`); }
     if (cambios.ms !== undefined) { vals.push(cambios.ms); sets.push(`ms = $${vals.length}`); }
     if (cambios.costoUsd !== undefined) { vals.push(cambios.costoUsd); sets.push(`costo_usd = $${vals.length}`); }
+    if (cambios.resultadoKey !== undefined) { vals.push(cambios.resultadoKey); sets.push(`resultado_key = $${vals.length}`); }
     if (sets.length === 0) throw new Error("actualizarEjecucion: sin cambios");
     const r = await conOrg(this.pool, this.orgId, (c) =>
-      c.query<EjecRow>(`UPDATE ejecuciones SET ${sets.join(", ")} WHERE id = $1 RETURNING id, version_id, estado, ms, costo_usd, creada`, vals),
+      c.query<EjecRow>(`UPDATE ejecuciones SET ${sets.join(", ")} WHERE id = $1 RETURNING id, version_id, estado, ms, costo_usd, resultado_key, creada`, vals),
     );
     const row = r.rows[0];
     if (!row) throw new Error(`Ejecución no encontrada: ${id}`);

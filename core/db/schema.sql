@@ -123,10 +123,15 @@ CREATE TABLE IF NOT EXISTS ejecuciones (
   ms          int  NOT NULL,
   costo_usd   numeric NOT NULL DEFAULT 0,
   por         text,
+  -- Clave en Storage del Resultado resuelto de esta corrida (para historial/descarga). El
+  -- app ya tiene UPDATE sobre ejecuciones (no columna-scopeada), así que puede fijarla.
+  resultado_key text,
   creada      timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (id),
   FOREIGN KEY (version_id, org_id) REFERENCES versiones (id, org_id) ON DELETE CASCADE
 );
+-- Idempotente: para BDs creadas antes de esta columna.
+ALTER TABLE ejecuciones ADD COLUMN IF NOT EXISTS resultado_key text;
 
 -- ── Billing / cuotas (M3) ──────────────────────────────────────────────────
 -- Principio (corrección de la revisión adversarial de M3): el enforcement de cuota

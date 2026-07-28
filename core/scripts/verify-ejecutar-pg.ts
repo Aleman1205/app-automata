@@ -10,8 +10,9 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { crearPool } from "../src/db/pg.ts";
+import { crearPool, conOrg } from "../src/db/pg.ts";
 import { ejecutarAutomatizacion, SinVersionEjecutable } from "../src/pipeline/run.ts";
+import { listarEjecucionesEP } from "../src/http/endpoints.ts";
 import { LocalStorage } from "../src/storage/local.ts";
 import { LocalPythonExecutor } from "../src/run/executor.ts";
 import type { Artefacto, Vista } from "../src/types.ts";
@@ -89,6 +90,14 @@ async function main() {
     const uso = Number((await admin.query("SELECT ejecuciones FROM uso_periodo WHERE org_id=$1 AND periodo=to_char(now(),'YYYY-MM')", [A])).rows[0]?.ejecuciones ?? 0);
     check("uso_periodo.ejecuciones = 1 (cobrar_ejecucion en la reserva)", uso === 1);
     check("hay 1 fila de ejecuciones para AUTO_A", (await cuenta(AUTO_A)) === 1);
+
+    console.log("\n2b. Persistencia: la corrida deja resultado_key + bytes en storage + historial:");
+    const rk = (await admin.query<{ resultado_key: string | null }>("SELECT resultado_key FROM ejecuciones WHERE id=$1", [res.ejecucion.id])).rows[0]?.resultado_key;
+    check("la ejecución quedó con resultado_key", !!rk);
+    check("el Resultado está en storage (descargable)", await storage.existe(`resultados/${res.ejecucion.id}.json`));
+    const hist = await conOrg(app, A, (c) => listarEjecucionesEP.handler({ cliente: c, input: { id: AUTO_A }, orgId: A, identidad: { userId: "u" }, membresia: { orgId: A, userId: "u", rol: "operador" } }));
+    const ejs = (hist.cuerpo as { ejecuciones: Array<{ id: string; tieneResultado: boolean }> }).ejecuciones;
+    check("el historial lista la corrida con tieneResultado=true", ejs.some((e) => e.id === res.ejecucion.id && e.tieneResultado));
 
     console.log("\n3. Kill-switch: ejecuciones congeladas → aborta ANTES de gastar (sin cobro):");
     await admin.query("UPDATE interruptores SET ejecuciones = true");
