@@ -15,3 +15,10 @@ export const DEV = process.env.NODE_ENV !== "production" && process.env.AUTOMATA
 // siembra) y con NEXT_PUBLIC_AUTOMATA_DEV_ORG (que el front usa para saber a qué org pegar).
 export const DEV_USER = "u_dev";
 export const DEV_ORG = "0de00000-0000-0000-0000-0000000de000";
+
+// Versión CLIENTE del bypass (para gatear la UI de Clerk desde componentes cliente):
+// AUTOMATA_DEV_AUTH no llega al navegador, así que se usa la env PÚBLICA
+// NEXT_PUBLIC_AUTOMATA_DEV_AUTH (ponla junto a AUTOMATA_DEV_AUTH en .env.local). Clerk
+// (provider, SignIn, UserButton) se muestra SOLO cuando NO estamos en el bypass de dev.
+export const DEV_CLIENTE = process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_AUTOMATA_DEV_AUTH === "1";
+export const CLERK_ACTIVO = !DEV_CLIENTE;

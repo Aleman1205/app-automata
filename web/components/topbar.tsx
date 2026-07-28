@@ -5,10 +5,12 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Menu, X } from "lucide-react";
+import { UserButton } from "@clerk/nextjs";
 import { MARCA } from "@/lib/marca";
 import { Boton } from "@/components/ui/boton";
 import { Avatar } from "@/components/ui/avatar";
 import { usuarioActual } from "@/lib/datos";
+import { CLERK_ACTIVO } from "@/lib/automata/dev";
 
 // El sitio tiene DOS mundos:
 //  · venta (público): landing, precios, sobre, contacto, legal
@@ -94,13 +96,18 @@ export function Topbar() {
               <Boton href="/nueva" variante="acento" tamano="sm" icono="flecha">
                 Nueva automatización
               </Boton>
-              <Link
-                href="/cuenta"
-                aria-label="Tu cuenta"
-                className="transition-transform duration-200 hover:scale-105"
-              >
-                <Avatar nombre={usuarioActual().nombre} anillo />
-              </Link>
+              {CLERK_ACTIVO ? (
+                // Menú de usuario REAL (cerrar sesión, cuenta) de Clerk.
+                <UserButton afterSignOutUrl="/" />
+              ) : (
+                <Link
+                  href="/cuenta"
+                  aria-label="Tu cuenta"
+                  className="transition-transform duration-200 hover:scale-105"
+                >
+                  <Avatar nombre={usuarioActual().nombre} anillo />
+                </Link>
+              )}
             </>
           ) : (
             <>

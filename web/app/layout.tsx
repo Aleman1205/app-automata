@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 import { Archivo, IBM_Plex_Mono } from "next/font/google";
+import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
 import { Topbar } from "@/components/topbar";
 import { Pie } from "@/components/pie";
 import { ScrollSuave } from "@/components/scroll-suave";
+import { DEV } from "@/lib/automata/dev";
 import { MARCA, ESLOGAN } from "@/lib/marca";
 
 const archivo = Archivo({
@@ -43,7 +45,7 @@ export const metadata: Metadata = {
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  return (
+  const documento = (
     <html lang="es" className={`${archivo.variable} ${plex.variable}`}>
       <body className="grano bg-crema font-sans text-tinta antialiased">
         <ScrollSuave />
@@ -53,4 +55,7 @@ export default function RootLayout({
       </body>
     </html>
   );
+  // En modo dev (bypass de auth) NO montamos ClerkProvider — así `next dev` arranca sin llaves
+  // de Clerk. Fuera de dev (o en producción), Clerk envuelve toda la app.
+  return DEV ? documento : <ClerkProvider>{documento}</ClerkProvider>;
 }
