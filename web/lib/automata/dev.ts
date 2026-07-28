@@ -1,0 +1,17 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Modo DEV LOCAL: corre el backend REAL (pipeline de 8 capas, RLS, cuota, Run) contra el
+// Postgres local + LocalStorage, SIN Clerk / Upstash / R2 ni ninguna cuenta externa. Es para
+// desarrollar y DEMOSTRAR el producto real en la máquina, sin una sola llave.
+//
+// ⚠️⚠️ SEGURIDAD — ESTO ES UN BYPASS DE AUTENTICACIÓN ⚠️⚠️
+// Está DOBLE-gated: solo se activa si NODE_ENV !== 'production' Y AUTOMATA_DEV_AUTH === '1'.
+// En producción NUNCA se enciende, aunque alguien ponga la env (el chequeo de NODE_ENV lo
+// apaga). Solo sustituye los PUERTOS externos (sesión Clerk → usuario fijo; rate Upstash →
+// permitir; storage R2 → local). TODO lo demás del pipeline (membresía viva, assertCan, RLS,
+// cuota, kill-switch) corre EXACTAMENTE igual — el modo dev prueba el backend real, no lo apaga.
+export const DEV = process.env.NODE_ENV !== "production" && process.env.AUTOMATA_DEV_AUTH === "1";
+
+// Usuario y org fijos del modo dev. DEBEN coincidir con core/scripts/seed-dev-pg.ts (que los
+// siembra) y con NEXT_PUBLIC_AUTOMATA_DEV_ORG (que el front usa para saber a qué org pegar).
+export const DEV_USER = "u_dev";
+export const DEV_ORG = "0de00000-0000-0000-0000-0000000de000";

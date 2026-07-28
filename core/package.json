@@ -57,6 +57,7 @@
     "verify:webhooks:handlers:pg": "tsx scripts/verify-webhooks-handlers-pg.ts",
     "verify:pg": "tsx scripts/verify-pg.ts",
     "verify:cuota:pg": "tsx scripts/verify-cuota-pg.ts",
+    "seed:dev": "tsx scripts/seed-dev-pg.ts",
     "m0": "tsx scripts/run-m0.ts",
     "intake:live": "tsx scripts/intake.ts",
     "planner:live": "tsx scripts/planner.ts"

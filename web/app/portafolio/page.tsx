@@ -10,6 +10,7 @@ import { useAviso } from "@/components/ui/aviso";
 import { Reveal } from "@/components/motion/reveal";
 import { TextoRevelado } from "@/components/motion/texto-revelado";
 import { automatizaciones, creadoPor, equipo, obtenerMiembro } from "@/lib/datos";
+import { listarAutomatizaciones } from "@/lib/automata/lectura";
 import {
   TarjetaAutomatizacion,
   type DatosTarjeta,
@@ -38,6 +39,12 @@ export default function PaginaPortafolio() {
   const { avisar, elemento } = useAviso();
   const [demo, setDemo] = useState<DemoViva | null>(null);
   const [celebrar, setCelebrar] = useState(false);
+  // Datos REALES desde la API (modo dev / prod con backend). null = aún cargando o sin
+  // backend → se usan los datos falsos de lib/datos (el prototipo sigue funcionando solo).
+  const [reales, setReales] = useState<DatosTarjeta[] | null>(null);
+  useEffect(() => {
+    listarAutomatizaciones().then(setReales).catch(() => setReales(null));
+  }, []);
 
   useEffect(() => {
     const temporizadores: number[] = [];
@@ -83,12 +90,16 @@ export default function PaginaPortafolio() {
       }
     : null;
 
-  // La tarjeta demo reutiliza el id "reporte-ventas": mientras exista,
-  // ocultamos la automatización de lib/datos con ese id para no mostrar dos
-  // tarjetas con el mismo destino ni contarla doble en los espacios.
+  // Origen de las tarjetas: datos REALES si ya cargaron; si no, los falsos de lib/datos
+  // (mapeados con su creador). Así la página es idéntica con o sin backend.
+  const tarjetas: DatosTarjeta[] =
+    reales ?? automatizaciones.map((a) => ({ ...a, ...creador(a.id) }));
+
+  // La tarjeta demo reutiliza el id "reporte-ventas": mientras exista, ocultamos la
+  // automatización con ese id para no mostrar dos tarjetas con el mismo destino ni contarla doble.
   const visibles = tarjetaDemo
-    ? automatizaciones.filter((a) => a.id !== tarjetaDemo.id)
-    : automatizaciones;
+    ? tarjetas.filter((a) => a.id !== tarjetaDemo.id)
+    : tarjetas;
 
   const espaciosUsados = visibles.length + (tarjetaDemo ? 1 : 0);
   const desfase = tarjetaDemo ? 1 : 0;
@@ -158,10 +169,7 @@ export default function PaginaPortafolio() {
             retraso={(i + desfase) * 0.08}
             className="h-full"
           >
-            <TarjetaAutomatizacion
-              datos={{ ...a, ...creador(a.id) }}
-              alAvisar={avisar}
-            />
+            <TarjetaAutomatizacion datos={a} alAvisar={avisar} />
           </Reveal>
         ))}
 

@@ -21,6 +21,7 @@ import { type Sesion, type RateLimiter } from "automata-core/http/tipos";
 import { recibir } from "automata-core/webhooks/receptor";
 import { verificarStandardWebhook, verificarStripe, type Verificador } from "automata-core/webhooks/firma";
 import { procesarCma, procesarStripe } from "automata-core/webhooks/handlers";
+import { DEV, DEV_USER } from "./dev";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cableado del pipeline HTTP a servicios reales (el contrato de adaptador-next.md).
@@ -40,21 +41,28 @@ function env(k: string): string {
 // Ignora `s`: usa el contexto ambiental del request (headers/cookies) que Clerk lee.
 // mfaVerificadoEn sale de un claim de sesión — configurar en Clerk (session token) que
 // exponga `mfaVerifiedAt`; sin él, el step-up siempre pedirá re-verificación (fail-safe).
-const sesion: Sesion = {
-  async autenticar() {
-    const { userId, sessionClaims } = await auth();
-    if (!userId) return null;
-    const raw = (sessionClaims as Record<string, unknown> | null)?.["mfaVerifiedAt"];
-    const mfa = typeof raw === "string" || typeof raw === "number" ? new Date(raw) : undefined;
-    return { userId, mfaVerificadoEn: mfa && !Number.isNaN(mfa.getTime()) ? mfa : undefined };
-  },
-};
+// ⚠️ En DEV (doble-gated) la sesión es un usuario FIJO — bypass de Clerk. mfaVerificadoEn
+// = ahora, así el step-up de acciones peligrosas pasa en local. Fuera de DEV, Clerk real.
+const sesion: Sesion = DEV
+  ? { async autenticar() { return { userId: DEV_USER, mfaVerificadoEn: new Date() }; } }
+  : {
+      async autenticar() {
+        const { userId, sessionClaims } = await auth();
+        if (!userId) return null;
+        const raw = (sessionClaims as Record<string, unknown> | null)?.["mfaVerifiedAt"];
+        const mfa = typeof raw === "string" || typeof raw === "number" ? new Date(raw) : undefined;
+        return { userId, mfaVerificadoEn: mfa && !Number.isNaN(mfa.getTime()) ? mfa : undefined };
+      },
+    };
 
 // ── Puerto 2: RateLimiter (Upstash), FAIL-CLOSED ──
 // Contrato: si el store está caído, NEGAR (return false), nunca `return true`.
 let rateInst: RateLimiter | undefined;
 function getRate(): RateLimiter {
   if (rateInst) return rateInst;
+  // ⚠️ En DEV (doble-gated): sin Upstash, permitir siempre (no hay abuso en local). Fuera de
+  // DEV se exige Upstash (fail-closed real). Redis.fromEnv() leería UPSTASH_* → sin dev, sin app.
+  if (DEV) return (rateInst = { async permitir() { return true; } });
   const rl = new Ratelimit({ redis: Redis.fromEnv(), limiter: Ratelimit.slidingWindow(30, "10 s"), analytics: false });
   rateInst = {
     async permitir(clave) {
