@@ -17,7 +17,7 @@ import {
   type Miembro,
   type RolMiembro,
 } from "@/lib/datos";
-import { listarEquipo } from "@/lib/automata/lectura";
+import { listarEquipo, invitarMiembro, quitarMiembro } from "@/lib/automata/lectura";
 
 const etiquetaRol: Record<RolMiembro, string> = {
   admin: "Administrador",
@@ -51,13 +51,36 @@ export default function Equipo() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // En modo real (backend/dev) invitar y quitar pegan a los endpoints reales; si no, son demo.
+  const esReal = Boolean(process.env.NEXT_PUBLIC_AUTOMATA_DEV_ORG);
+  const refrescar = () =>
+    listarEquipo()
+      .then((reales) => {
+        if (reales) setMiembros(reales.map((m) => ({ ...m, estado: "activo" as const })));
+      })
+      .catch(() => {});
+
   const lista = miembros ?? [];
   const soyAdmin = lista.find((m) => m.esTu)?.rol === "admin";
   const usados = lista.length;
   const restantes = organizacion.lugaresTotal - usados;
 
-  const invitar = () => {
+  const invitar = async () => {
     if (!correo.trim()) return;
+    if (esReal) {
+      // El backend guarda user_id + rol (no correo); en dev derivamos el user_id del correo.
+      const userId = correo.split("@")[0].trim().toLowerCase();
+      try {
+        await invitarMiembro(userId, rolNuevo);
+        setCorreo("");
+        setInvitando(false);
+        avisar("Miembro agregado al equipo");
+        refrescar();
+      } catch (e) {
+        avisar(e instanceof Error ? e.message : "No se pudo invitar");
+      }
+      return;
+    }
     const nombre = correo
       .split("@")[0]
       .replace(/[._]/g, " ")
@@ -78,7 +101,17 @@ export default function Equipo() {
     avisar("Invitación enviada por correo");
   };
 
-  const quitar = (id: string) => {
+  const quitar = async (id: string) => {
+    if (esReal) {
+      try {
+        await quitarMiembro(id);
+        avisar("Persona removida del equipo");
+        refrescar();
+      } catch (e) {
+        avisar(e instanceof Error ? e.message : "No se pudo quitar");
+      }
+      return;
+    }
     setMiembros((prev) => (prev ?? []).filter((m) => m.id !== id));
     avisar("Persona removida del equipo");
   };

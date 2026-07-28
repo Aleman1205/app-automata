@@ -218,6 +218,39 @@ export async function listarEjecuciones(automatizacionId: string): Promise<Ejecu
   }
 }
 
+/** Invita a un miembro (POST /miembros). En dev el step-up de MFA pasa (la sesión stub trae
+ *  mfaVerificadoEn=ahora). Lanza con mensaje de cliente si la cuota/único-admin/etc. rechaza. */
+export async function invitarMiembro(userId: string, rol: "admin" | "operador"): Promise<void> {
+  if (!ORG) throw new Error("No hay backend configurado.");
+  const r = await fetch(`/api/orgs/${ORG}/miembros`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ userId, rol }),
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string };
+    const msg =
+      err.error === "cuota_excedida" ? "Alcanzaste el límite de personas de tu plan."
+      : err.error === "step_up_requerido" ? "Necesitas verificar tu identidad (MFA)."
+      : "No se pudo invitar (¿ya está en el equipo?).";
+    throw new Error(msg);
+  }
+}
+
+/** Quita a un miembro (DELETE /miembros). El backend no deja la org sin admin (→ mensaje). */
+export async function quitarMiembro(userId: string): Promise<void> {
+  if (!ORG) throw new Error("No hay backend configurado.");
+  const r = await fetch(`/api/orgs/${ORG}/miembros`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ userId }),
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error === "no_puede_quedar_sin_admin" ? "No puedes quitar al único administrador." : "No se pudo quitar.");
+  }
+}
+
 /** Hace definitiva (congela) una automatización. Lanza con mensaje de cliente si no se puede. */
 export async function congelarAutomatizacion(id: string): Promise<void> {
   if (!ORG) throw new Error("No hay backend configurado.");
