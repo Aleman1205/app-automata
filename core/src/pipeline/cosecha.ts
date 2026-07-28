@@ -2,6 +2,7 @@ import { type Pool } from "pg";
 import type { Artefacto, BuildClientAsync, Storage, Vista } from "../types.ts";
 import { confirmarAjuste, fallarAjuste } from "../ciclo/servicio.ts";
 import { registrarIncidente } from "../ops/incidentes.ts";
+import type { Notificador } from "../ops/notificaciones.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // La COSECHA (a3): el webhook thin de CMA solo ENCOLA en cosecha_pendiente; aquí, FUERA de
@@ -19,6 +20,16 @@ export interface CosechaDeps {
   pool: Pool; // DUEÑO
   cosechador: BuildClientAsync;
   storage: Storage;
+  notificador?: Notificador; // opcional: avisa por correo al confirmar/fallar (best-effort)
+}
+
+// Notifica sin tumbar el flujo: el build YA se resolvió; un correo caído no debe fallar la cosecha.
+async function avisar(deps: CosechaDeps, tipo: "lista" | "fallo", item: ItemCosecha): Promise<void> {
+  try {
+    await deps.notificador?.notificar({ tipo, orgId: item.orgId, automatizacionId: item.autoId });
+  } catch (e) {
+    console.error(`[cosecha] no se pudo notificar (${tipo}) ${item.autoId}:`, (e as { message?: string })?.message ?? e);
+  }
 }
 export interface ItemCosecha {
   sessionId: string;
@@ -46,6 +57,7 @@ export async function cosecharYConfirmar(deps: CosechaDeps, item: ItemCosecha): 
       await c.query("SELECT set_config('app.current_org', $1, true)", [item.orgId]);
       await fallarAjuste(c, item.autoId, item.versionId); // building→failed (libera el 'en vuelo')
       await c.query("COMMIT");
+      await avisar(deps, "fallo", item); // correo "necesita revisión" (best-effort, fuera de tx)
       return "fallido";
     }
 
@@ -72,6 +84,7 @@ export async function cosecharYConfirmar(deps: CosechaDeps, item: ItemCosecha): 
     await confirmarAjuste(c, item.autoId, item.versionId); // building→lista + consume ajuste (savepoint anti-brick)
     await c.query("UPDATE versiones SET artefacto_key = $2 WHERE id = $1 AND estado = 'lista'", [item.versionId, key]);
     await c.query("COMMIT");
+    await avisar(deps, "lista", item); // correo "ya está lista" (best-effort, fuera de tx)
     return "cosechado";
   } catch (e) {
     await c.query("ROLLBACK").catch(() => {});

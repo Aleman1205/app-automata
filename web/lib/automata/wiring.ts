@@ -1,5 +1,5 @@
 import "server-only";
-import { auth } from "@clerk/nextjs/server";
+import { auth, clerkClient } from "@clerk/nextjs/server";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 import { type Pool } from "pg";
@@ -23,6 +23,7 @@ import os from "node:os";
 import { R } from "automata-core/http/tipos";
 import { type Deps, type Endpoint } from "automata-core/http/pipeline";
 import { type Sesion, type RateLimiter } from "automata-core/http/tipos";
+import { plantillaCorreo, type Notificador, type EventoCorreo, type Correo } from "automata-core/ops/notificaciones";
 import { recibir } from "automata-core/webhooks/receptor";
 import { verificarStandardWebhook, verificarStripe, type Verificador } from "automata-core/webhooks/firma";
 import { procesarCma, procesarStripe } from "automata-core/webhooks/handlers";
@@ -186,11 +187,66 @@ export async function cronReaper(req: Request): Promise<Response> {
 // ── Cron de cosecha (a3): drena el outbox → cosecha en CMA → sube a R2 → confirma ──
 // Deps LAZY (no tocan env al importar): CmaBuildClient (ANTHROPIC_API_KEY) + R2Storage se
 // construyen al invocar, para que `next build` no falle sin credenciales.
+// ── Notificaciones por correo (Resend) ──────────────────────────────────────
+// Envía por la API REST de Resend (sin SDK). `from` = RESEND_FROM (o el remitente sandbox de
+// Resend, que solo llega a tu propio correo hasta verificar un dominio). Lanza si Resend
+// responde error; el llamador (cosecha) lo envuelve best-effort.
+async function enviarResend(a: string[], correo: Correo): Promise<void> {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey || a.length === 0) return; // sin llave o sin destinatarios → no-op
+  const from = process.env.RESEND_FROM ?? "Automata <onboarding@resend.dev>";
+  const r = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+    body: JSON.stringify({ from, to: a, subject: correo.asunto, text: correo.texto, html: correo.html }),
+  });
+  if (!r.ok) throw new Error(`Resend ${r.status}: ${(await r.text()).slice(0, 200)}`);
+}
+
+// Correos de los ADMINS de una org: user_id (memberships) → email (Clerk). El perfil vive en
+// Clerk, no en la BD; los usuarios sembrados a mano (sin cuenta Clerk) se saltan.
+async function correosAdmins(orgId: string): Promise<string[]> {
+  const admins = await getPoolOwner().query<{ user_id: string }>("SELECT user_id FROM memberships WHERE org_id = $1 AND rol = 'admin'", [orgId]);
+  const clerk = await clerkClient();
+  const correos: string[] = [];
+  for (const { user_id } of admins.rows) {
+    try {
+      const u = await clerk.users.getUser(user_id);
+      const email = u.primaryEmailAddress?.emailAddress ?? u.emailAddresses[0]?.emailAddress;
+      if (email) correos.push(email);
+    } catch {
+      /* user_id sin cuenta Clerk (sembrado) → se salta */
+    }
+  }
+  return correos;
+}
+
+// Notificador de producción: resuelve nombre + destinatarios (admins) y manda el correo del evento.
+let notificadorInst: Notificador | undefined;
+function getNotificador(): Notificador {
+  return (notificadorInst ??= {
+    async notificar(evento: EventoCorreo) {
+      const a = await getPoolOwner().query<{ nombre: string }>("SELECT nombre FROM automatizaciones WHERE id = $1 AND org_id = $2", [evento.automatizacionId, evento.orgId]);
+      const nombre = a.rows[0]?.nombre ?? "tu automatización";
+      const url = `${env("APP_ORIGIN")}/portafolio/${evento.automatizacionId}`;
+      await enviarResend(await correosAdmins(evento.orgId), plantillaCorreo(evento.tipo, { nombre, url }));
+    },
+  });
+}
+
+/** Envío de PRUEBA (lo usa la ruta dev): manda un correo de muestra a `a` para confirmar que
+ *  Resend + la plantilla funcionan, sin esperar a que corra un build. */
+export async function enviarCorreoPrueba(a: string): Promise<void> {
+  const base = process.env.APP_ORIGIN ?? "http://localhost:3000";
+  await enviarResend([a], plantillaCorreo("lista", { nombre: "Reporte de prueba", url: `${base}/portafolio` }));
+}
+
 function getCosechaDeps(): CosechaDeps {
   return {
     pool: getPoolOwner(),
     cosechador: new CmaBuildClient(),
     storage: getStorage(),
+    notificador: getNotificador(), // avisa por correo al confirmar/fallar (best-effort)
   };
 }
 
