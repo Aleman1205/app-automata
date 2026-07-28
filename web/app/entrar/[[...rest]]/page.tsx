@@ -8,7 +8,9 @@ import { Boton } from "@/components/ui/boton";
 import { Etiqueta } from "@/components/ui/etiqueta";
 import { CLERK_ACTIVO } from "@/lib/automata/dev";
 
-// Login: con Clerk activo, el <SignIn/> real; en modo dev (bypass) el atajo directo.
+// Ruta CATCH-ALL ([[...rest]]) a propósito: Clerk enruta sus sub-flujos bajo /entrar
+// (p.ej. /entrar/sso-callback tras Google OAuth, /entrar/factor-one, etc.). Con una página
+// única esas sub-rutas darían 404. `path="/entrar"` le dice a Clerk cuál es la base.
 export default function Entrar() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center px-6 py-16">
@@ -27,8 +29,8 @@ export default function Entrar() {
         </Link>
 
         {CLERK_ACTIVO ? (
-          // Login REAL. Estilo por defecto de Clerk (se puede tematizar después con `appearance`).
-          <SignIn fallbackRedirectUrl="/portafolio" />
+          // Login REAL. path="/entrar" para que sus sub-rutas (sso-callback, etc.) caigan aquí.
+          <SignIn path="/entrar" fallbackRedirectUrl="/portafolio" />
         ) : (
           // Modo dev: el bypass de auth ya te tiene "dentro" — entra directo.
           <div className="w-full rounded-2xl border border-linea bg-hueso p-8">
