@@ -24,7 +24,7 @@ serie de agentes piensa, planea, programa, ejecuta".
 
 | Pieza del doc | Estado | Evidencia | Verify |
 |---|---|---|---|
-| Multitenancy / RLS (docs/04) | **Construido** | `core/db/schema.sql:773-798` (RLS FORCE + política `aislada_por_org` en 7 tablas); `core/src/db/pg.ts:25-51` (`crearPoolApp` + `afirmarRolSeguro` rechaza super/bypassrls) | `verify:pg`, `verify:pgstate:pg` |
+| Multitenancy / RLS (docs/04) | **Construido** | `core/db/schema.sql:988-1015` (RLS FORCE + política `aislada_por_org` en **8** tablas — se sumó `invitaciones`); `core/src/db/pg.ts:25-51` (`crearPoolApp` + `afirmarRolSeguro` rechaza super/bypassrls) | `verify:pg`, `verify:pgstate:pg` |
 | Cuota / pricing (docs/06) | **Construido** | `core/src/billing/` (reserva→confirma, cobro al arrancar, downgrade con excedente en solo-lectura) | `verify:cuota:pg`, `verify:plan:pg` |
 | Auth / pipeline 8 capas (docs/13) | **Construido** | `core/src/http/pipeline.ts:43-51` (`autorizar`: 0 rate → 1 authn → método → 2 CSRF → 3 org → conOrg{6 membresía → 7 assertCan → 5 step-up}) | `verify:http`, `verify:rutas`, `verify:adaptador:pg`, `verify:auth` |
 | Onboarding / org dinámica / MFA (2026-07-28) | **Construido** | `core/src/ops/onboarding.ts` + SD `app_provisionar_usuario`/`app_orgs_de_usuario` (`core/db/schema.sql`, alta owner-only acotada por user, idempotente, advisory-lock); webhook `web/app/api/webhooks/clerk` (`user.created` → org+plan base+admin) + `GET /api/yo` (org desde la MEMBRESÍA, no env; onboarding perezoso); step-up lee el claim `fva` de Clerk (`web/lib/automata/wiring.ts`) | `verify:onboarding:pg` (+ probado en vivo: `/api/yo` resuelve/provisiona) |
@@ -42,6 +42,7 @@ serie de agentes piensa, planea, programa, ejecuta".
 | **Intake → build cableado** (2026-07-29) | **Construido** | Aprobar el spec en `/nueva` SÍ construye: dropzone real que captura el `File`, `construirDesdeSpec` en `web/lib/automata/lectura.ts` (sube el ejemplo → `POST /construir`) usando el adaptador CANÓNICO `core/src/intake/adapter.ts` (al build viaja el criterio TÉCNICO, no el de cliente); `almacen()` en el wiring = R2 en prod / LocalStorage en dev | probado en vivo (upload → cola → drainer); `tsc` + `next build` |
 | **Equipo compartido / invitaciones** (2026-07-29) | **Construido** | Tabla `invitaciones` (por CORREO, con RLS y contando contra la cuota) + SD `app_aceptar_invitaciones`; `app_provisionar_usuario` gana `p_correo` → un invitado entra al equipo que lo invitó en vez de recibir org propia. Antes se inventaba el `user_id` del local-part del correo y la fila quedaba huérfana | `verify:onboarding:pg` (secciones 7-8), `verify:cuota:pg` |
 | **Posventa / ajustes** (2026-07-30) | **Construido** | `core/src/pipeline/ajuste.ts` (`arrancarAjuste` construye la versión **>1** — antes NADIE abría sesión de CMA para una v2 — y `drenarAjustes`); tabla `ajuste_pendiente` + SD `app_solicitar_ajuste`; `pedirAjusteEP` (`POST /orgs/:orgId/ajustar`, exige `confirmado:true`); cron `/api/cron/ajustes`; `automatizaciones.spec`/`ejemplo_key` persistidos (sin ellos un ajuste no tiene con qué construir); front `/ajustar` real | `verify:ajuste:pg` (25 checks) |
+| Notificaciones por correo (docs/05) | **Construido** | `core/src/ops/notificaciones.ts` (puerto + plantillas puras, `TipoCorreo` = lista/fallo/revision) + el notificador real con Resend en `web/lib/automata/wiring.ts` (resuelve los correos de los admins por Clerk), inyectado en los **tres** drainers (cosecha, disparo, ajustes) | `verify:notificaciones` |
 | **Stripe: enganche** (2026-07-30) | **Parcial** — falta checkout/portal | SD `app_stripe_vincular` (write-once; el eslabón que faltaba: `stripe_customer_id` no tenía escritor, así que TODO evento de Stripe era no-op silencioso); el receptor extrae `price` + `client_reference_id`; `planDePrecio()` mapea desde `STRIPE_PRICE_*`; el handler **devuelve** el cambio de plan y el wiring lo aplica TRAS el commit (hacerlo dentro deadlockeaba con `aplicarDowngrade`) | `verify:stripe:pg` (17 checks) |
 
 **Marco de pruebas:** **35** scripts `verify:*` en `core/package.json` (unit +
@@ -177,8 +178,13 @@ alturas, procrastinar el #2 y el #4.
 ```
 PLAN.md            visión de producto, alcance (§0), stack, fases
 ARQUITECTURA.md    resumen técnico
-docs/              detalle por pieza (índice abajo)
-web/               prototipo front — Next.js 16 + pnpm (ver web/CLAUDE.md, web/DESIGN.md)
+docs/              detalle por pieza (índice abajo) — 21 archivos, va DETRÁS del código
+core/              EL MOTOR — framework-agnóstico, TS+tsx, npm. 17 módulos en src/,
+                   db/schema.sql (~1,070 líneas: RLS, SD, triggers de cuota y ciclo),
+                   35 scripts verify:* en scripts/. Es la pieza más grande del repo.
+web/               front + WIRING de producción — Next.js 16 + pnpm. 20 rutas en app/api
+                   (endpoints, 3 webhooks, 4 crons); lib/automata/{wiring,lectura}.ts
+                   cablean el motor. Ya NO es prototipo (ver web/CLAUDE.md, web/DESIGN.md)
 spike/             prueba técnica — Node + npm (raíz)
 ```
 
@@ -199,7 +205,7 @@ spike/             prueba técnica — Node + npm (raíz)
 | 11 | Threat model | ejecutar código de IA es el producto; escape de contenedor = riesgo #1 |
 | 13 | Auth y webhooks | **IMPLEMENTADO**: pipeline de 8 capas (`core/src/http/pipeline.ts:43-51`), firma de webhooks (`core/src/webhooks/`). **Actualización (2026-07-26):** los nombres de evento de CMA que este doc daba por buenos (`session.completed`, etc.) eran **inventados**; los `data.type` reales accionables son `session.status_idled` / `session.status_terminated` (el resto, `session.outcome_evaluation_ended` etc., es informativo) y el ÉXITO sólo se sabe re-consultando la sesión (webhook *thin*). |
 | 14 | Controles de seguridad | **matriz de casos comunes** (65, 5 dominios) estilo OWASP: caso → postura → capa → milestone → estado; une docs/13+11+04 |
-| 15 | **Motor implementado** | **NUEVO (2026-07-26):** catálogo maestro de lo construido en Fase 1 — módulos de `core/`, modelo de seguridad en la BD, loop async de build de punta a punta, la suite de `verify:*` (31), rutas/crons y el checklist para activar en producción |
+| 15 | **Motor implementado** | **NUEVO (2026-07-26):** catálogo maestro de lo construido en Fase 1 — módulos de `core/`, modelo de seguridad en la BD, loop async de build de punta a punta, la suite de `verify:*` (dice 31; hoy son 35), rutas/crons y el checklist para activar en producción |
 | 16 | **Modo dev local** | **NUEVO (2026-07-27):** runbook para correr el producto **real** (front → backend real: RLS, cuota, Run que ejecuta código) en la máquina **sin credenciales** — bypass de auth doble-gated a no-producción, siembra con `seed:dev`, qué es real vs. falso, y el Run local de punta a punta |
 
 (No hay docs/12; el 13 se numeró así a propósito.)
@@ -275,7 +281,8 @@ spike/             prueba técnica — Node + npm (raíz)
 ## Cómo correr
 
 ```bash
-# Front (prototipo)
+# Front SOLO-APARIENCIA (sin BD): cae al fallback de lib/datos.ts. Para ver el producto
+# REAL usa el bloque "Modo DEV LOCAL" de abajo.
 cd web && pnpm install && pnpm dev        # → localhost:3000
 
 # Spike (prueba técnica) — desde la raíz
@@ -301,9 +308,11 @@ npm run verify:stripe:pg                   # STRIPE: vincula customer, price→p
 # Al aplicar el esquema usa SIEMPRE -v ON_ERROR_STOP=1 (sin él deja la BD a medias).
 
 # Modo DEV LOCAL — el producto REAL corriendo local, SIN credenciales (runbook: docs/16)
-psql "postgres://postgres@127.0.0.1:55432/postgres" -f core/db/schema.sql  # schema (rol dueño)
+psql "postgres://postgres@127.0.0.1:55432/postgres" -v ON_ERROR_STOP=1 -f core/db/schema.sql  # schema (rol dueño)
 cd core && npm run seed:dev                # siembra org+equipo+automatizaciones EJECUTABLES
-# web/.env.local: AUTOMATA_DEV_AUTH=1, DATABASE_URL=…55432, APP_ORIGIN=http://localhost:3000,
+# web/.env.local: AUTOMATA_DEV_AUTH=1 Y NEXT_PUBLIC_AUTOMATA_DEV_AUTH=1 (LAS DOS: sin la
+#   segunda el front monta Clerk y te pide login aunque el backend esté en bypass —
+#   web/lib/automata/dev.ts:24), DATABASE_URL=…55432, APP_ORIGIN=http://localhost:3000,
 #   AUTOMATA_DEV_STORAGE_DIR=<abs>/.dev-storage, DATABASE_URL_OWNER=…55432 (los crons),
 #   CRON_SECRET=<openssl rand -hex 32> (para disparar los crons a mano con curl)
 #   NOTA: NEXT_PUBLIC_AUTOMATA_DEV_ORG quedó OBSOLETA — la org se resuelve desde la
