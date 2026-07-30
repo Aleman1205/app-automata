@@ -59,7 +59,16 @@ export async function ejecutarAutomatizacion(
   //    org: una automatización ajena devuelve 0 filas → SinVersionEjecutable (cross-org bloqueado).
   const r = await conOrg(deps.pool, args.orgId, (c) =>
     c.query<VerRow>(
-      "SELECT id, automatizacion_id, numero, estado, artefacto_key, creada FROM versiones WHERE automatizacion_id = $1 AND estado IN ('ready','lista') AND artefacto_key IS NOT NULL ORDER BY numero DESC LIMIT 1",
+      // El JOIN con automatizaciones y el `a.activa` NO son decorado: al bajar de plan,
+      // aplicarDowngrade deja el excedente en activa=false = "solo lectura" (docs/06 §9), y eso ya
+      // se hacía cumplir para los AJUSTES (app_solicitar_ajuste lanza AJUSTE_NO_PERMITIDO:inactiva)
+      // pero NO para el Run. O sea: el cliente bajaba a Base ($499) y seguía EJECUTANDO sus 10
+      // automatizaciones de Equipo ($1,999) — el downgrade no le quitaba nada de lo que importa.
+      `SELECT v.id, v.automatizacion_id, v.numero, v.estado, v.artefacto_key, v.creada
+         FROM versiones v JOIN automatizaciones a ON a.id = v.automatizacion_id
+        WHERE v.automatizacion_id = $1 AND a.activa
+          AND v.estado IN ('ready','lista') AND v.artefacto_key IS NOT NULL
+        ORDER BY v.numero DESC LIMIT 1`,
       [args.automatizacionId],
     ),
   );

@@ -91,7 +91,7 @@ export default function Precios() {
               <Boton
                 variante="oscuro"
                 icono="flecha"
-                href="/nueva"
+                href="/registrarse"
                 className="shrink-0"
               >
                 Probar con una
@@ -143,7 +143,7 @@ export default function Precios() {
             variante="oscuro"
             tamano="lg"
             icono="flecha"
-            href="/nueva"
+            href="/registrarse"
             magnetico
           >
             Crear mi primera automatización

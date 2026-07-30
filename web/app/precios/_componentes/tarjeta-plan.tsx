@@ -113,11 +113,11 @@ export function TarjetaPlan({
 
       <div className="mt-auto pt-8">
         {plan.destacado ? (
-          <Boton variante="acento" icono="flecha" href="/nueva" className="w-full">
+          <Boton variante="acento" icono="flecha" href="/registrarse" className="w-full">
             Empezar con Pro
           </Boton>
         ) : (
-          <Boton variante="oscuro" href="/nueva" className="w-full">
+          <Boton variante="oscuro" href="/registrarse" className="w-full">
             {`Empezar con ${plan.nombre}`}
           </Boton>
         )}

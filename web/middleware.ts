@@ -16,7 +16,10 @@ const esPublica = createRouteMatcher([
   "/", // landing
   "/contacto",
   "/precios",
-  "/entrar(.*)", // login/registro de Clerk
+  "/entrar(.*)",       // login de Clerk (y sus sub-rutas: sso-callback, etc.)
+  "/registrarse(.*)", // ALTA de cuenta. Sin esto el registro caia en el default-deny y los CTA de
+                      // venta ("Empezar", "Crear mi automatizacion") llevaban a una pared: nadie
+                      // podia hacerse cliente.
 ]);
 const esApi = createRouteMatcher(["/api/(.*)"]);
 

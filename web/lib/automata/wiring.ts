@@ -258,6 +258,19 @@ export async function misOrgs(req: Request): Promise<Response> {
   if (!ident) return json(401, { error: "no_autenticado" });
   const pool = await getPool();
   let orgs = await orgsDeUsuario(pool, ident.userId);
+  // CANJEAR invitaciones aunque YA tenga org. app_aceptar_invitaciones solo se llamaba desde
+  // app_provisionar_usuario, y esa función retorna ANTES si el usuario ya tiene cualquier
+  // membresía — así que una invitación solo servía si la persona NUNCA se había registrado. El
+  // caso común la rompía: alguien que ya usa Automata (o que se registró primero y fue invitado
+  // después) no entraba nunca al equipo, y su lugar quedaba apartado sin que él lo supiera.
+  // Es barato y idempotente: sin invitaciones para su correo no hace nada.
+  if (orgs.length > 0) {
+    const { correo } = await perfilClerk(ident.userId);
+    if (correo) {
+      const r = await pool.query<{ n: number }>("SELECT app_aceptar_invitaciones($1,$2) AS n", [ident.userId, correo]);
+      if ((r.rows[0]?.n ?? 0) > 0) orgs = await orgsDeUsuario(pool, ident.userId); // entró a un equipo nuevo
+    }
+  }
   if (orgs.length === 0) {
     // Primer acceso sin org → onboarding al vuelo. Nombre y correo salen del perfil de Clerk; el
     // correo (solo si está VERIFICADO) es lo que puede meterlo al equipo que lo invitó en vez de

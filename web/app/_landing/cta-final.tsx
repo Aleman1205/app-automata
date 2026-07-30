@@ -30,7 +30,7 @@ export function CtaFinal() {
                 variante="oscuro"
                 tamano="lg"
                 icono="flecha"
-                href="/nueva"
+                href="/registrarse"
                 magnetico
                 className="border border-hueso/30 hover:border-hueso/60"
               >

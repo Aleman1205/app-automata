@@ -86,7 +86,7 @@ export function Hero() {
                   variante="acento"
                   tamano="lg"
                   icono="flecha"
-                  href="/nueva"
+                  href="/registrarse"
                   magnetico
                 >
                   Crear mi primera automatización
