@@ -161,11 +161,19 @@ export default function Cuenta() {
               </span>
               <div>
                 <Etiqueta>Método de pago</Etiqueta>
+                {/* Con backend real NO se inventa una tarjeta. Esta pantalla mostraba
+                    "Visa terminada en 4242" —el dato falso del prototipo— a un cliente que sí paga:
+                    le enseñaba una tarjeta AJENA. El método de pago vive en Stripe; hasta que el
+                    portal esté cableado, se dice la verdad. */}
                 <p className="mt-1 text-sm">
-                  {cuenta.metodoPago.tipo} terminada en{" "}
-                  <span className="font-semibold tabular-nums">
-                    {cuenta.metodoPago.ultimos4}
-                  </span>
+                  {real ? (
+                    <span className="text-sepia">Lo administras desde tu recibo de pago</span>
+                  ) : (
+                    <>
+                      {cuenta.metodoPago.tipo} terminada en{" "}
+                      <span className="font-semibold tabular-nums">{cuenta.metodoPago.ultimos4}</span>
+                    </>
+                  )}
                 </p>
               </div>
             </div>
@@ -183,7 +191,16 @@ export default function Cuenta() {
         <Reveal retraso={0.25}>
           <Tarjeta className="p-6">
             <h2 className="text-lg font-bold">Historial de pagos</h2>
-            <div className="mt-4 flex flex-col divide-y divide-linea">
+            {/* Con backend real NO se inventan cargos. Esta lista mostraba tres pagos del negocio
+                de ejemplo a un cliente que sí paga — cifras que él nunca hizo, en la pantalla donde
+                más confianza necesita. El historial real vive en Stripe. */}
+            {real && (
+              <p className="mt-3 text-sm leading-relaxed text-sepia">
+                Tus recibos te llegan por correo con cada cargo. Si necesitas una factura o el
+                detalle de un pago, escríbenos y te lo mandamos.
+              </p>
+            )}
+            <div className={`mt-4 flex-col divide-y divide-linea ${real ? "hidden" : "flex"}`}>
               {pagos.map((p, i) => (
                 <div key={i} className="flex items-center justify-between gap-4 py-3.5">
                   <div className="min-w-0">
@@ -214,12 +231,24 @@ export default function Cuenta() {
                 Conservas acceso de solo lectura 30 días para descargar todo.
               </p>
             </div>
-            <button
-              onClick={() => avisar("Solicitud de cancelación recibida (demo)")}
-              className="shrink-0 font-mono text-[11px] uppercase tracking-[0.14em] text-sepia transition-colors hover:text-ladrillo"
-            >
-              Cancelar suscripción
-            </button>
+            {/* Un botón que dice "Cancelar suscripción" y solo muestra un toast es de las peores
+                mentiras posibles: el cliente cree que canceló y le sigue llegando el cargo. Hasta
+                que la cancelación exista de verdad, se le dice cómo hacerlo. */}
+            {real ? (
+              <a
+                href="/contacto"
+                className="shrink-0 font-mono text-[11px] uppercase tracking-[0.14em] text-sepia underline-offset-4 transition-colors hover:text-ladrillo hover:underline"
+              >
+                Escríbenos para cancelar
+              </a>
+            ) : (
+              <button
+                onClick={() => avisar("Solicitud de cancelación recibida (demo)")}
+                className="shrink-0 font-mono text-[11px] uppercase tracking-[0.14em] text-sepia transition-colors hover:text-ladrillo"
+              >
+                Cancelar suscripción
+              </button>
+            )}
           </div>
         </Reveal>
       </div>
