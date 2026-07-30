@@ -13,7 +13,7 @@ mexicanas** (hoteles, restaurantes, despachos). Idea original del fundador:
 "una página donde el cliente entra, describe su proceso, pica un botón, y una
 serie de agentes piensa, planea, programa, ejecuta".
 
-## Estado de implementación (2026-07-26)
+## Estado de implementación (actualizado 2026-07-30)
 
 > **El backend de Fase 1 ya existe.** Este documento nació como mapa de
 > *planeación*; buena parte de lo que describía como diseño hoy es **código real**
@@ -39,11 +39,21 @@ serie de agentes piensa, planea, programa, ejecuta".
 | API de lectura (GET) / UI real (docs/16) | **Construido (2026-07-27)** | `core/src/http/endpoints.ts` (listar/ver automatizaciones, equipo `/miembros`, cuenta `/cuenta`) + `web/lib/automata/lectura.ts` (el front consume las APIs, con fallback al prototipo demo) | `verify:lectura:pg`, `verify:cuenta:pg` |
 | Run real (orquestación + HTTP) (docs/16) | **Construido (2026-07-27)** | `core/src/pipeline/run.ts` (`ejecutarAutomatizacion`) + `web/lib/automata/wiring.ts` (`correrAutomatizacion`: multipart → Run local; prod → 503, runner aislado) | `verify:ejecutar:pg` |
 | Modo dev local (docs/16) | **Construido (2026-07-27)** | `web/lib/automata/dev.ts` (bypass de auth doble-gated a no-producción) + `middleware.ts` + `core/scripts/seed-dev-pg.ts`: el producto real corre local **sin credenciales** | (corre local; runbook docs/16) |
+| **Intake → build cableado** (2026-07-29) | **Construido** | Aprobar el spec en `/nueva` SÍ construye: dropzone real que captura el `File`, `construirDesdeSpec` en `web/lib/automata/lectura.ts` (sube el ejemplo → `POST /construir`) usando el adaptador CANÓNICO `core/src/intake/adapter.ts` (al build viaja el criterio TÉCNICO, no el de cliente); `almacen()` en el wiring = R2 en prod / LocalStorage en dev | probado en vivo (upload → cola → drainer); `tsc` + `next build` |
+| **Equipo compartido / invitaciones** (2026-07-29) | **Construido** | Tabla `invitaciones` (por CORREO, con RLS y contando contra la cuota) + SD `app_aceptar_invitaciones`; `app_provisionar_usuario` gana `p_correo` → un invitado entra al equipo que lo invitó en vez de recibir org propia. Antes se inventaba el `user_id` del local-part del correo y la fila quedaba huérfana | `verify:onboarding:pg` (secciones 7-8), `verify:cuota:pg` |
+| **Posventa / ajustes** (2026-07-30) | **Construido** | `core/src/pipeline/ajuste.ts` (`arrancarAjuste` construye la versión **>1** — antes NADIE abría sesión de CMA para una v2 — y `drenarAjustes`); tabla `ajuste_pendiente` + SD `app_solicitar_ajuste`; `pedirAjusteEP` (`POST /orgs/:orgId/ajustar`, exige `confirmado:true`); cron `/api/cron/ajustes`; `automatizaciones.spec`/`ejemplo_key` persistidos (sin ellos un ajuste no tiene con qué construir); front `/ajustar` real | `verify:ajuste:pg` (25 checks) |
+| **Stripe: enganche** (2026-07-30) | **Parcial** — falta checkout/portal | SD `app_stripe_vincular` (write-once; el eslabón que faltaba: `stripe_customer_id` no tenía escritor, así que TODO evento de Stripe era no-op silencioso); el receptor extrae `price` + `client_reference_id`; `planDePrecio()` mapea desde `STRIPE_PRICE_*`; el handler **devuelve** el cambio de plan y el wiring lo aplica TRAS el commit (hacerlo dentro deadlockeaba con `aplicarDowngrade`) | `verify:stripe:pg` (17 checks) |
 
-**Marco de pruebas:** 31 scripts `verify:*` en `core/package.json` (unit +
-contra Postgres real, sufijo `:pg`). Por el reporte de Fase 1 corren **en verde**;
-`tsc --noEmit` y `next build` OK. La BD de pruebas es un Postgres temporal en el
-puerto **55432**.
+**Marco de pruebas:** **35** scripts `verify:*` en `core/package.json` (unit +
+contra Postgres real, sufijo `:pg` — 20 de ellos). Corren **en verde en secuencia**;
+`tsc --noEmit` (core y web) y `next build` OK. La BD de pruebas es un Postgres temporal
+en el puerto **55432**.
+
+> ⚠️ **Si un `verify:*` falla al correr la suite pero pasa aislado, sospecha
+> hermeticidad, no un bug del producto.** Los drainers drenan la cola **global**
+> (`build_pendiente`, `ajuste_pendiente`), así que una fila de otro test —o encolada a
+> mano en dev— desvía los conteos. `verify:disparo:pg` y `verify:ajuste:pg` vacían su
+> cola al arrancar por eso.
 
 **Hallazgo que corrige el diseño previo:** el webhook de CMA es *thin* — sus
 `data.type` reales **accionables** son `session.status_idled` (→ encola cosecha) y
@@ -53,20 +63,52 @@ sesión**, no por el evento. Esto corrige los nombres inventados
 (`session.completed`, etc.) que docs/13 daba por buenos (ver corrección en línea
 en el índice, abajo).
 
-**Falta para producción (deferido, necesita llaves/infra, NO código):**
-credenciales en `.env.local`/Vercel/Neon; alta de webhooks en las consolas de
-CMA y Stripe; crons en Vercel Pro; desplegar el runner gVisor y cambiar
-`LocalPythonExecutor` → `ContainerRunExecutor`. El flujo de subida ya existe
-(`POST /orgs/:orgId/ejemplo`).
+### Falta para producción (actualizado 2026-07-30)
+
+**Ya listo:**
+- ✅ **Neon migrado** con todo el esquema (incluidas `invitaciones`, `ajuste_pendiente`,
+  las SD nuevas y `app_stripe_vincular`). Verificado: RLS FORCE activo, los roles
+  `automata_app`/`automata_webhook` no son superuser ni bypassrls, y los `GRANT EXECUTE`
+  de las SD están.
+- ✅ **`ANTHROPIC_API_KEY` válida y con crédito** (probada contra `/v1/models` y con un
+  mensaje real; `claude-opus-4-8` disponible). Esto desbloquea intake y planner.
+
+**Falta (necesita llaves/consolas/infra, NO código):**
+- **Upstash** — sin las envs, el rate-limiter **truena en la primera request** de prod
+  (`Redis.fromEnv()` lanza fuera del try/catch).
+- **R2** — sin bucket no se sube el ejemplo ni se guarda el artefacto.
+- **`CRON_SECRET` + Vercel Pro** — sin los 4 crons nada se drena (el build queda encolado
+  para siempre).
+- **Alta de webhooks en consolas**: Clerk (`user.created`), CMA, Stripe. Cada uno da su
+  `whsec_`.
+- **Runner gVisor** — el Run responde **503** fuera de dev; hay que desplegar el host con
+  `runsc` y cambiar `LocalPythonExecutor` → `ContainerRunExecutor`.
+- **Managed Agents (beta)** habilitado en la cuenta de Anthropic (se sabrá al primer build).
+- **Resend con dominio verificado** — sin él los avisos solo llegan a tu propio correo.
+
+**Falta de CÓDIGO (lo que sí es trabajo pendiente):**
+- **Stripe: checkout + portal de cliente.** Es lo único que queda de Stripe. Necesita
+  `STRIPE_SECRET_KEY` y los 3 `price_…` reales para poder probarse de verdad — decisión
+  deliberada: no se escribe código de cobro que no se pueda ejecutar.
+- **Selector multi-org** en el front (`orgActual()` toma `orgs[0]` fijo).
+- **Correo de invitación**: la invitación existe pero nadie le avisa a la persona; se
+  entera al registrarse (`TipoCorreo` no tiene `'invitacion'`).
+- **Re-verificación de MFA** en el front cuando el `fva` envejece (>5 min → 403 sin salida).
+- **`correrRegresion()` devuelve `"indeterminado"`** a propósito hasta que exista el runner:
+  hoy **nada se clasifica como reparación gratis automáticamente**. La UI lo dice de frente.
+- **Renombrar la org** autogenerada ("Mi negocio") — no hay endpoint.
+- **Formula injection en las salidas** xlsx/csv sin neutralizar (`=`,`+`,`@`). Hoy la
+  exposición es baja porque las salidas ni se conservan; al conservarlas, cerrar esto.
 
 ## Estado actual
 
 | Parte | Estado |
 |---|---|
 | Planeación de arquitectura | **Completa** — 13 documentos, 2 curtidos con crítica adversarial |
-| Prototipo del front | **Funcional** — solo apariencia, datos falsos, para inversionistas |
+| Front | **Ya NO es solo apariencia.** Portafolio, cuenta, equipo, detalle, Ejecutar, `/nueva` (intake→build) y `/ajustar` (posventa) consumen el backend REAL, con fallback a `lib/datos.ts` cuando no hay backend. Lo que sigue falso: precio y método de pago en `/cuenta` (viven en Stripe, sin cablear) |
 | Spike (prueba técnica) | **Corrido ✓ — 3/3 casos, ~$1.8/build real** (ver `spike/RESULTADO.md`) |
-| Backend / producto real | **Actualización (2026-07-27): motor de Fase 1 CONSTRUIDO + la UI ya consume el backend real** — `core/` (TS+tsx) + `web/` (wiring Next 16); **31 `verify:*` en verde**, typecheck + `next build` OK. Además del motor: API de lectura (portafolio/equipo/cuenta/detalle), **Run real por HTTP** (archivo → resultado), y un **modo dev local** que corre el producto real **sin credenciales** (docs/16). Detalle en "Estado de implementación". Falta activar producción (llaves/infra), no código. |
+| Backend / producto real | **Actualización (2026-07-30): el ciclo COMPLETO del cliente existe en código** — describir → construir → ejecutar → **pedir un cambio** (posventa), con equipo compartido real y el enganche de Stripe. `core/` (TS+tsx) + `web/` (wiring Next 16); **35 `verify:*` en verde**, typecheck + `next build` OK. Falta: activar infra (Upstash/R2/crons/gVisor) y el checkout de Stripe. Detalle en "Estado de implementación" |
+| Primer build real de punta a punta | **NO corrido todavía.** La llave ya sirve y el camino está cableado y probado por partes; falta lanzarlo (cuesta ~$1.8 y confirma si Managed Agents está habilitado) |
 
 ## Los riesgos abiertos (no se resuelven con más papel)
 
@@ -90,10 +132,45 @@ CMA y Stripe; crons en Vercel Pro; desplegar el runner gVisor y cambiar
    sección "Estado de implementación". Queda **deferido** (no es código) activar
    llaves/infra y desplegar el runner gVisor.
 
-**Actualización:** con el spike resuelto (#1 histórico) y el riesgo técnico del
-backend cerrado en código (#3), el riesgo abierto que **no se resuelve con más
-papel ni con más código** es el **#2: clientes**. Más planeación de arquitectura
-—o más motor— es, a estas alturas, procrastinar el #2.
+4. **El primer build real, sin correr.** Todo el camino está cableado y probado por
+   partes (con dobles: sin CMA, sin R2, sin modelo), pero **nunca ha corrido de punta a
+   punta con dinero real**. Es lo único que confirma que Managed Agents está habilitado en
+   la cuenta y que el prompt de ajuste produce algo útil. Cuesta ~$1.8. **Riesgo #2 hoy.**
+
+**Actualización (2026-07-30):** con el spike resuelto (#1 histórico) y el riesgo técnico
+cerrado en código (#3), quedan dos: **#2 clientes** (sigue siendo el #1 real — nadie ha
+confirmado que pagaría) y **#4 el primer build**. Ojo con la trampa de esta sesión: se
+construyó *mucho* (equipo, posventa, Stripe) y todo está probado con dobles — pero
+**probado-con-dobles no es probado-con-dinero**. Seguir agregando motor es, a estas
+alturas, procrastinar el #2 y el #4.
+
+## Para retomar (lee esto primero) — 2026-07-30
+
+**Lo siguiente que hay que hacer, en orden:**
+
+1. **Correr el PRIMER BUILD REAL de punta a punta.** Todo está cableado y la llave sirve.
+   Cuesta ~$1.8 y es lo único que confirma Managed Agents + que el resultado es útil.
+   Camino: `/nueva` → describir → aprobar (sube ejemplo + encola) → disparar el cron a mano
+   con `curl -X POST /api/cron/disparo -H "Authorization: Bearer $CRON_SECRET"` → luego
+   `/api/cron/cosecha`. Requiere el modo dev local (docs/16) y `DATABASE_URL_OWNER`.
+2. **Stripe: checkout + portal.** Crear los 3 productos en Stripe (test): Base $499, Pro
+   $999, Equipo $1,999 MXN/mes → pegar los `price_…` en las envs (el mapeo ya funciona sin
+   tocar código) y entonces escribir el checkout con la llave de test a la vista.
+3. **Enseñárselo a 5 PyMEs.** Riesgo #2, el que no se arregla con código.
+
+**Trampas que ya nos costaron horas (no repetirlas):**
+- **Editar `core/` no lo ve `web/`** hasta correr `pnpm install` en `web/` (pnpm COPIA el
+  `file:../core`) — y los `verify:*` pasan en verde mientras el front corre código viejo.
+  El síntoma parece un bug del producto. Reiniciar `pnpm dev` después.
+- **`~/Desktop` y TCC de macOS**: ver "Notas de entorno".
+- **Dos fuentes de env**: `web/.env` y `web/.env.local` tienen las mismas claves y
+  `.env.local` GANA. Editar la equivocada parece "no funcionó". Y `web/.env.local` puede
+  quedar apuntando a la BD **local** (`127.0.0.1:55432`) tras una sesión de pruebas —
+  revisarlo antes de concluir nada sobre Neon.
+- **No dupliques contratos que ya existen en `core/`.** Aquí nacieron los dos peores bugs
+  de la sesión: un mapeo de spec a mano que invirtió `criterio`/`criterio_cliente` (el
+  Verifier quedaba sin nada ejecutable) y un cambio de plan que iba a reimplementar
+  `aplicarDowngrade` en SQL. Busca primero si el core ya lo hace.
 
 ## Estructura del repo
 
@@ -127,6 +204,14 @@ spike/             prueba técnica — Node + npm (raíz)
 
 (No hay docs/12; el 13 se numeró así a propósito.)
 
+> ⚠️ **La doc de `docs/` va DETRÁS del código (2026-07-30).** Los documentos son buen mapa
+> del *diseño*, pero para saber qué existe hoy manda el **código** y la tabla "Estado de
+> implementación" de arriba. Concretamente: **docs/15** (catálogo del motor) no incluye
+> invitaciones, posventa (`pipeline/ajuste.ts`, `ajuste_pendiente`) ni el enganche de
+> Stripe; **docs/08** describe el ciclo de vida como no expuesto por HTTP, cuando ya hay
+> `POST /ajustar` + cron; **docs/16** ya no aplica en lo de la env de org (obsoleta, hoy es
+> `/api/yo`). Si un doc y el código se contradicen, **cree al código y actualiza el doc**.
+
 ## Decisiones clave tomadas (para no re-litigar)
 
 - **Build vs Run separados.** El Build (agentes, caro, 1 vez) y el Run
@@ -150,6 +235,28 @@ spike/             prueba técnica — Node + npm (raíz)
 - **Equipo:** cuenta del negocio, portafolio compartido, **2 roles**
   (admin crea/ajusta/invita/factura, operador solo ejecuta).
 - **Marca "Automata" es provisional** (se cambia en `web/lib/marca.ts`).
+- **Se invita por CORREO, nunca por user_id.** El id real lo asigna Clerk al registrarse,
+  así que la invitación ESPERA en la tabla `invitaciones` y se vuelve membresía cuando esa
+  persona se da de alta (con su correo **verificado** — aceptar uno sin verificar dejaría
+  colarse a un equipo ajeno poniendo el correo de otro). Una invitación pendiente **ocupa
+  lugar** del plan; si no, un admin apalabraría 50 correos con un plan de 3.
+- **El tipo de ajuste lo decide la REGRESIÓN, no el cliente** (docs/08 §2): se corre el
+  ejemplo original contra la versión vigente. Falla → **reparación gratis**; pasa o
+  indeterminado → **cambio** que gasta 1 de 3. Por eso NO hay un botón de "reportar falla"
+  que prometa gratis: sería una promesa que el dato puede desmentir.
+- **Preguntar antes de cobrar.** Como hoy la regresión sale `indeterminado` (sin runner) y
+  eso se clasifica como cambio, la UI le muestra el costo ANTES y `pedirAjusteEP` **exige
+  `confirmado:true`**. Nadie gasta un ajuste sin haberlo visto.
+- **Cambio de plan: upgrade INMEDIATO con prorrateo** (lo que Stripe cobra al instante).
+  Es lo que el cliente espera —pagó más para poder usarlo ya— y encaja con los triggers de
+  cuota, que leen el plan vivo de la BD.
+- **Stripe es la fuente de verdad del plan**: se deriva del `price` del evento, nunca de la
+  app. Un `price` desconocido NO toca el plan (darle uno que no pagó, o quitarle el que
+  pagó, son los dos errores caros).
+- **El request solo ENCOLA; lo caro va en un drainer.** Vale para builds y para ajustes:
+  la regresión, el planner y la sesión de CMA tardan segundos y no deben colgar al cliente
+  ni retener una conexión de BD. (El intake es la excepción conocida y está marcada como
+  follow-up.)
 - **No es Zapier.** Automata NO es automatización de integración (conectar apps
   A→B con disparadores); es "desastre → resultado terminado y verificado", a
   demanda, para PyME no-técnica. La respuesta a "¿esto no es Zapier?" vive en
@@ -187,13 +294,20 @@ npm run verify:cuota:pg                    # cuota (reserva→confirma, sin over
 npm run verify:ciclo:pg                    # ciclo de vida (entrega garantizada)
 npm run verify:killswitch:pg              # freno DB-enforced
 npm run verify:ejecutar:pg                 # Run de punta a punta (Python real)
-# ...son 31 scripts `verify:*` en core/package.json (sufijo :pg = con BD)
+npm run verify:onboarding:pg               # alta + INVITACIONES (el invitado entra al equipo)
+npm run verify:ajuste:pg                   # POSVENTA: construye la versión 2 + cola + drainer
+npm run verify:stripe:pg                   # STRIPE: vincula customer, price→plan, downgrade
+# ...son 35 scripts `verify:*` en core/package.json (sufijo :pg = con BD; 20 lo llevan)
+# Al aplicar el esquema usa SIEMPRE -v ON_ERROR_STOP=1 (sin él deja la BD a medias).
 
 # Modo DEV LOCAL — el producto REAL corriendo local, SIN credenciales (runbook: docs/16)
 psql "postgres://postgres@127.0.0.1:55432/postgres" -f core/db/schema.sql  # schema (rol dueño)
 cd core && npm run seed:dev                # siembra org+equipo+automatizaciones EJECUTABLES
 # web/.env.local: AUTOMATA_DEV_AUTH=1, DATABASE_URL=…55432, APP_ORIGIN=http://localhost:3000,
-#   NEXT_PUBLIC_AUTOMATA_DEV_ORG=<org sembrada>, AUTOMATA_DEV_STORAGE_DIR=<abs>/.dev-storage
+#   AUTOMATA_DEV_STORAGE_DIR=<abs>/.dev-storage, DATABASE_URL_OWNER=…55432 (los crons),
+#   CRON_SECRET=<openssl rand -hex 32> (para disparar los crons a mano con curl)
+#   NOTA: NEXT_PUBLIC_AUTOMATA_DEV_ORG quedó OBSOLETA — la org se resuelve desde la
+#   membresía vía GET /api/yo (que además provisiona al primer acceso).
 cd web && pnpm dev                         # → localhost:3000 (portafolio/cuenta/equipo/detalle REALES + Ejecutar real)
 ```
 
@@ -218,8 +332,13 @@ cd web && pnpm dev                         # → localhost:3000 (portafolio/cuen
 
 - **Idioma de TODA la UI: español de México, tuteo, cero jerga técnica.** El
   cliente del producto no programa. Nada de "webhook", "API", "deploy".
-- **El front es 100% demo:** datos falsos en `web/lib/datos.ts`, sin backend.
-  Formularios y botones animan pero no guardan ni envían nada.
+- **El front YA NO es demo** (esta línea decía "100% demo, los botones animan pero no
+  guardan nada" — era cierto hasta el 2026-07-27 y hoy engaña). Regla real: **datos
+  reales con fallback a los falsos.** `web/lib/automata/lectura.ts` pega a las APIs y,
+  si no hay backend/login, devuelve `null` y el llamador cae a `web/lib/datos.ts`, así
+  el prototipo sigue vivo para enseñarlo. Un botón que "solo anima" hoy es un **bug**,
+  no el diseño — pero **verifica antes de asumir cuál es cuál**: quedan piezas falsas a
+  propósito (precio y método de pago en `/cuenta`, que viven en Stripe).
 - **Sistema de diseño del front:** `web/DESIGN.md` (paleta sepia, tokens,
   catálogo de componentes, reglas de animación). El color acento (naranja) es
   SOLO para la acción principal de cada pantalla.
@@ -238,6 +357,22 @@ cd web && pnpm dev                         # → localhost:3000 (portafolio/cuen
   entorno — es del entorno, no del código. Verificar por DOM
   (`javascript_tool`) es más confiable que screenshots con scroll.
 - El disco de la máquina estuvo al límite; limpiar cachés si vuelve a pasar.
+- **macOS puede revocar el acceso a `~/Desktop` (TCC) a media sesión.** El síntoma es
+  `EPERM: operation not permitted` en TODO lo que lea el proyecto (`git`, `psql`, `grep`,
+  hasta `cp`) mientras el resto del disco funciona — parece disco lleno y **no lo es**.
+  Diagnóstico en 3 líneas: leer un archivo del proyecto (falla), uno del scratchpad
+  (funciona), y uno de `~` fuera de Desktop (funciona) → es TCC, no el código. Se arregla
+  dando "Acceso total al disco" (o "Carpeta Escritorio") a la terminal/app y
+  **reabriéndola**; el permiso no aplica hasta reiniciarla.
+- **El dev server del panel de preview puede quedar inservible** si su shell se creó antes
+  de ese permiso: arranca con `getcwd: cannot access parent directories` y nunca escucha.
+  No se recupera desde dentro — hay que reiniciar la app. Como salida de emergencia se
+  puede levantar `pnpm dev` desde un shell que sí tenga permiso, pero conviene decirlo en
+  voz alta porque lo normal es usar el panel.
+- **`ON_ERROR_STOP=1` es obligatorio al aplicar el esquema.** Sin él psql sigue tras un
+  error y deja la BD a medias, que es peor que fallar. Y el **SQL Editor de Neon no sirve**
+  para `schema.sql`: si tiene el modo *Explain* activo prefija `EXPLAIN` (y `EXPLAIN DO …`
+  es error de sintaxis), y además puede partir mal los cuerpos `$fn$…$fn$`. Usar `psql -f`.
 
 ## Datos de demostración del prototipo
 
