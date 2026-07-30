@@ -71,6 +71,10 @@ async function main() {
 
   try {
     await admin.query("DELETE FROM orgs WHERE id=$1", [O]);
+    // drenarAjustes drena la cola COMPLETA (es global): una fila de otra org —dejada por otro test o
+    // encolada a mano en dev— la levantaria este test con su cosechador falso y desviaria los
+    // conteos. Se vacia para que la corrida sea determinista, igual que en verify:disparo:pg.
+    await admin.query("DELETE FROM ajuste_pendiente");
     await admin.query("INSERT INTO orgs (id,nombre) VALUES ($1,'Ajustes')", [O]);
     await admin.query("INSERT INTO subscriptions (org_id,plan) VALUES ($1,'equipo')", [O]);
 

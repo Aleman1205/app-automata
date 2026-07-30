@@ -24,7 +24,7 @@ export interface Entrega {
 // NUNCA se expone organization_id del payload.
 export type Recurso =
   | { fuente: "cma"; sessionId: string }
-  | { fuente: "stripe"; customerId?: string; subscriptionId?: string };
+  | { fuente: "stripe"; customerId?: string; subscriptionId?: string; orgRef?: string; priceId?: string };
 
 export interface Evento {
   id: string; // clave de dedupe (webhook-id firmado en CMA; evt.id firmado en Stripe)
@@ -69,7 +69,28 @@ function extraerEvento(fuente: "cma" | "stripe", parsed: unknown, idFirmado?: st
   const customerId = typeof oo["customer"] === "string" ? (oo["customer"] as string) : undefined;
   const subscriptionId = typeof oo["id"] === "string" ? (oo["id"] as string) : undefined;
   const created = typeof o["created"] === "number" ? (o["created"] as number) : undefined; // epoch (s) del evento
-  return { id, tipo, recurso: { fuente: "stripe", customerId, subscriptionId }, ts: created };
+  // La ORG que pagó. Va en client_reference_id porque NOSOTROS lo fijamos al crear la sesión de
+  // checkout; llega dentro del cuerpo ya verificado por HMAC, así que es Stripe atestiguando un dato
+  // NUESTRO — no un campo que el cliente pueda inyectar. Aun así se exige forma de uuid: es lo único
+  // con que se vincula un customer a una org, y un valor basura ahí sería vincular a ciegas.
+  const ref = oo["client_reference_id"];
+  const orgRef = typeof ref === "string" && /^[0-9a-fA-F-]{36}$/.test(ref) ? ref : undefined;
+  // El PRECIO comprado, para derivar el plan. Stripe lo pone en items[0].price.id tanto en la
+  // subscription como en la sesión de checkout expandida. Solo se lee el primero: un plan = un price.
+  const priceId = primerPrecio(oo);
+  return { id, tipo, recurso: { fuente: "stripe", customerId, subscriptionId, orgRef, priceId }, ts: created };
+}
+
+/** items[0].price.id del objeto de Stripe (subscription o session). Defensivo: cualquier forma
+ *  inesperada → undefined, y el handler trata "sin precio" como evento no accionable en vez de
+ *  adivinar un plan. */
+function primerPrecio(oo: Record<string, unknown>): string | undefined {
+  const items = oo["items"];
+  const data = typeof items === "object" && items !== null ? (items as Record<string, unknown>)["data"] : undefined;
+  const primero = Array.isArray(data) ? data[0] : undefined;
+  const price = typeof primero === "object" && primero !== null ? (primero as Record<string, unknown>)["price"] : undefined;
+  const pid = typeof price === "object" && price !== null ? (price as Record<string, unknown>)["id"] : price;
+  return typeof pid === "string" && pid.length > 0 ? pid : undefined;
 }
 
 /**

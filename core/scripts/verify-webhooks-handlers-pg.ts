@@ -28,7 +28,7 @@ async function main() {
   wh = crearPool(WEBHOOK_URL);
   const app = crearPool(APP_URL);
   // Corre `procesar` en una tx del pool de WEBHOOK (rol no-super, como el receptor real).
-  const enTx = async (fn: (c: PoolClient) => Promise<void>) => {
+  const enTx = async (fn: (c: PoolClient) => Promise<unknown>) => {
     const c = await wh.connect();
     try { await c.query("BEGIN"); await fn(c); await c.query("COMMIT"); } catch (e) { await c.query("ROLLBACK").catch(() => {}); throw e; } finally { c.release(); }
   };

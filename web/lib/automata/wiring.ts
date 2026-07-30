@@ -2,7 +2,7 @@ import "server-only";
 import { auth, clerkClient } from "@clerk/nextjs/server";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
-import { type Pool } from "pg";
+import { type Pool, type PoolClient } from "pg";
 import { timingSafeEqual } from "node:crypto";
 import { crearPool, crearPoolApp } from "automata-core/db/pg";
 import { reaparBuildsColgados } from "automata-core/ciclo/servicio";
@@ -26,9 +26,10 @@ import { type Deps, type Endpoint } from "automata-core/http/pipeline";
 import { type Sesion, type RateLimiter, type Solicitud } from "automata-core/http/tipos";
 import { plantillaCorreo, type Notificador, type EventoCorreo, type Correo } from "automata-core/ops/notificaciones";
 import { orgsDeUsuario, provisionarUsuario } from "automata-core/ops/onboarding";
-import { recibir } from "automata-core/webhooks/receptor";
+import { recibir, type Evento } from "automata-core/webhooks/receptor";
+import { aplicarDowngrade } from "automata-core/billing/plan";
 import { verificarStandardWebhook, verificarStripe, type Verificador } from "automata-core/webhooks/firma";
-import { procesarCma, procesarStripe } from "automata-core/webhooks/handlers";
+import { procesarCma, procesarStripe, type CambioPlan } from "automata-core/webhooks/handlers";
 import { DEV, DEV_USER } from "./dev";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -164,8 +165,26 @@ export async function webhook(fuente: "cma" | "stripe", req: Request): Promise<R
     fuente === "cma"
       ? { verificar: (raw, h) => verificarStandardWebhook(raw, h, env("CMA_WEBHOOK_SECRET"), Date.now()) }
       : { verificar: (raw, h) => verificarStripe(raw, h["stripe-signature"] ?? "", env("STRIPE_WEBHOOK_SECRET"), Date.now()) };
-  const procesar = fuente === "cma" ? procesarCma : procesarStripe;
+  // El cambio de plan NO se aplica dentro de la tx del webhook: aplicarDowngrade corre con el pool
+  // DUEÑO (es owner-only) y la tx del webhook ya tiene el lock de la fila de subscriptions — las dos
+  // conexiones se abrazaban y el webhook se colgaba hasta el timeout con el cliente ya cobrado. El
+  // handler DEVUELVE el cambio pendiente y se aplica aquí, después del commit.
+  let pendiente: CambioPlan | undefined;
+  const procesar =
+    fuente === "cma"
+      ? procesarCma
+      : async (c: PoolClient, evento: Evento) => { pendiente = await procesarStripe(c, evento); };
   const r = await recibir({ rawBody, headers }, { verificador, fuente, pool: await getPoolWebhook() }, procesar);
+  if (pendiente) {
+    // Best-effort: el pago YA quedó registrado y el evento ya se dedupó, así que un fallo aquí no
+    // debe devolverle un error a Stripe (reintentaría y el dedupe lo descartaría, dejando el plan sin
+    // aplicar de todos modos). Se registra para que ops reconcilie.
+    try {
+      await aplicarDowngrade(getPoolOwner(), pendiente.org, pendiente.plan);
+    } catch (e) {
+      console.error(`[webhook:stripe] plan cobrado pero NO aplicado (org ${pendiente.org} → ${pendiente.plan}):`, e);
+    }
+  }
   // rechazado → 401 (firma) / 400 (JSON); ilegible/duplicado/aceptado → 200 (ack, corta reintentos).
   const status = r.estado === "rechazado" ? (r.motivo.startsWith("firma") ? 401 : 400) : 200;
   return new Response(JSON.stringify({ estado: r.estado }), { status, headers: { "content-type": "application/json" } });

@@ -573,6 +573,36 @@ RETURNS uuid LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS 
   SELECT org_id FROM subscriptions WHERE stripe_customer_id = p_cust
 $fn$;
 
+-- Vincula un customer de Stripe con una org. Es el ESLABÓN QUE FALTABA: stripe_customer_id solo lo
+-- escribía un script de prueba, así que resolver_org_stripe siempre devolvía NULL y TODO evento de
+-- Stripe salía por el no-op silencioso — los pagos no movían nada. El rol de webhooks tiene UPDATE
+-- solo sobre (estado, ultimo_evento_ts), así que esta escritura necesita una SD.
+--
+-- WRITE-ONCE por customer (como cma_session_id): si el customer ya está en OTRA org, falla en vez de
+-- reasignarlo. Un customer que salta de org sería una toma de control de la suscripción ajena — y un
+-- reintento de webhook no debe poder provocarla. Reasignar de verdad es trabajo de ops (dueño).
+-- Idempotente: si ya está vinculado a ESA org, no hace nada y devuelve true.
+CREATE OR REPLACE FUNCTION app_stripe_vincular(p_org uuid, p_cust text)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_dueno uuid; v_actual text;
+BEGIN
+  IF p_org IS NULL OR p_cust IS NULL OR length(btrim(p_cust)) = 0 THEN
+    RAISE EXCEPTION 'app_stripe_vincular: org y customer requeridos';
+  END IF;
+  SELECT org_id INTO v_dueno FROM subscriptions WHERE stripe_customer_id = p_cust;
+  IF v_dueno IS NOT NULL AND v_dueno <> p_org THEN
+    RAISE EXCEPTION 'STRIPE_CUSTOMER_DE_OTRA_ORG'; -- nunca se reasigna por webhook
+  END IF;
+  SELECT stripe_customer_id INTO v_actual FROM subscriptions WHERE org_id = p_org;
+  IF v_actual IS NOT NULL AND v_actual <> p_cust THEN
+    RAISE EXCEPTION 'STRIPE_ORG_YA_TIENE_CUSTOMER'; -- la org ya paga con otro customer
+  END IF;
+  UPDATE subscriptions SET stripe_customer_id = p_cust
+    WHERE org_id = p_org AND stripe_customer_id IS DISTINCT FROM p_cust;
+  RETURN true;
+END $fn$;
+GRANT EXECUTE ON FUNCTION app_stripe_vincular(uuid, text) TO automata_webhook;
+
 -- Rol del pool de webhooks: no-super, no-dueño (afirmarRolSeguro lo acepta), con los
 -- privilegios MÍNIMOS para el receptor + los handlers, y sujeto a RLS (por eso necesita
 -- los resolvers y app.current_org). NO puede leer cross-org por sí mismo.

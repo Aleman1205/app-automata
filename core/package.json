@@ -28,7 +28,8 @@
     "./webhooks/receptor": "./src/webhooks/receptor.ts",
     "./webhooks/firma": "./src/webhooks/firma.ts",
     "./webhooks/handlers": "./src/webhooks/handlers.ts",
-    "./pipeline/ajuste": "./src/pipeline/ajuste.ts"
+    "./pipeline/ajuste": "./src/pipeline/ajuste.ts",
+    "./billing/plan": "./src/billing/plan.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -69,7 +70,8 @@
     "m0": "tsx scripts/run-m0.ts",
     "intake:live": "tsx scripts/intake.ts",
     "planner:live": "tsx scripts/planner.ts",
-    "verify:ajuste:pg": "tsx scripts/verify-ajuste-pg.ts"
+    "verify:ajuste:pg": "tsx scripts/verify-ajuste-pg.ts",
+    "verify:stripe:pg": "tsx scripts/verify-stripe-pg.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",
