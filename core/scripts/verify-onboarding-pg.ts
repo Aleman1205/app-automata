@@ -45,7 +45,18 @@ async function main() {
     check("creada = true (se dio de alta ahora)", creada === true);
     check("devuelve rol admin + un nombre", org.rol === "admin" && org.nombre.length > 0);
     const sub = await admin.query<{ plan: string; estado: string }>("SELECT plan, estado FROM subscriptions WHERE org_id = $1", [org.orgId]);
-    check("subscription con plan 'base' y estado 'activa'", sub.rows[0]?.plan === "base" && sub.rows[0]?.estado === "activa");
+    // Nace en 'pendiente', NO en 'activa'. Este check afirmaba lo contrario y con eso bendecía un
+    // agujero de dinero: con 'activa' cualquiera que se registrara tenía 3 espacios y 6
+    // generaciones al mes = ~10 USD de builds reales de CMA, gratis y repetible con otro correo.
+    // Solo el pago (checkout.session.completed) lo mueve a 'activa'.
+    check("subscription con plan 'base' y estado 'pendiente' (sin pagar no gasta)",
+      sub.rows[0]?.plan === "base" && sub.rows[0]?.estado === "pendiente");
+    // Y que la BD de verdad se lo niegue, no solo que la columna diga 'pendiente'.
+    const negado = await conOrg(app, org.orgId, async (c) => {
+      try { await c.query("INSERT INTO automatizaciones (org_id, nombre) VALUES (app_current_org(), 'x')"); return ""; }
+      catch (e) { return (e as { message?: string }).message ?? ""; }
+    });
+    check("la BD le NIEGA crear una automatización sin pagar", /subscription en estado pendiente/.test(negado));
     const mem = await admin.query<{ n: number }>("SELECT count(*)::int AS n FROM memberships WHERE org_id = $1 AND user_id = $2 AND rol = 'admin'", [org.orgId, U_NUEVO]);
     check("membresía admin del usuario en la org", mem.rows[0]?.n === 1);
     check("nombre por defecto = 'Mi negocio' (sin nombre dado)", org.nombre === "Mi negocio");

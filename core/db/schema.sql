@@ -105,6 +105,13 @@ CREATE TABLE IF NOT EXISTS automatizaciones (
 -- solo aplica en instalaciones nuevas).
 ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS entregada   timestamptz;
 ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS en_revision timestamptz;
+-- El CHECK de subscriptions.estado se REDEFINE aparte: el CREATE TABLE de arriba solo aplica en
+-- instalaciones nuevas, así que en una BD existente el estado 'pendiente' quedaba rechazado por el
+-- constraint viejo (y el alta de todo usuario nuevo fallaba). Idempotente.
+ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_estado_check;
+ALTER TABLE subscriptions ADD  CONSTRAINT subscriptions_estado_check
+  CHECK (estado IN ('pendiente', 'activa', 'morosa', 'cancelada'));
+
 ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS spec        jsonb;
 ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS ejemplo_key text;
 
@@ -211,7 +218,12 @@ ON CONFLICT (plan) DO UPDATE SET
 CREATE TABLE IF NOT EXISTS subscriptions (
   org_id              uuid PRIMARY KEY REFERENCES orgs(id) ON DELETE CASCADE,
   plan                text NOT NULL DEFAULT 'base' REFERENCES planes(plan),
-  estado              text NOT NULL DEFAULT 'activa' CHECK (estado IN ('activa','morosa','cancelada')),
+  -- pendiente = dada de alta pero SIN PAGAR. Es el estado con el que nace toda org nueva: sin
+  -- el, el DEFAULT 'activa' le daba a cualquiera que se registrara 3 espacios y 6 generaciones
+  -- al mes = ~10 USD de builds reales de CMA, gratis y repetible con otro correo. Solo el evento
+  -- de pago de Stripe lo mueve a 'activa'. app_consumir y los triggers de cuota ya exigen
+  -- 'activa' para dejar gastar, asi que 'pendiente' no gasta nada sin tocar esa logica.
+  estado              text NOT NULL DEFAULT 'activa' CHECK (estado IN ('pendiente','activa','morosa','cancelada')),
   stripe_customer_id  text,
   periodo_fin         timestamptz,
   -- Guard MONÓTONO anti out-of-order de Stripe: el ts (epoch) del último evento aplicado.
@@ -786,7 +798,8 @@ BEGIN
   END IF;
   v_nombre := left(coalesce(nullif(trim(p_nombre), ''), 'Mi negocio'), 200);
   INSERT INTO orgs (nombre) VALUES (v_nombre) RETURNING id INTO v_org;
-  INSERT INTO subscriptions (org_id, plan) VALUES (v_org, 'base');
+  -- Nace SIN PAGAR: el alta no regala builds (docs/06 decidio CONTRA la prueba gratis abierta).
+  INSERT INTO subscriptions (org_id, plan, estado) VALUES (v_org, 'base', 'pendiente');
   INSERT INTO memberships (org_id, user_id, rol) VALUES (v_org, p_user, 'admin');
   RETURN v_org;
 END $fn$;

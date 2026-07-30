@@ -2,7 +2,7 @@ import { type Pool, type PoolClient } from "pg";
 import { conOrg } from "../db/pg.ts";
 import { assertCan, necesitaStepUp, NoAutorizado, type Accion, type Membresia } from "../auth/roles.ts";
 import { leerMembresia } from "../auth/membresia.ts";
-import { CuotaExcedida } from "../billing/cuota.ts";
+import { CuotaExcedida, SuscripcionNoActiva } from "../billing/cuota.ts";
 import { ServicioSuspendido } from "../ops/killswitch.ts";
 import { type Contexto, type Esquema, type Identidad, type Metodo, type RateLimiter, type Respuesta, type Sesion, type Solicitud, R } from "./tipos.ts";
 
@@ -97,6 +97,7 @@ export async function autorizar(
     });
   } catch (e) {
     if (e instanceof NoAutorizado) return R.prohibido(e.message);
+    if (e instanceof SuscripcionNoActiva) return { status: 402, cuerpo: { error: "suscripcion_no_activa", estado: e.estado } };
     if (e instanceof CuotaExcedida) return R.cuota(e.message);
     if (e instanceof ServicioSuspendido) return R.suspendido(); // kill-switch/org → 503, no 500
     throw e; // inesperado → el adaptador lo mapea a 500 sin filtrar stack (nunca a 200)

@@ -45,10 +45,24 @@ function fila1<T>(r: { rows: T[] }): T {
 /** Traduce el 'CUOTA_EXCEDIDA:<recurso>:<limite>:<plan>' que lanza la BD a
  *  CuotaExcedida; re-lanza cualquier otro error (p.ej. 'sin subscription',
  *  'permission denied', estado ≠ activa) para que falle cerrado. */
+/** La subscription no permite gastar: pendiente de pago, morosa o cancelada. El HTTP la mapea a
+ *  402 (pago requerido), no a 500 — no es una falla del sistema. */
+export class SuscripcionNoActiva extends Error {
+  constructor(public readonly estado: string) {
+    super(`La suscripcion esta en estado ${estado}: no puede consumir hasta regularizar el pago.`);
+    this.name = "SuscripcionNoActiva";
+  }
+}
+
 export function comoCuota(e: unknown): never {
   const msg = (e as { message?: string })?.message ?? "";
   const m = /CUOTA_EXCEDIDA:(espacios|generaciones|ejecuciones|usuarios):(\d+):(\w+)/.exec(msg);
   if (m) throw new CuotaExcedida(m[1] as Recurso, Number(m[2]), m[3] as string);
+  // La BD niega el gasto cuando la subscription no esta activa (pendiente de pago, morosa,
+  // cancelada). Sin traducir salia como 500 cruda: el cliente veia "algo salio mal" en vez de
+  // "hay que pagar", y ops no distinguia un impago de una falla del sistema.
+  const s = /subscription en estado (\w+):/.exec(msg);
+  if (s) throw new SuscripcionNoActiva(s[1] as string);
   throw e;
 }
 
