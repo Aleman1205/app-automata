@@ -42,8 +42,22 @@ export default function PaginaPortafolio() {
   // Datos REALES desde la API (modo dev / prod con backend). null = aún cargando o sin
   // backend → se usan los datos falsos de lib/datos (el prototipo sigue funcionando solo).
   const [reales, setReales] = useState<DatosTarjeta[] | null>(null);
+  // Refresca MIENTRAS haya algo construyéndose. Sin esto el cliente aprobaba su
+  // automatización, veía "generando…" y la pantalla se quedaba así para siempre: el build
+  // terminaba en el servidor pero él no se enteraba hasta recargar a mano (o hasta que le
+  // llegara el correo). Se sondea cada 10 s y se PARA solo cuando ya nada está en curso,
+  // para no dejar un timer eterno en una pestaña abierta.
   useEffect(() => {
-    listarAutomatizaciones().then(setReales).catch(() => setReales(null));
+    let vivo = true;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const cargar = async () => {
+      const r = await listarAutomatizaciones().catch(() => null);
+      if (!vivo) return;
+      setReales(r);
+      if (r?.some((a) => a.estado === "generando")) t = setTimeout(cargar, 10_000);
+    };
+    void cargar();
+    return () => { vivo = false; if (t) clearTimeout(t); };
   }, []);
   // Equipo real para el chip "Equipo de N" (fallback a datos falsos).
   const [equipoReal, setEquipoReal] = useState<{ nombre: string }[] | null>(null);

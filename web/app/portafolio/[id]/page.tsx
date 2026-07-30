@@ -180,9 +180,19 @@ export default function PaginaDetalle({
       setDetalleReal(null);
       return;
     }
-    verAutomatizacion(id)
-      .then((d) => setDetalleReal(d))
-      .catch(() => setDetalleReal(null));
+    // Igual que el portafolio: mientras se esté construyendo (build inicial o un ajuste que
+    // el cliente acaba de pedir) se refresca, y se para en cuanto queda lista. Sin esto el
+    // cliente se queda mirando "generando…" aunque el build ya terminó.
+    let vivo = true;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const cargar = async () => {
+      const d = await verAutomatizacion(id).catch(() => null);
+      if (!vivo) return;
+      setDetalleReal(d);
+      if (d?.estado === "generando") t = setTimeout(cargar, 10_000);
+    };
+    void cargar();
+    return () => { vivo = false; if (t) clearTimeout(t); };
   }, [id, esReal]);
   const a = esReal ? detalleReal : fakeA;
   const cargandoReal = esReal && detalleReal === undefined;
