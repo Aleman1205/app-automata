@@ -12,7 +12,7 @@
 import { crearPool } from "../src/db/pg.ts";
 import { procesarStripe, planDePrecio } from "../src/webhooks/handlers.ts";
 import { aplicarDowngrade } from "../src/billing/plan.ts";
-import type { Evento } from "../src/webhooks/receptor.ts";
+import { extraerEvento, type Evento } from "../src/webhooks/receptor.ts";
 
 const ADMIN_URL = process.env.ADMIN_URL ?? "postgres://postgres@127.0.0.1:55432/postgres";
 // Conecta CON el rol de webhooks, como en produccion (DATABASE_URL_WEBHOOK). No se usa SET ROLE:
@@ -116,6 +116,32 @@ async function main() {
     await procesar(evento("invoice.payment_succeeded", {}, 4500));
     check("un evento MÁS VIEJO no la revive (guard monótono intacto)",
       (await uno("SELECT estado FROM subscriptions WHERE org_id=$1", [A]))?.["estado"] === "morosa");
+
+    // El hueco que dejo pasar el bug del price: este archivo FABRICABA el Evento con priceId ya
+    // puesto, sin pasar por extraerEvento. Asi nadie noto que un objeto Subscription trae
+    // items.data[0].price.id pero una Checkout Session NO (usa line_items, y el webhook ni lo trae).
+    console.log(String.fromCharCode(10) + "8. El PAYLOAD CRUDO de Stripe (por extraerEvento, como en produccion):");
+    const crudoSub = JSON.stringify({
+      id: "evt_sub_created", type: "customer.subscription.created", created: 9000,
+      data: { object: { id: "sub_1", customer: CUST, items: { data: [{ price: { id: "price_fake_pro" } }] } } },
+    });
+    const evSub = extraerEvento("stripe", JSON.parse(crudoSub));
+    check("extrae el customer", evSub?.recurso.fuente === "stripe" && evSub.recurso.customerId === CUST);
+    check("extrae el price de una Subscription (items.data[0].price.id)",
+      evSub?.recurso.fuente === "stripe" && evSub.recurso.priceId === "price_fake_pro");
+    await admin.query("UPDATE subscriptions SET plan=$2 WHERE org_id=$1", [A, "base"]);
+    if (evSub) await procesar(evSub);
+    check("y con eso el plan del cliente SI cambia (antes se quedaba en base)", (await planDe(A)) === "pro");
+
+    const crudoSesion = JSON.stringify({
+      id: "evt_checkout", type: "checkout.session.completed", created: 9100,
+      data: { object: { id: "cs_1", customer: CUST, client_reference_id: A } },
+    });
+    const evSes = extraerEvento("stripe", JSON.parse(crudoSesion));
+    check("la Checkout Session extrae la org de client_reference_id",
+      evSes?.recurso.fuente === "stripe" && evSes.recurso.orgRef === A);
+    check("y NO trae price (por eso el plan lo fija subscription.created, no el checkout)",
+      evSes?.recurso.fuente === "stripe" && evSes.recurso.priceId === undefined);
   } finally {
     for (const id of [A, B]) await admin.query("DELETE FROM orgs WHERE id=$1", [id]).catch(() => {});
     await admin.end(); await app.end();

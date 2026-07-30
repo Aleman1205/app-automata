@@ -45,7 +45,10 @@ export interface Config {
   pool: Pool; // conexión de DUEÑO
 }
 
-function extraerEvento(fuente: "cma" | "stripe", parsed: unknown, idFirmado?: string): Evento | null {
+/** Extrae el recurso FIRMADO del cuerpo ya parseado. Exportada para poder probarla con payloads
+ *  CRUDOS de Stripe/CMA: fabricar el Evento a mano en los tests escondio que una Checkout Session
+ *  no trae `items` (usa line_items), y por eso el plan del cliente nunca se aplicaba. */
+export function extraerEvento(fuente: "cma" | "stripe", parsed: unknown, idFirmado?: string): Evento | null {
   if (typeof parsed !== "object" || parsed === null) return null;
   const o = parsed as Record<string, unknown>;
   if (fuente === "cma") {
