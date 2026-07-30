@@ -1,3 +1,5 @@
+import { intakeSpecABuildSpec } from "automata-core/intake/adapter";
+import type { IntakeSpec } from "automata-core/intake/schema";
 import type { DatosTarjeta } from "@/app/portafolio/_componentes/tarjeta-automatizacion";
 import type {
   Automatizacion,
@@ -277,14 +279,11 @@ export async function quitarMiembro(userId: string): Promise<void> {
 // ── Intake por-turno (el entrevistador real, Sonnet) ─────────────────────────
 export interface OpcionIntake { id: string; etiqueta: string; detalle: string; recomendada: boolean; }
 export interface PreguntaIntake { id: string; titulo: string; opciones: OpcionIntake[]; permite_otro: boolean; pide_archivo: boolean; }
-export interface SpecIntake {
-  objetivo: string;
-  entradas: { descripcion: string }[];
-  salidas: { descripcion: string }[];
-  reglas: string[];
-  criterios_exito: { criterio_cliente: string }[];
-  ambiguedades_restantes: string[];
-}
+// El spec del intake es EL de core (no una copia a mano): así el front no puede desviarse del
+// contrato. Traía dos campos por criterio a propósito — `criterio` (técnico, va al rubric del
+// Verifier) y `criterio_cliente` (lenguaje natural, va a la pantalla de aprobación) — y una copia
+// local que solo declaraba el segundo hizo que el build se verificara contra prosa de cliente.
+export type SpecIntake = IntakeSpec;
 export interface EntradaHist { pregunta: string; eleccion: string; libre: boolean; }
 export type TurnoIntake =
   | { accion: "preguntar"; reencuadre: string | null; preguntas: PreguntaIntake[] }
@@ -318,63 +317,103 @@ export async function intakeTurno(idea: string, historial: EntradaHist[], turno:
 // manda la spec APROBADA + esa clave a POST /construir, que crea la automatización y ENCOLA el
 // build (el cron de disparo lo corre fuera del request). Sin esto, aprobar el spec no hacía nada.
 
-/** Nombre corto y legible para la automatización, derivado del objetivo del spec (≤200). */
+const MAX_BYTES_EJEMPLO = 50 * 1024 * 1024; // el tope REAL del gate (core: LIMITES.maxBytesArchivo)
+const MAX_NOMBRE = 120; // holgado para leerse en el portafolio; el backend acepta 200
+
+/** Nombre corto y legible para la automatización (lo único que el cliente ve en su portafolio).
+ *  Toma la primera oración del objetivo y, si hay que cortar, corta en el último espacio para no
+ *  partir una palabra a la mitad. */
 function nombreDesdeObjetivo(objetivo: string): string {
   const primera = objetivo.trim().split(/[.\n]/)[0]?.trim() ?? "";
-  const base = primera.length > 0 ? primera : objetivo.trim();
-  return (base.length > 80 ? `${base.slice(0, 79).trimEnd()}…` : base) || "Automatización";
+  const base = (primera.length > 0 ? primera : objetivo.trim()).replace(/\s+/g, " ");
+  if (base.length === 0) return "Automatización";
+  if (base.length <= MAX_NOMBRE) return base;
+  const corte = base.slice(0, MAX_NOMBRE);
+  const ultimoEspacio = corte.lastIndexOf(" ");
+  return `${(ultimoEspacio > MAX_NOMBRE * 0.6 ? corte.slice(0, ultimoEspacio) : corte).trimEnd()}…`;
 }
 
-/** Sube el archivo de ejemplo (multipart, campo 'archivo') → { ejemploKey }. Lanza con mensaje
- *  de cliente si el gate lo rechaza, es ilegible o pesa de más. */
+/** Envuelve un fetch para que una red caída no llegue crudo y en inglés ("Failed to fetch") a una
+ *  UI en español. Los errores de protocolo (status) los traduce cada llamador. */
+async function pedir(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new Error("No pudimos conectar. Revisa tu conexión e intenta de nuevo.");
+  }
+}
+
+// Un archivo ya subido no se vuelve a subir: si el cliente reintenta tras un error (o le doble-
+// clickea), reusamos su ejemploKey en vez de dejar un huérfano en el storage por intento. WeakMap
+// porque la llave es el File mismo (se libera con él).
+const clavesSubidas = new WeakMap<File, string>();
+
+/** Sube el archivo de ejemplo (multipart, campo 'archivo') → ejemploKey. Lanza con mensaje de
+ *  cliente si el gate lo rechaza, es ilegible o pesa de más. Idempotente por File. */
 async function subirEjemploArchivo(org: string, file: File): Promise<string> {
+  const yaSubida = clavesSubidas.get(file);
+  if (yaSubida) return yaSubida;
+  // Cota local ANTES de gastar la subida: el gate lo rechazaría igual, pero tras mandar los bytes.
+  if (file.size > MAX_BYTES_EJEMPLO) {
+    throw new Error(`Ese archivo pesa ${Math.round(file.size / 1024 / 1024)} MB; el máximo es 50 MB.`);
+  }
   const form = new FormData();
   form.append("archivo", file);
-  const r = await fetch(`/api/orgs/${org}/ejemplo`, { method: "POST", body: form });
+  const r = await pedir(`/api/orgs/${org}/ejemplo`, { method: "POST", body: form });
   if (!r.ok) {
     const err = (await r.json().catch(() => ({}))) as { error?: string };
     const msg =
       err.error === "entrada_rechazada" ? "Ese archivo no pasó la validación de seguridad."
       : err.error === "a_revision" ? "El archivo es ilegible; súbelo en otro formato (CSV, Excel…)."
-      : err.error === "archivo_muy_grande" ? "El archivo es muy grande (máximo 55 MB)."
+      : err.error === "archivo_muy_grande" ? "El archivo es muy grande (máximo 50 MB)."
       : "No se pudo subir el archivo. Intenta con otro.";
     throw new Error(msg);
   }
-  const d = (await r.json()) as { ejemploKey: string };
+  const d = (await r.json().catch(() => ({}))) as { ejemploKey?: string };
+  if (!d.ejemploKey) throw new Error("No se pudo subir el archivo. Intenta con otro.");
+  clavesSubidas.set(file, d.ejemploKey);
   return d.ejemploKey;
 }
 
 /** Cablea intake → build: sube el ejemplo y encola la construcción de la spec aprobada. Devuelve
- *  el id de la automatización. El backend valida un shape más plano que el SpecIntake (criterios
- *  como strings, entradas con {tipo,formato,descripcion}), así que lo mapeamos aquí. */
+ *  el id de la solicitud encolada (el cron de disparo crea la automatización).
+ *
+ *  El mapeo spec-del-intake → spec-del-build lo hace el adaptador CANÓNICO de core
+ *  (intakeSpecABuildSpec), no una copia local: es el que sabe que al build viaja el criterio
+ *  TÉCNICO (`criterio`, el que el Verifier puede ejecutar) y no el de cliente, y que las entradas
+ *  conservan su tipo/formato reales (el planner los lee). */
 export async function construirDesdeSpec(spec: SpecIntake, file: File): Promise<string> {
   const org = await orgActual();
   if (!org) throw new Error("No hay backend configurado (¿modo dev / login?).");
+  // La cuota de espacios la cobra un trigger de la BD cuando el drainer crea la automatización —
+  // DESPUÉS del request. Sin este chequeo, un cliente sin cupo vería "Manos a la obra" y nunca
+  // recibiría nada. Es preventivo (no sustituye al trigger, que es la defensa real).
+  const cuenta = await verCuenta();
+  if (cuenta && cuenta.espaciosUsados >= cuenta.espaciosTotal) {
+    throw new Error(
+      `Tu plan ${cuenta.plan} llega hasta ${cuenta.espaciosTotal} automatizaciones y ya las tienes todas. Libera una o cambia de plan para construir otra.`,
+    );
+  }
   const ejemploKey = await subirEjemploArchivo(org, file);
-  const cuerpo = {
-    nombre: nombreDesdeObjetivo(spec.objetivo),
-    ejemploKey,
-    spec: {
-      objetivo: spec.objetivo,
-      reglas: spec.reglas,
-      criterios_exito: spec.criterios_exito.map((c) => c.criterio_cliente),
-      entradas: spec.entradas.map((e) => ({ tipo: "archivo", formato: "", descripcion: e.descripcion })),
-    },
-  };
-  const r = await fetch(`/api/orgs/${org}/construir`, {
+  const cuerpo = { nombre: nombreDesdeObjetivo(spec.objetivo), ejemploKey, spec: intakeSpecABuildSpec(spec) };
+  const r = await pedir(`/api/orgs/${org}/construir`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(cuerpo),
   });
   if (!r.ok) {
     const err = (await r.json().catch(() => ({}))) as { error?: string };
+    // 400 = el cuerpo no pasó la validación: reintentar da exactamente lo mismo, así que no
+    // invitamos a reintentar (eso mandaba al cliente a un bucle).
     const msg =
       err.error === "cuota_excedida" ? "Alcanzaste el límite de automatizaciones de tu plan."
       : err.error === "step_up_requerido" ? "Necesitas verificar tu identidad (MFA) para construir."
+      : r.status === 400 ? "No pudimos armar el pedido con lo que entendimos. Corrige tus respuestas y vuelve a aprobar."
       : "No se pudo iniciar la construcción. Intenta de nuevo.";
     throw new Error(msg);
   }
-  const d = (await r.json()) as { id: string };
+  const d = (await r.json().catch(() => ({}))) as { id?: string };
+  if (!d.id) throw new Error("No se pudo iniciar la construcción. Intenta de nuevo.");
   return d.id;
 }
 

@@ -78,7 +78,9 @@ export default function NuevaAutomatizacion() {
       setPreguntas(res.preguntas.map(aPreguntaUI));
       setIndice(0);
       setRespuestas({});
-      setArchivo(null);
+      // El archivo NO se reinicia: las respuestas son por ronda, pero el ejemplo es de la sesión
+      // (es el archivo con el que se construye). Reiniciarlo hacía que una 2ª ronda de preguntas
+      // tirara el que el cliente ya había subido.
       setPaso("preguntas");
     } else if (res.accion === "cerrar") {
       setSpec(res.spec);
@@ -208,10 +210,10 @@ export default function NuevaAutomatizacion() {
             <PasoResumen
               datos={datosResumen}
               archivo={archivo}
-              onArchivo={setArchivo}
+              onArchivo={(f) => { setError(null); setArchivo(f); }}
               cargando={construyendo}
               error={error}
-              onCorregir={() => setPaso("idea")}
+              onCorregir={() => { setError(null); setPaso("idea"); }}
               onAprobar={aprobar}
             />
           </Panel>

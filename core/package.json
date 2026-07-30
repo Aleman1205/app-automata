@@ -14,6 +14,8 @@
     "./ops/incidentes": "./src/ops/incidentes.ts",
     "./ops/notificaciones": "./src/ops/notificaciones.ts",
     "./ops/onboarding": "./src/ops/onboarding.ts",
+    "./intake/adapter": "./src/intake/adapter.ts",
+    "./intake/schema": "./src/intake/schema.ts",
     "./pipeline/cosecha": "./src/pipeline/cosecha.ts",
     "./pipeline/disparo": "./src/pipeline/disparo.ts",
     "./pipeline/run": "./src/pipeline/run.ts",

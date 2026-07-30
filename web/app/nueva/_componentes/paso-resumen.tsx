@@ -194,7 +194,7 @@ export function PasoResumen({
         retraso={0.63}
         className="mt-8 flex flex-wrap items-center justify-between gap-4"
       >
-        <Boton variante="fantasma" onClick={onCorregir}>
+        <Boton variante="fantasma" deshabilitado={cargando} onClick={onCorregir}>
           Corregir mis respuestas
         </Boton>
         <Boton
