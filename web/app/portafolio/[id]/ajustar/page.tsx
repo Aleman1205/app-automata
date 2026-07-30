@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { AlertTriangle, Wrench } from "lucide-react";
 import { Tarjeta } from "@/components/ui/tarjeta";
@@ -10,7 +10,8 @@ import { useAviso } from "@/components/ui/aviso";
 import { Reveal } from "@/components/motion/reveal";
 import { TextoRevelado } from "@/components/motion/texto-revelado";
 import { CheckDibujado } from "@/components/motion/check-dibujado";
-import { obtenerAutomatizacion } from "@/lib/datos";
+import { obtenerAutomatizacion, type Automatizacion } from "@/lib/datos";
+import { verAutomatizacion, pedirAjuste, cicloConocido, type CicloVista } from "@/lib/automata/lectura";
 import { Volver } from "../../_componentes/volver";
 import { TimelineCambios } from "../../_componentes/timeline-cambios";
 
@@ -22,10 +23,49 @@ export default function PaginaAjustar({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const a = obtenerAutomatizacion(id);
   const { avisar, elemento } = useAviso();
   const [texto, setTexto] = useState("");
   const [enviado, setEnviado] = useState(false);
+  const [enviando, setEnviando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Arranca con el dato falso (el prototipo sigue vivo sin backend) y lo REEMPLAZA por el real en
+  // cuanto responda el API, junto con el ciclo (que dice si el cambio es gratis o gasta uno de 3).
+  const [a, setA] = useState<Automatizacion | undefined>(() => obtenerAutomatizacion(id));
+  const [ciclo, setCiclo] = useState<CicloVista | null>(null);
+  const [esReal, setEsReal] = useState(false);
+
+  useEffect(() => {
+    verAutomatizacion(id)
+      .then((real) => {
+        if (!real) return;
+        setA(real);
+        setEsReal(true);
+        setCiclo(cicloConocido(id) ?? null);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Lo que de verdad le va a costar. Sin backend cae al conteo del prototipo.
+  const gratis = ciclo?.ventanaGratis ?? false;
+  const restantes = ciclo?.ajustesRestantes ?? Math.max(0, 3 - (a?.ajustesUsados ?? 0));
+
+  // Manda el cambio DE VERDAD. El backend exige confirmado:true y el aviso de costo ya está arriba
+  // del botón, así que el cliente nunca gasta un ajuste sin haberlo visto.
+  const enviar = async () => {
+    if (!a || !texto.trim() || enviando) return;
+    if (!esReal) { setEnviado(true); return; } // prototipo sin backend: solo anima
+    setError(null);
+    setEnviando(true);
+    try {
+      await pedirAjuste(a.id, texto.trim());
+      setEnviado(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo enviar el cambio.");
+    } finally {
+      setEnviando(false);
+    }
+  };
 
   // ── Guardas: id inexistente o automatización que no admite cambios ────────
   if (!a || a.estado !== "lista") {
@@ -56,7 +96,7 @@ export default function PaginaAjustar({
     );
   }
 
-  const esUltimoAjuste = a.ajustesUsados === 2;
+  const esUltimoAjuste = restantes === 1 && !gratis;
 
   return (
     <div className="mx-auto max-w-3xl px-6 pb-24 pt-36 md:pb-32 md:pt-44">
@@ -76,7 +116,11 @@ export default function PaginaAjustar({
           >
             {/* Cabecera */}
             <div className="flex flex-col gap-5">
-              <Etiqueta>Ajuste {a.ajustesUsados + 1} de 3</Etiqueta>
+              {/* Antes decía "Ajuste N de 3" siempre — incluso cuando el cambio era GRATIS por
+                  estar en los primeros 30 días desde la entrega. */}
+              <Etiqueta>
+                {gratis ? "Cambio sin costo" : `Te quedan ${restantes} de 3 cambios`}
+              </Etiqueta>
               <TextoRevelado
                 texto="¿Qué quieres cambiar?"
                 como="h1"
@@ -132,28 +176,43 @@ export default function PaginaAjustar({
                   strokeWidth={2}
                 />
                 <div className="flex flex-col items-start gap-2 text-sm leading-relaxed text-sepia">
+                  {/* Honesto sobre cómo se decide: lo revisamos corriendo tu ejemplo original. Antes
+                      esto prometía "es gratis" a secas y un botón aparte que solo mostraba un toast
+                      — si la revisión mostraba que la automatización sí cumplía lo acordado, el
+                      cliente se llevaba el cargo de sorpresa. */}
                   <p>
-                    ¿Algo dejó de funcionar sin que tú cambiaras nada? Eso es
-                    una reparación, es gratis y no gasta ajustes.
+                    ¿Algo dejó de funcionar sin que tú cambiaras nada? Descríbelo aquí mismo. Lo
+                    revisamos con tu archivo de ejemplo: si de verdad se rompió, la reparación es
+                    gratis y no gasta ninguno de tus cambios.
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => avisar("Recibido — lo revisamos sin costo")}
-                    className="font-semibold text-tinta underline-offset-4 transition-colors duration-300 hover:underline"
-                  >
-                    Reportar una falla
-                  </button>
                 </div>
               </div>
+
+              {/* El costo, ANTES de confirmar. Es la promesa que el backend hace cumplir exigiendo
+                  confirmado:true. */}
+              {esReal && !gratis && (
+                <div className="rounded-xl border border-linea bg-papel p-5 text-sm leading-relaxed">
+                  <span className="font-bold">Esto contará como 1 de tus 3 cambios.</span>{" "}
+                  Todavía no podemos confirmar por nuestra cuenta si algo se rompió, así que lo
+                  tratamos como un cambio. Si al revisarlo resulta que fue una falla nuestra, no te
+                  lo cobramos.
+                </div>
+              )}
+
+              {error && (
+                <div className="rounded-xl border border-linea bg-papel px-4 py-3 text-sm text-ladrillo">
+                  {error}
+                </div>
+              )}
 
               <div className="mt-2">
                 <Boton
                   variante="acento"
                   icono="check"
-                  deshabilitado={!texto.trim()}
-                  onClick={() => setEnviado(true)}
+                  deshabilitado={!texto.trim() || enviando}
+                  onClick={enviar}
                 >
-                  Enviar el cambio
+                  {enviando ? "Enviando…" : gratis ? "Enviar el cambio (sin costo)" : "Enviar el cambio"}
                 </Boton>
               </div>
             </Reveal>

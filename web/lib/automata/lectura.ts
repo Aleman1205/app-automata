@@ -181,8 +181,20 @@ export async function verAutomatizacion(id: string): Promise<Automatizacion | nu
     const d = (await r.json()) as {
       id: string; nombre: string; estado: EstadoAuto; creada: string | null; ejecuciones: number;
       ultimaEjecucion: string | null; ajustesUsados: number;
+      ajustesRestantes?: number; ventanaGratis?: boolean; ventanaHasta?: string | null; enRevision?: boolean;
+      cicloEstado?: string;
       versiones: { numero: number; tipo: string | null; creada: string | null }[];
     };
+    // El CICLO real, para que la pantalla de ajustes diga la verdad del costo ANTES de que el
+    // cliente confirme: dentro de los primeros 30 dias el cambio es GRATIS y no gasta ninguno de
+    // los 3 (antes decia "Ajuste 2 de 3" incluso cuando no le iba a costar nada).
+    cicloDe.set(d.id, {
+      ajustesRestantes: d.ajustesRestantes ?? Math.max(0, 3 - d.ajustesUsados),
+      ventanaGratis: !!d.ventanaGratis,
+      ventanaHasta: d.ventanaHasta ?? null,
+      enRevision: !!d.enRevision,
+      congelada: d.cicloEstado === "frozen",
+    });
     const cambios: CambioVersion[] = d.versiones
       .slice()
       .sort((a, b) => a.numero - b.numero)
@@ -447,6 +459,43 @@ export async function construirDesdeSpec(spec: SpecIntake, file: File): Promise<
   const d = (await r.json().catch(() => ({}))) as { id?: string };
   if (!d.id) throw new Error("No se pudo iniciar la construcción. Intenta de nuevo.");
   return d.id;
+}
+
+// ── Posventa: pedir un cambio / reportar una falla ───────────────────────────
+// El CICLO de cada automatización, que cachea verAutomatizacion. La pantalla de ajustes lo necesita
+// para decirle al cliente el COSTO REAL antes de que confirme: dentro de los primeros 30 días el
+// cambio es gratis y no gasta ninguno de los 3.
+export interface CicloVista {
+  ajustesRestantes: number;
+  ventanaGratis: boolean; // dentro de los 30 días post-entrega: el cambio NO gasta ajuste
+  ventanaHasta: string | null;
+  enRevision: boolean; // breaker de reparaciones enganchado
+  congelada: boolean;
+}
+const cicloDe = new Map<string, CicloVista>();
+export const cicloConocido = (id: string): CicloVista | undefined => cicloDe.get(id);
+
+/** Pide un ajuste (POST /ajustar). Solo ENCOLA: la regresión (que decide si es cambio o reparación
+ *  gratis) y el build los corre el cron. El backend EXIGE confirmado:true — el cliente tiene que
+ *  haber visto el costo, así que esta función se llama sólo después de mostrárselo. */
+export async function pedirAjuste(id: string, peticion: string): Promise<void> {
+  const org = await orgActual();
+  if (!org) throw new Error("No hay backend configurado.");
+  const r = await pedir(`/api/orgs/${org}/ajustar`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id, peticion, confirmado: true }),
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string };
+    const msg =
+      err.error === "cambio_en_curso" ? "Ya estamos preparando un cambio de esta automatización. Espera a que quede lista."
+      : err.error === "inactiva" ? "Esta automatización quedó en solo lectura (tu plan bajó de nivel)."
+      : err.error === "no_encontrada" ? "No encontramos esta automatización."
+      : err.error === "step_up_requerido" ? "Necesitas verificar tu identidad (MFA)."
+      : "No se pudo enviar el cambio. Intenta de nuevo.";
+    throw new Error(msg);
+  }
 }
 
 /** Hace definitiva (congela) una automatización. Lanza con mensaje de cliente si no se puede. */
