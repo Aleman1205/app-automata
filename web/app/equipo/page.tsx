@@ -17,7 +17,7 @@ import {
   type Miembro,
   type RolMiembro,
 } from "@/lib/datos";
-import { listarEquipo, invitarMiembro, quitarMiembro } from "@/lib/automata/lectura";
+import { listarEquipo, invitarMiembro, quitarMiembro, verCuenta } from "@/lib/automata/lectura";
 
 const etiquetaRol: Record<RolMiembro, string> = {
   admin: "Administrador",
@@ -38,6 +38,8 @@ export default function Equipo() {
   // ¿el backend respondió con datos reales? Ya no depende de una env: es true si listarEquipo()
   // (que resuelve la org del usuario vía /api/yo) devolvió roster. Gate de invitar/quitar reales.
   const [esReal, setEsReal] = useState(false);
+  // Límites del plan real (null hasta que responda /cuenta, o si no hay backend).
+  const [plan, setPlan] = useState<{ nombre: string; usuariosTotal: number } | null>(null);
   const [invitando, setInvitando] = useState(false);
   const [correo, setCorreo] = useState("");
   const [rolNuevo, setRolNuevo] = useState<RolMiembro>("operador");
@@ -52,6 +54,9 @@ export default function Equipo() {
         setMiembros(reales ? reales.map((m) => ({ ...m, estado: m.pendiente ? ("pendiente" as const) : ("activo" as const) })) : seedFake());
       })
       .catch(() => setMiembros(seedFake()));
+    verCuenta()
+      .then((c) => { if (c) setPlan({ nombre: c.plan, usuariosTotal: c.usuariosTotal }); })
+      .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -65,7 +70,10 @@ export default function Equipo() {
   const lista = miembros ?? [];
   const soyAdmin = lista.find((m) => m.esTu)?.rol === "admin";
   const usados = lista.length;
-  const restantes = organizacion.lugaresTotal - usados;
+  // Los lugares del PLAN REAL (el dato falso decía 10 para todos; con plan base, que da 1, la
+  // pantalla invitaba a llenar 10 asientos y cada intento moría con CUOTA_EXCEDIDA sin explicación).
+  const lugaresTotal = plan?.usuariosTotal ?? organizacion.lugaresTotal;
+  const restantes = lugaresTotal - usados;
 
   const invitar = async () => {
     if (!correo.trim()) return;
@@ -123,7 +131,7 @@ export default function Equipo() {
       {/* Cabecera */}
       <Reveal>
         <Etiqueta punto>
-          {organizacion.nombre} · Plan {organizacion.plan}
+          {organizacion.nombre} · Plan {plan?.nombre ?? organizacion.plan}
         </Etiqueta>
       </Reveal>
       <TextoRevelado
@@ -145,7 +153,7 @@ export default function Equipo() {
         <div className="mt-10 flex items-center justify-between gap-4 rounded-2xl border border-linea bg-papel p-5">
           <div className="flex items-center gap-4">
             <span className="flex items-center gap-1.5">
-              {Array.from({ length: organizacion.lugaresTotal }).map((_, i) => (
+              {Array.from({ length: lugaresTotal }).map((_, i) => (
                 <span
                   key={i}
                   className={`h-6 w-2 rounded-full ${
@@ -156,7 +164,7 @@ export default function Equipo() {
             </span>
             <span className="text-sm">
               <span className="font-bold">{usados}</span>
-              <span className="text-sepia"> de {organizacion.lugaresTotal} lugares usados</span>
+              <span className="text-sepia"> de {lugaresTotal} lugares usados</span>
             </span>
           </div>
           {soyAdmin && (
