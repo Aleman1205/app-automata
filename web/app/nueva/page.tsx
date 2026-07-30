@@ -16,6 +16,7 @@ import { Boton } from "@/components/ui/boton";
 import { Etiqueta } from "@/components/ui/etiqueta";
 import {
   intakeTurno,
+  construirDesdeSpec,
   type EntradaHist,
   type PreguntaIntake,
   type SpecIntake,
@@ -62,8 +63,9 @@ export default function NuevaAutomatizacion() {
   const [preguntas, setPreguntas] = useState<PreguntaEntrevista[]>([]);
   const [indice, setIndice] = useState(0);
   const [respuestas, setRespuestas] = useState<Respuestas>({});
-  const [archivoSubido, setArchivoSubido] = useState(false);
+  const [archivo, setArchivo] = useState<File | null>(null);
   const [spec, setSpec] = useState<SpecIntake | null>(null);
+  const [construyendo, setConstruyendo] = useState(false);
 
   const responder = (preguntaId: string, respuesta: Respuesta) => {
     setRespuestas((previas) => ({ ...previas, [preguntaId]: respuesta }));
@@ -76,7 +78,7 @@ export default function NuevaAutomatizacion() {
       setPreguntas(res.preguntas.map(aPreguntaUI));
       setIndice(0);
       setRespuestas({});
-      setArchivoSubido(false);
+      setArchivo(null);
       setPaso("preguntas");
     } else if (res.accion === "cerrar") {
       setSpec(res.spec);
@@ -109,7 +111,7 @@ export default function NuevaAutomatizacion() {
   const avanzarRonda = async () => {
     const nuevas: EntradaHist[] = preguntas.map((p) => {
       const r = respuestas[p.id];
-      if (p.tipo === "archivo") return { pregunta: p.titulo, eleccion: archivoSubido ? "Sí, tengo ese archivo" : "(sin archivo)", libre: false };
+      if (p.tipo === "archivo") return { pregunta: p.titulo, eleccion: archivo ? "Sí, tengo ese archivo" : "(sin archivo)", libre: false };
       if (r?.opcionId === "otro" && r.otroTexto.trim()) return { pregunta: p.titulo, eleccion: r.otroTexto.trim(), libre: true };
       const op = p.opciones?.find((o) => o.id === r?.opcionId);
       return { pregunta: p.titulo, eleccion: op?.etiqueta ?? "(sin respuesta)", libre: false };
@@ -146,10 +148,24 @@ export default function NuevaAutomatizacion() {
       }
     : undefined;
 
-  const aprobar = () => {
-    // El BUILD (que construye el resultado) corre en CMA + guarda en R2 — aún no activados.
-    // El spec ya quedó entendido; mostramos el cierre. (Cablear intake→build es el siguiente paso.)
-    setPaso("listo");
+  // Aprobar el spec DISPARA el build: sube el archivo de ejemplo → encola la construcción
+  // (POST /ejemplo → POST /construir). El drainer (cron) corre el planner + CMA fuera del request.
+  const aprobar = async () => {
+    if (!spec || construyendo) return;
+    if (!archivo) {
+      setError("Nos falta el archivo de ejemplo para construirla — súbelo aquí abajo.");
+      return;
+    }
+    setError(null);
+    setConstruyendo(true);
+    try {
+      await construirDesdeSpec(spec, archivo);
+      setPaso("listo");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo iniciar la construcción. Intenta de nuevo.");
+    } finally {
+      setConstruyendo(false);
+    }
   };
 
   return (
@@ -178,9 +194,9 @@ export default function NuevaAutomatizacion() {
               preguntas={preguntas}
               indice={indice}
               respuestas={respuestas}
-              archivoSubido={archivoSubido}
+              archivo={archivo}
               onResponder={responder}
-              onSubirArchivo={() => setArchivoSubido(true)}
+              onArchivo={setArchivo}
               onAtras={atras}
               onContinuar={continuar}
             />
@@ -191,6 +207,10 @@ export default function NuevaAutomatizacion() {
           <Panel key="resumen">
             <PasoResumen
               datos={datosResumen}
+              archivo={archivo}
+              onArchivo={setArchivo}
+              cargando={construyendo}
+              error={error}
               onCorregir={() => setPaso("idea")}
               onAprobar={aprobar}
             />

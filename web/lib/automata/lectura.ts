@@ -312,6 +312,72 @@ export async function intakeTurno(idea: string, historial: EntradaHist[], turno:
   return (await r.json()) as TurnoIntake;
 }
 
+// ── Disparar el build (a3-s6): sube el ejemplo → encola la construcción ───────
+// Cablea el intake con el backend de build. `subirEjemploArchivo` manda el archivo (multipart)
+// al gate + storage (R2 en prod, LocalStorage en dev) y devuelve la ejemploKey; `construirDesdeSpec`
+// manda la spec APROBADA + esa clave a POST /construir, que crea la automatización y ENCOLA el
+// build (el cron de disparo lo corre fuera del request). Sin esto, aprobar el spec no hacía nada.
+
+/** Nombre corto y legible para la automatización, derivado del objetivo del spec (≤200). */
+function nombreDesdeObjetivo(objetivo: string): string {
+  const primera = objetivo.trim().split(/[.\n]/)[0]?.trim() ?? "";
+  const base = primera.length > 0 ? primera : objetivo.trim();
+  return (base.length > 80 ? `${base.slice(0, 79).trimEnd()}…` : base) || "Automatización";
+}
+
+/** Sube el archivo de ejemplo (multipart, campo 'archivo') → { ejemploKey }. Lanza con mensaje
+ *  de cliente si el gate lo rechaza, es ilegible o pesa de más. */
+async function subirEjemploArchivo(org: string, file: File): Promise<string> {
+  const form = new FormData();
+  form.append("archivo", file);
+  const r = await fetch(`/api/orgs/${org}/ejemplo`, { method: "POST", body: form });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string };
+    const msg =
+      err.error === "entrada_rechazada" ? "Ese archivo no pasó la validación de seguridad."
+      : err.error === "a_revision" ? "El archivo es ilegible; súbelo en otro formato (CSV, Excel…)."
+      : err.error === "archivo_muy_grande" ? "El archivo es muy grande (máximo 55 MB)."
+      : "No se pudo subir el archivo. Intenta con otro.";
+    throw new Error(msg);
+  }
+  const d = (await r.json()) as { ejemploKey: string };
+  return d.ejemploKey;
+}
+
+/** Cablea intake → build: sube el ejemplo y encola la construcción de la spec aprobada. Devuelve
+ *  el id de la automatización. El backend valida un shape más plano que el SpecIntake (criterios
+ *  como strings, entradas con {tipo,formato,descripcion}), así que lo mapeamos aquí. */
+export async function construirDesdeSpec(spec: SpecIntake, file: File): Promise<string> {
+  const org = await orgActual();
+  if (!org) throw new Error("No hay backend configurado (¿modo dev / login?).");
+  const ejemploKey = await subirEjemploArchivo(org, file);
+  const cuerpo = {
+    nombre: nombreDesdeObjetivo(spec.objetivo),
+    ejemploKey,
+    spec: {
+      objetivo: spec.objetivo,
+      reglas: spec.reglas,
+      criterios_exito: spec.criterios_exito.map((c) => c.criterio_cliente),
+      entradas: spec.entradas.map((e) => ({ tipo: "archivo", formato: "", descripcion: e.descripcion })),
+    },
+  };
+  const r = await fetch(`/api/orgs/${org}/construir`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(cuerpo),
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string };
+    const msg =
+      err.error === "cuota_excedida" ? "Alcanzaste el límite de automatizaciones de tu plan."
+      : err.error === "step_up_requerido" ? "Necesitas verificar tu identidad (MFA) para construir."
+      : "No se pudo iniciar la construcción. Intenta de nuevo.";
+    throw new Error(msg);
+  }
+  const d = (await r.json()) as { id: string };
+  return d.id;
+}
+
 /** Hace definitiva (congela) una automatización. Lanza con mensaje de cliente si no se puede. */
 export async function congelarAutomatizacion(id: string): Promise<void> {
   const org = await orgActual();

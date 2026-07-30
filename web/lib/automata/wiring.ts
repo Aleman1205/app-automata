@@ -257,6 +257,19 @@ function getStorage(): R2Storage {
   ));
 }
 
+// Storage del data-plane (mismo puerto `Storage`): R2 en producción; en DEV (doble-gated)
+// LocalStorage sobre AUTOMATA_DEV_STORAGE_DIR — igual que el Run (correrAutomatizacion). Así el
+// build (subida de ejemplo → disparo → cosecha) corre LOCAL sin credenciales de R2. Fuera de DEV
+// nunca toca disco: getStorage() exige las R2_* (fail-closed).
+function almacen() {
+  if (DEV) {
+    const dir = process.env.AUTOMATA_DEV_STORAGE_DIR;
+    if (!dir) throw new Error("falta AUTOMATA_DEV_STORAGE_DIR (modo dev local)");
+    return new LocalStorage(dir);
+  }
+  return getStorage();
+}
+
 // Comparación en tiempo constante del secreto del cron (Vercel Cron manda `Authorization:
 // Bearer <CRON_SECRET>`). Fail-closed: longitudes distintas o header ausente → false.
 function autorizadoCron(req: Request): boolean {
@@ -337,7 +350,7 @@ function getCosechaDeps(): CosechaDeps {
   return {
     pool: getPoolOwner(),
     cosechador: new CmaBuildClient(),
-    storage: getStorage(),
+    storage: almacen(),
     notificador: getNotificador(), // avisa por correo al confirmar/fallar (best-effort)
   };
 }
@@ -356,7 +369,7 @@ function getDisparoDeps(): DisparoDeps {
     pool: getPoolOwner(),
     planeador: new PlannerAgent(),
     cosechador: new CmaBuildClient(),
-    storage: getStorage(),
+    storage: almacen(),
     ahora: () => new Date().toISOString(),
   };
 }
@@ -399,7 +412,7 @@ export async function subirEjemplo(req: Request, orgId: string): Promise<Respons
       throw e;
     }
     const key = `ejemplos/${org}/${randomUUID()}.${ext}`;
-    await getStorage().put(key, bytes);
+    await almacen().put(key, bytes);
     return R.creado({ ejemploKey: key }); // el cliente la pasa a POST /construir
   });
   return handler(req, orgId);

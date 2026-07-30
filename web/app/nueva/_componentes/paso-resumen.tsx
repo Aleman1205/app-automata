@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, FileCheck2, FileSpreadsheet } from "lucide-react";
+import { useRef } from "react";
+import { Check, FileCheck2, FileSpreadsheet, Upload } from "lucide-react";
 import { Boton } from "@/components/ui/boton";
 import { Etiqueta } from "@/components/ui/etiqueta";
 import { Tarjeta } from "@/components/ui/tarjeta";
@@ -20,13 +21,22 @@ export interface DatosResumen {
 // `datos` viene del intake real; si no, cae al spec de demo.
 export function PasoResumen({
   datos = specResumen,
+  archivo,
+  onArchivo,
+  cargando = false,
+  error,
   onCorregir,
   onAprobar,
 }: {
   datos?: DatosResumen;
+  archivo: File | null;
+  onArchivo: (f: File) => void;
+  cargando?: boolean;
+  error?: string | null;
   onCorregir: () => void;
   onAprobar: () => void;
 }) {
+  const inputRef = useRef<HTMLInputElement>(null);
   return (
     <div>
       <Reveal>
@@ -127,11 +137,58 @@ export function PasoResumen({
       </div>
 
       <Reveal retraso={0.55} className="mt-8">
+        <Etiqueta>ARCHIVO DE EJEMPLO</Etiqueta>
+        <input
+          ref={inputRef}
+          type="file"
+          className="hidden"
+          accept=".csv,.xlsx,.xls,.xml,.pdf,.jpg,.jpeg,.png,.zip"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onArchivo(f);
+            e.target.value = ""; // permite re-elegir el mismo archivo
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className={`mt-3 flex w-full items-center gap-4 rounded-2xl bg-hueso p-5 text-left transition hover:border-sepia ${
+            archivo ? "border border-linea" : "border-2 border-dashed border-linea"
+          }`}
+        >
+          {archivo ? (
+            <>
+              <FileSpreadsheet className="size-6 shrink-0 text-sepia" strokeWidth={1.75} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-bold text-tinta">{archivo.name}</p>
+                <p className="text-sm text-sepia">Con esto construimos y probamos tu automatización</p>
+              </div>
+              <Check className="size-5 shrink-0 text-oliva" strokeWidth={3} />
+            </>
+          ) : (
+            <>
+              <Upload className="size-6 shrink-0 text-sepia" strokeWidth={1.75} />
+              <div className="min-w-0 flex-1">
+                <p className="font-bold text-tinta">Sube tu archivo de ejemplo</p>
+                <p className="text-sm text-sepia">Lo necesitamos para construir y probar tu automatización</p>
+              </div>
+            </>
+          )}
+        </button>
+      </Reveal>
+
+      <Reveal retraso={0.6} className="mt-6">
         <Etiqueta>
           PODRÁS PEDIR HASTA 3 AJUSTES CUANDO ESTÉ LISTA · LAS REPARACIONES SON
           GRATIS
         </Etiqueta>
       </Reveal>
+
+      {error && (
+        <div className="mt-6 rounded-xl border border-linea bg-papel px-4 py-3 text-sm text-ladrillo">
+          {error}
+        </div>
+      )}
 
       <Reveal
         retraso={0.63}
@@ -140,8 +197,13 @@ export function PasoResumen({
         <Boton variante="fantasma" onClick={onCorregir}>
           Corregir mis respuestas
         </Boton>
-        <Boton variante="acento" icono="check" onClick={onAprobar}>
-          Aprobar y construir
+        <Boton
+          variante="acento"
+          icono="check"
+          deshabilitado={cargando || !archivo}
+          onClick={onAprobar}
+        >
+          {cargando ? "Construyendo…" : "Aprobar y construir"}
         </Boton>
       </Reveal>
     </div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Check, FileSpreadsheet, Upload } from "lucide-react";
 import { Boton } from "@/components/ui/boton";
@@ -129,43 +130,64 @@ function TarjetaOtra({
   );
 }
 
-// Pregunta tipo "archivo": dropzone que simula la subida al hacer clic.
+// Pregunta tipo "archivo": dropzone REAL — abre el selector del sistema y captura el File.
+// Ese archivo es el EJEMPLO con el que se construye la automatización (POST /ejemplo → /construir).
 function ZonaArchivo({
   ayuda,
-  subido,
-  onSubir,
+  archivo,
+  onArchivo,
   onSaltar,
 }: {
   ayuda?: string;
-  subido: boolean;
-  onSubir: () => void;
+  archivo: File | null;
+  onArchivo: (f: File) => void;
   onSaltar: () => void;
 }) {
-  if (subido) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const abrir = () => inputRef.current?.click();
+  const input = (
+    <input
+      ref={inputRef}
+      type="file"
+      className="hidden"
+      accept=".csv,.xlsx,.xls,.xml,.pdf,.jpg,.jpeg,.png,.zip"
+      onChange={(e) => {
+        const f = e.target.files?.[0];
+        if (f) onArchivo(f);
+        e.target.value = ""; // permite re-elegir el mismo archivo
+      }}
+    />
+  );
+
+  if (archivo) {
     return (
-      <motion.div
+      <motion.button
+        type="button"
+        onClick={abrir}
         initial={{ scale: 0.85, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         transition={{ type: "spring", stiffness: 320, damping: 24 }}
-        className="flex items-center gap-4 rounded-2xl border border-linea bg-hueso p-5"
+        className="flex w-full items-center gap-4 rounded-2xl border border-linea bg-hueso p-5 text-left transition hover:border-sepia"
       >
+        {input}
         <FileSpreadsheet className="size-6 shrink-0 text-sepia" strokeWidth={1.75} />
         <div className="min-w-0 flex-1">
-          <p className="font-bold text-tinta">ventas-marzo.xlsx</p>
+          <p className="truncate font-bold text-tinta">{archivo.name}</p>
           <p className="text-sm text-sepia">
             Recibido — con esto entendemos tu proceso a la primera
           </p>
         </div>
         <Check className="size-5 shrink-0 text-oliva" strokeWidth={3} />
-      </motion.div>
+      </motion.button>
     );
   }
 
   return (
     <div>
+      {input}
       <button
         type="button"
-        onClick={onSubir}
+        onClick={abrir}
         className="w-full rounded-2xl border-2 border-dashed border-linea p-12 text-center transition hover:border-sepia"
       >
         <Upload className="mx-auto size-8 text-sepia" strokeWidth={1.75} />
@@ -197,18 +219,18 @@ export function PasoPreguntas({
   preguntas,
   indice,
   respuestas,
-  archivoSubido,
+  archivo,
   onResponder,
-  onSubirArchivo,
+  onArchivo,
   onAtras,
   onContinuar,
 }: {
   preguntas: PreguntaEntrevista[];
   indice: number;
   respuestas: Respuestas;
-  archivoSubido: boolean;
+  archivo: File | null;
   onResponder: (preguntaId: string, respuesta: Respuesta) => void;
-  onSubirArchivo: () => void;
+  onArchivo: (f: File) => void;
   onAtras: () => void;
   onContinuar: () => void;
 }) {
@@ -288,8 +310,8 @@ export function PasoPreguntas({
             <Reveal retraso={0.1} y={18} className="mt-8">
               <ZonaArchivo
                 ayuda={pregunta.ayuda}
-                subido={archivoSubido}
-                onSubir={onSubirArchivo}
+                archivo={archivo}
+                onArchivo={onArchivo}
                 onSaltar={onContinuar}
               />
             </Reveal>
