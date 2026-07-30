@@ -67,7 +67,8 @@
     "seed:dev": "tsx scripts/seed-dev-pg.ts",
     "m0": "tsx scripts/run-m0.ts",
     "intake:live": "tsx scripts/intake.ts",
-    "planner:live": "tsx scripts/planner.ts"
+    "planner:live": "tsx scripts/planner.ts",
+    "verify:ajuste:pg": "tsx scripts/verify-ajuste-pg.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",

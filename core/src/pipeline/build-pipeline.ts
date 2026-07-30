@@ -28,7 +28,10 @@ export interface Deps {
   ahora: () => string; // reloj inyectado (el core no usa Date directo)
 }
 
-function artefactoKey(versionId: string): string {
+/** Clave determinista del artefacto. Se DERIVA de version.id (no se lee de la columna): version.id
+ *  solo se obtiene por RLS de la propia org, asi que es una clave segura. Exportada para que el
+ *  ajuste recupere el codigo vigente por el MISMO camino que el Run. */
+export function artefactoKey(versionId: string): string {
   return `artefactos/${versionId}.json`;
 }
 

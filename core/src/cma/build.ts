@@ -7,6 +7,7 @@ import type {
   BuildClientAsync,
   CodigoConstruido,
   Manifiesto,
+  PeticionAjuste,
   ResultadoCosecha,
   Spec,
 } from "../types.ts";
@@ -94,7 +95,7 @@ function rubricDesde(spec: Spec, contratoTexto?: string): string {
     .join("\n");
 }
 
-function instruccionesDesde(spec: Spec, rutaRemota: string, contratoTexto?: string): string {
+function instruccionesDesde(spec: Spec, rutaRemota: string, contratoTexto?: string, ajuste?: PeticionAjuste): string {
   return [
     spec.objetivo,
     `\nEl archivo de entrada está en: ${rutaRemota}`,
@@ -104,9 +105,26 @@ function instruccionesDesde(spec: Spec, rutaRemota: string, contratoTexto?: stri
     spec.reglas.map((r) => `- ${r}`).join("\n"),
     // El planner fija la forma del resultado.json para que la vista resuelva.
     contratoTexto ? `\n${contratoTexto}` : "",
+    // AJUSTE: la automatización ya existe y el cliente pidió un cambio puntual. Se parte del
+    // código vigente para no perder el comportamiento que ya aprobó — reinventarlo desde el spec
+    // le cambiaría cosas que no pidió.
+    ajuste ? seccionAjuste(ajuste) : "",
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function seccionAjuste(a: PeticionAjuste): string {
+  return [
+    `\n─── REVISIÓN (versión ${a.numeroVersion}) ───`,
+    "Esta automatización YA EXISTE y el cliente la está usando. NO la reescribas desde cero:",
+    "parte del código de abajo y haz SOLO el cambio que pide, conservando todo lo demás",
+    "(mismas columnas, mismos nombres, mismo formato de salida) para no romperle lo que ya aprobó.",
+    `\nLo que pide el cliente, en sus palabras:\n${a.peticion}`,
+    a.codigoAnterior
+      ? `\nCódigo de la versión vigente:\n\`\`\`python\n${a.codigoAnterior}\n\`\`\``
+      : "\n(No se pudo recuperar el código anterior: reconstrúyelo desde el objetivo y las reglas, y respeta el contrato de salida.)",
+  ].join("\n");
 }
 
 // Forma (mínima, defensiva) de la sesión re-consultada. El SDK beta la tipa flojo;
@@ -202,12 +220,12 @@ export class CmaBuildClient implements BuildClientAsync {
     return { sessionId: session.id, rutaRemota };
   }
 
-  private eventoOutcome(spec: Spec, rutaRemota: string, contratoTexto?: string) {
+  private eventoOutcome(spec: Spec, rutaRemota: string, contratoTexto?: string, ajuste?: PeticionAjuste) {
     return {
       events: [
         {
           type: "user.define_outcome",
-          description: instruccionesDesde(spec, rutaRemota, contratoTexto),
+          description: instruccionesDesde(spec, rutaRemota, contratoTexto, ajuste),
           rubric: { type: "text", content: rubricDesde(spec, contratoTexto) },
           max_iterations: MAX_ITERACIONES,
         },
@@ -280,9 +298,9 @@ export class CmaBuildClient implements BuildClientAsync {
   }
 
   // ── Camino ASÍNCRONO (producción): arranca y NO espera. ──
-  async arrancar(spec: Spec, ejemploPath: string, contratoTexto?: string): Promise<ArranqueBuild> {
+  async arrancar(spec: Spec, ejemploPath: string, contratoTexto?: string, ajuste?: PeticionAjuste): Promise<ArranqueBuild> {
     const { sessionId, rutaRemota } = await this.prepararSesion(ejemploPath);
-    await this.client.beta.sessions.events.send(sessionId, this.eventoOutcome(spec, rutaRemota, contratoTexto));
+    await this.client.beta.sessions.events.send(sessionId, this.eventoOutcome(spec, rutaRemota, contratoTexto, ajuste));
     this.log(`build arrancado (asíncrono): ${sessionId}`);
     return { sessionId };
   }

@@ -238,8 +238,18 @@ export type ResultadoCosecha =
  *  cosecha vive aquí (y no en la orquestación) porque es específica del SDK de CMA:
  *  hay que RE-CONSULTAR la sesión para saber el desenlace real (el webhook es thin) y
  *  descargar los archivos de salida. */
+/** Un build de AJUSTE no parte de cero: la automatización ya existe y el cliente pidió un cambio
+ *  concreto ("además quiero el promedio"). Se le da al agente el código de la versión vigente para
+ *  que la MODIFIQUE en vez de reinventarla — si no, cada ajuste sería una automatización distinta
+ *  con el mismo nombre y el cliente perdería el comportamiento que ya había aprobado. */
+export interface PeticionAjuste {
+  peticion: string; // lo que el cliente escribió, en sus palabras
+  codigoAnterior?: string; // el artefacto vigente (si se pudo recuperar del storage)
+  numeroVersion: number; // 2, 3, 4… para que el prompt sepa que es una revisión
+}
+
 export interface BuildClientAsync extends BuildClient {
-  arrancar(spec: Spec, ejemploPath: string, contratoTexto?: string): Promise<ArranqueBuild>;
+  arrancar(spec: Spec, ejemploPath: string, contratoTexto?: string, ajuste?: PeticionAjuste): Promise<ArranqueBuild>;
   cosechar(sessionId: string): Promise<ResultadoCosecha>;
 }
 
