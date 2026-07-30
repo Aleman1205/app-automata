@@ -390,24 +390,24 @@ personas (Ana Rivera = admin/usuaria actual; Luis, Carmen, Jorge = operadores;
 Roberto = invitación pendiente). El caso del spike es un reporte de popularidad
 de productos de restaurante (archivo real anonimizado → `spike/generar-gastos.js`).
 
-## Pendientes de la auditoría del 2026-07-30 (verificados, sin arreglar)
+## Pendientes de la auditoría del 2026-07-30
 
-> Una auditoría de 6 dimensiones (19 agentes, con verificación adversarial) encontró 14
-> hallazgos. **7 ya están arreglados** (ver `git log`: cosecha atorada, grant de webhook_events,
-> alta que regalaba builds, plan que no se aplicaba, ajuste que escondía la automatización, y dos
-> desalineaciones de UI). Estos 8 quedan ABIERTOS, con su evidencia. Están ordenados por lo que
-> rompe a un cliente que paga. NO son especulaciones: cada uno se verificó contra el código.
+> Una auditoría de 6 dimensiones (19 agentes, con verificación adversarial) encontró **14
+> hallazgos verificados**. **12 quedaron arreglados** (ver `git log`). Estos son los que faltan.
 
-| # | Qué | Categoría | Esfuerzo | Evidencia |
-|---|---|---|---|---|
-| 1 | **El disparo de builds no es idempotente: un solape o un timeout construye y cobra dos o tres veces** — El claim de `build_pendiente` es un UPDATE de una sola sentencia en autocommit (core/src/pipeline/disparo. Arreglo: Convertir el claim en arrendamiento real: agregar `tomada_en timestamptz` a `build_pendiente` y reclamar sólo filas libres o con arrendamiento vencido; o llevar el id de solicitud hasta `automatizaciones` como columna UNIQUE para que el segundo drainer choque en la BD. | critica/dinero | horas | `core/src/pipeline/disparo.ts:41` |
-| 2 | **/cuenta le muestra al cliente que paga una tarjeta ajena, tres cargos inventados y un 'cancelar' que no cancela** — La página sólo trae plan/límites/uso del backend; todo lo demás es dato falso renderizado SIN gate: el negocio "Hotel Vitrales" (web/app/cuenta/page. Arreglo: Quitar de /cuenta todo lo que no venga del backend: ocultar las tarjetas de método de pago e historial hasta que exista Stripe (o usar su portal de facturación) y deshabilitar los botones demo con copy honesto ("escríbenos a …"). | critica/dinero | horas | `web/app/cuenta/page.tsx:165` |
-| 3 | **/panel es 100% demo y cualquier fallo de red reemplaza los datos del cliente por los del hotel de ejemplo** — web/app/panel/page. Arreglo: Cablear /panel a las APIs reales (o quitarlo del nav y del logo mientras no exista) y gatear todo consumo de lib/datos a DEV. | critica/contradiccion | sesion | `web/app/panel/page.tsx:45` |
-| 4 | **Un build fallido ladrillea la cuenta: 'Reintentar gratis' es un toast, la generación ya se cobró y el espacio no se libera nunca** — El botón del estado 'fallo' sólo hace `alAvisar("Reintento lanzado — te avisamos por correo")` sin ningún fetch (web/app/portafolio/_componentes/tarjeta-automatizacion. Arreglo: Elegir una política y alinear las tres capas: implementar `POST /orgs/:orgId/reintentar` que re-encole `build_pendiente` reusando la spec y `ejemplo_key` ya persistidos SIN cobrar generación (y hacer que el reintento del drainer REUSE la versión reservada en vez de crear otra), o corregir terminos/page. | alta/contradiccion | horas | `web/app/portafolio/_componentes/tarjeta-automatizacion.tsx:96` |
-| 5 | **Tras aprobar, el portafolio queda vacío y sin refresco; volver a aprobar cobra otro build** — `POST /construir` sólo encola y devuelve el id de la SOLICITUD (core/src/http/endpoints. Arreglo: Listar las solicitudes en cola en `listarAutomatizacionesEP` como tarjetas "en cola" (o crear la automatización en 'generando' dentro del request), y sondear durante ~3 min tras un `construirDesdeSpec` exitoso aunque no haya tarjetas. | alta/bug | horas | `web/app/portafolio/page.tsx:57` |
-| 6 | **No hay pantalla de registro: los CTA de venta llevan a una ruta privada y /entrar sólo sabe iniciar sesión** — web/app/entrar/[[. Arreglo: Agregar `/registrarse` como catch-all con `<SignUp signInUrl="/entrar" fallbackRedirectUrl="/portafolio">` y meterla en el `esPublica` de web/middleware. | alta/falta | horas | `web/app/entrar/[[...rest]]/page.tsx:33` |
-| 7 | **Una invitación sólo se puede aceptar si la persona NUNCA se registró antes** — `app_aceptar_invitaciones` tiene un único llamador: `app_provisionar_usuario`, y esa función retorna ANTES si el usuario ya tiene cualquier membresía (`IF v_org IS NOT NULL THEN RETURN v_org` en core/db/schema. Arreglo: En `misOrgs` (web/lib/automata/wiring. | alta/falta | horas | `core/db/schema.sql:776` |
-| 8 | **El 'solo lectura' del downgrade no aplica al Run: se paga Base y se usan 10 automatizaciones** — `aplicarDowngrade` deja el excedente en `activa=false` ("solo lectura", docs/06 §9) y eso sí se hace cumplir para los ajustes (`app_solicitar_ajuste` lanza AJUSTE_NO_PERMITIDO:inactiva, core/db/schema. Arreglo: Agregar `AND a. | alta/dinero | horas | `core/src/pipeline/run.ts:62` |
+**Arreglado en esa tanda** (por si el `git log` queda lejos): la cosecha que se atoraba y dejaba
+sin entregar a todos los clientes; el GRANT que hacía que TODO webhook diera 500; el alta que
+regalaba ~$10 USD de builds por correo; el plan pagado que nunca se aplicaba; el ajuste que
+escondía la automatización; el disparo que podía cobrar el mismo build dos veces; la invitación
+que solo servía si la persona nunca se había registrado; el downgrade que no le quitaba el Run;
+la falta de pantalla de registro (los 6 CTA de venta iban a una ruta privada); /cuenta con tarjeta
+y cargos ajenos; /panel demo en el nav; y el "Reintentar gratis" que era un toast.
 
-El detalle completo (escenario del cliente + arreglo propuesto) quedó en el reporte de la
-auditoría; estos títulos y evidencias alcanzan para retomar cualquiera sin re-investigar.
+### Lo que queda (2, ambos necesitan código nuevo, no copy)
+
+| # | Qué | Por qué importa | Evidencia |
+|---|---|---|---|
+| 1 | **`POST /orgs/:orgId/reintentar`** — re-encolar un build fallido reusando `spec` y `ejemplo_key` (ya persistidos) SIN cobrar generación, y que el drainer REUSE la versión reservada en vez de crear otra. | Hoy un build fallido deja la generación cobrada y el espacio ocupado para siempre. La tarjeta ya dice la verdad ("escríbenos"), pero el cliente sigue pagando por algo que no recibió. | `web/app/portafolio/_componentes/tarjeta-automatizacion.tsx` |
+| 2 | **Tras aprobar, el portafolio queda vacío** — `/construir` solo encola y devuelve el id de la SOLICITUD, así que hasta que el cron corra no hay tarjeta. Listar las solicitudes en cola como tarjetas "en cola" (o crear la automatización en generando dentro del request). | El cliente aprueba, llega a un portafolio vacío y es probable que vuelva a aprobar — y eso sí cobra otro build. | `core/src/http/endpoints.ts` (listarAutomatizacionesEP) |
+
+Y **/panel** sigue sin consumir las APIs: se quitó del nav, hay que cablearlo o borrarlo.
