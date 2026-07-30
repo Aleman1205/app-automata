@@ -199,6 +199,15 @@ cd web && pnpm dev                         # → localhost:3000 (portafolio/cuen
 
 - **Front, spike y motor son proyectos separados**: front usa `pnpm` en `web/`;
   el spike usa `npm` en la raíz; el motor usa `npm` en `core/`. No mezclar.
+- ⚠️ **Si editas `core/`, corre `pnpm install` en `web/` para que el front lo vea.**
+  `web` declara `automata-core` como `file:../core`, y pnpm lo **COPIA** a su store
+  (`node_modules/automata-core` → `.pnpm/automata-core@file+..+core_zod…`): NO es un
+  symlink al fuente. Sin ese `install`, el front sigue corriendo la versión anterior
+  de core aunque `core/` ya esté arreglado — y los `verify:*` (que sí leen `../src`)
+  pasan en verde, así que el síntoma parece un bug del producto. Ya pasó: el drainer
+  del front descartaba un build tras 2 intentos porque usaba la copia vieja.
+  Reinicia `pnpm dev` después del `install` (cambiar `node_modules` bajo el server
+  lo tumba).
 - Los `verify:*` con sufijo **`:pg`** necesitan un Postgres alcanzable (en las
   pruebas de Fase 1 se usó uno temporal en el puerto **55432**); los demás corren
   sin BD.

@@ -7,6 +7,7 @@ import type { PlanResultado } from "../planner/schema.ts";
 import { PgStateRepo } from "../state/pg.ts";
 import { arrancarConstruccion } from "./build-pipeline.ts";
 import { registrarIncidente } from "../ops/incidentes.ts";
+import type { Notificador } from "../ops/notificaciones.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Drainer del DISPARO de build (a3-s6): saca solicitudes de build_pendiente (que el endpoint
@@ -25,23 +26,28 @@ export interface DisparoDeps {
   cosechador: BuildClientAsync;
   storage: Storage;
   ahora: () => string; // reloj inyectado (el core no usa Date directo)
+  notificador?: Notificador; // opcional: avisa por correo si el build se descarta (best-effort)
 }
 const MAX_INTENTOS = 3;
 
 export async function drenarBuilds(deps: DisparoDeps, opts?: { lote?: number }): Promise<{ arrancados: number; fallidos: number; pendientes: number }> {
   const lote = opts?.lote ?? 10;
   let arrancados = 0, fallidos = 0, pendientes = 0;
-  const vistos = new Set<string>();
+  const vistos: string[] = [];
   for (let i = 0; i < lote; i++) {
+    // Las ya vistas se EXCLUYEN en el SELECT, no después de reclamarlas: reclamar para luego
+    // descartar la fila incrementaba `intentos` sin procesarla, y así el presupuesto de
+    // reintentos se gastaba al doble (una fila se descartaba tras 2 intentos reales, no 3).
     const claim = await deps.pool.query<{ id: string; org_id: string; nombre: string; spec: Spec; ejemplo_key: string; intentos: number }>(
       `UPDATE build_pendiente SET intentos = intentos + 1
-         WHERE id = (SELECT id FROM build_pendiente ORDER BY creada FOR UPDATE SKIP LOCKED LIMIT 1)
+         WHERE id = (SELECT id FROM build_pendiente WHERE NOT (id = ANY($1::uuid[]))
+                      ORDER BY creada FOR UPDATE SKIP LOCKED LIMIT 1)
        RETURNING id, org_id, nombre, spec, ejemplo_key, intentos`,
+      [vistos],
     );
     const row = claim.rows[0];
-    if (!row) break;
-    if (vistos.has(row.id)) break; // ya recorrimos lo pendiente
-    vistos.add(row.id);
+    if (!row) break; // no queda nada pendiente que no hayamos recorrido
+    vistos.push(row.id);
     try {
       // 1. Planner → vista + contrato (modelo, fuera del request).
       const plan = await deps.planeador.planear(row.spec);
@@ -66,6 +72,11 @@ export async function drenarBuilds(deps: DisparoDeps, opts?: { lote?: number }):
       if (row.intentos >= MAX_INTENTOS) {
         await registrarIncidente(deps.pool, { tipo: "otro", severidad: "alta", orgId: row.org_id, detalle: `disparo de build descartado tras ${row.intentos} intentos: ${(e as { message?: string })?.message ?? e}` }).catch(() => {});
         await deps.pool.query("DELETE FROM build_pendiente WHERE id = $1", [row.id]);
+        // AVISAR AL CLIENTE. El incidente es para operaciones; sin este correo el cliente se
+        // queda con el "ya está construyendo, te avisamos" de la pantalla de cierre y NADIE le
+        // dice que no va a llegar (la automatización nunca se creó, así que su portafolio ni la
+        // muestra). Best-effort: el descarte ya ocurrió, un correo caído no lo revierte.
+        await deps.notificador?.notificar({ tipo: "fallo", orgId: row.org_id, nombre: row.nombre }).catch(() => {});
         fallidos++;
       } else {
         pendientes++;

@@ -331,9 +331,16 @@ let notificadorInst: Notificador | undefined;
 function getNotificador(): Notificador {
   return (notificadorInst ??= {
     async notificar(evento: EventoCorreo) {
-      const a = await getPoolOwner().query<{ nombre: string }>("SELECT nombre FROM automatizaciones WHERE id = $1 AND org_id = $2", [evento.automatizacionId, evento.orgId]);
-      const nombre = a.rows[0]?.nombre ?? "tu automatización";
-      const url = `${env("APP_ORIGIN")}/portafolio/${evento.automatizacionId}`;
+      // Sin automatizacionId el aviso es de un build descartado antes de existir: el nombre viene
+      // en el evento (de la solicitud encolada) y el link va al portafolio, no a un detalle que
+      // no existe.
+      let nombre = evento.nombre ?? "tu automatización";
+      let url = `${env("APP_ORIGIN")}/portafolio`;
+      if (evento.automatizacionId) {
+        const a = await getPoolOwner().query<{ nombre: string }>("SELECT nombre FROM automatizaciones WHERE id = $1 AND org_id = $2", [evento.automatizacionId, evento.orgId]);
+        nombre = a.rows[0]?.nombre ?? nombre;
+        url = `${env("APP_ORIGIN")}/portafolio/${evento.automatizacionId}`;
+      }
       await enviarResend(await correosAdmins(evento.orgId), plantillaCorreo(evento.tipo, { nombre, url }));
     },
   });
@@ -371,6 +378,7 @@ function getDisparoDeps(): DisparoDeps {
     cosechador: new CmaBuildClient(),
     storage: almacen(),
     ahora: () => new Date().toISOString(),
+    notificador: getNotificador(), // si el build se descarta tras 3 intentos, avisarle al cliente
   };
 }
 

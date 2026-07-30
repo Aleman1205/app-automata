@@ -14,7 +14,12 @@ export type TipoCorreo = "lista" | "fallo" | "revision";
 export interface EventoCorreo {
   tipo: TipoCorreo;
   orgId: string;
-  automatizacionId: string;
+  // Ausente cuando el aviso es de un build que se descartó ANTES de existir: si el disparo agota
+  // sus intentos, nunca se creó la automatización (la crea arrancarConstruccion), así que no hay
+  // id que resolver ni detalle al que linkear. En ese caso el evento carga el `nombre` que venía
+  // en la solicitud encolada.
+  automatizacionId?: string;
+  nombre?: string;
 }
 
 export interface Correo {
