@@ -157,8 +157,13 @@ export async function drenarAjustes(
       id: string; org_id: string; automatizacion_id: string; peticion: string; intentos: number;
       nombre: string; spec: Spec | null; ejemplo_key: string | null;
     }>(
-      `UPDATE ajuste_pendiente SET intentos = intentos + 1
-         WHERE id = (SELECT ap.id FROM ajuste_pendiente ap WHERE NOT (ap.id = ANY($1::uuid[]))
+      // Mismo ARRENDAMIENTO que el disparo de builds, por la misma razón: el lock del claim no
+      // sobrevive al trabajo caro, así que sin `tomada_en` dos crons solapados arrancarían dos
+      // ajustes de la misma automatización (y el segundo, además, chocaría con el "build en vuelo").
+      `UPDATE ajuste_pendiente SET intentos = intentos + 1, tomada_en = now()
+         WHERE id = (SELECT ap.id FROM ajuste_pendiente ap
+                      WHERE NOT (ap.id = ANY($1::uuid[]))
+                        AND (ap.tomada_en IS NULL OR ap.tomada_en < now() - interval '15 minutes')
                       ORDER BY ap.creada FOR UPDATE SKIP LOCKED LIMIT 1)
        RETURNING id, org_id, automatizacion_id, peticion, intentos,
                  (SELECT nombre      FROM automatizaciones a WHERE a.id = automatizacion_id) AS nombre,
@@ -197,6 +202,9 @@ export async function drenarAjustes(
         fallidos++;
       } else {
         pendientes++;
+        // Soltar el arrendamiento al fallar (igual que el disparo): protege el trabajo en vuelo, no
+        // debe retrasar el reintento.
+        await deps.poolOwner.query("UPDATE ajuste_pendiente SET tomada_en = NULL WHERE id = $1", [row.id]).catch(() => {});
         console.error(`[ajuste] error arrancando ${row.id} (intento ${row.intentos}, se reintenta):`, msg);
       }
     }

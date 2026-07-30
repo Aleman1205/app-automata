@@ -112,6 +112,14 @@ ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_estado_check;
 ALTER TABLE subscriptions ADD  CONSTRAINT subscriptions_estado_check
   CHECK (estado IN ('pendiente', 'activa', 'morosa', 'cancelada'));
 
+-- ARRENDAMIENTO de las colas. El claim es un UPDATE en autocommit, así que su FOR UPDATE SKIP
+-- LOCKED suelta el lock ANTES del trabajo caro (planner + sesión de CMA, decenas de segundos):
+-- dos corridas de cron que se solapan reclamaban LA MISMA fila y construían —y COBRABAN— el mismo
+-- build dos o tres veces. Con `tomada_en` solo se reclama lo libre o lo vencido, así que un drainer
+-- que muere a la mitad libera su fila solo al vencer el plazo, sin dejarla trabada para siempre.
+ALTER TABLE build_pendiente  ADD COLUMN IF NOT EXISTS tomada_en timestamptz;
+ALTER TABLE ajuste_pendiente ADD COLUMN IF NOT EXISTS tomada_en timestamptz;
+
 ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS spec        jsonb;
 ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS ejemplo_key text;
 

@@ -100,6 +100,23 @@ async function main() {
     check("el aviso es de tipo 'fallo' y trae el nombre de la solicitud", avisos[0]?.tipo === "fallo" && avisos[0]?.nombre === "Reporte Que Falla");
     check("el aviso NO trae automatizacionId (nunca se creó)", avisos[0]?.automatizacionId === undefined);
     check("no creó automatización huérfana", (await uno("SELECT count(*)::int AS n FROM automatizaciones WHERE org_id=$1 AND nombre='Reporte Que Falla'", [A]))?.["n"] === 0);
+
+    // El bug de dinero: el lock del claim muere con el UPDATE (autocommit) y el trabajo caro corre
+    // fuera, asi que dos crons solapados reclamaban la MISMA fila y construian —y COBRABAN— el
+    // mismo build dos veces (~1.8 USD cada uno). Se prueba con dos drainers EN PARALELO.
+    console.log(String.fromCharCode(10) + "5. Dos drainers solapados NO construyen el mismo build dos veces:");
+    await admin.query("DELETE FROM build_pendiente");
+    await conOrg(app, A, (c) => c.query("SELECT app_solicitar_build($1, $2::jsonb, $3)", ["Una sola vez", spec, "ejemplos/" + A + "/m.csv"]));
+    const lento = new FakePlaneador();
+    lento.planear = async () => { await new Promise((r) => setTimeout(r, 400)); return plan; }; // build lento
+    const solapado = new FakeCosechador();
+    solapado.arrancar = async () => ({ sessionId: `sess_solape_${++solapado.n}` }); // prefijo propio: no choca con los de arriba
+    const depsLento: DisparoDeps = { ...deps, planeador: lento, cosechador: solapado };
+    const [d1, d2] = await Promise.all([drenarBuilds(depsLento), drenarBuilds(depsLento)]);
+    const total = d1.arrancados + d2.arrancados;
+    check("solo UNO de los dos lo arranco (arrancados=" + total + ")", total === 1);
+    check("y existe UNA sola automatizacion con ese nombre (no dos cobros)",
+      (await uno("SELECT count(*)::int AS n FROM automatizaciones WHERE org_id=$1 AND nombre=$2", [A, "Una sola vez"]))?.["n"] === 1);
   } finally {
     await admin.query("DELETE FROM build_pendiente WHERE org_id=$1", [A]).catch(() => {});
     await admin.query("DELETE FROM incidentes WHERE org_id=$1", [A]).catch(() => {});

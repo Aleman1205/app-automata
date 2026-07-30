@@ -39,8 +39,15 @@ export async function drenarBuilds(deps: DisparoDeps, opts?: { lote?: number }):
     // descartar la fila incrementaba `intentos` sin procesarla, y así el presupuesto de
     // reintentos se gastaba al doble (una fila se descartaba tras 2 intentos reales, no 3).
     const claim = await deps.pool.query<{ id: string; org_id: string; nombre: string; spec: Spec; ejemplo_key: string; intentos: number }>(
-      `UPDATE build_pendiente SET intentos = intentos + 1
-         WHERE id = (SELECT id FROM build_pendiente WHERE NOT (id = ANY($1::uuid[]))
+      // ARRENDAMIENTO (`tomada_en`): solo se reclama lo libre o lo vencido. El lock del claim muere
+      // con el UPDATE (autocommit) y el trabajo caro —planner + sesión de CMA, decenas de segundos—
+      // corre FUERA de él, así que dos corridas de cron solapadas reclamaban la MISMA fila y
+      // construían y COBRABAN el mismo build dos o tres veces (~$1.8 cada uno). Nada aguas abajo lo
+      // rescataba: arrancarConstruccion crea una automatización nueva cada vez.
+      `UPDATE build_pendiente SET intentos = intentos + 1, tomada_en = now()
+         WHERE id = (SELECT id FROM build_pendiente
+                      WHERE NOT (id = ANY($1::uuid[]))
+                        AND (tomada_en IS NULL OR tomada_en < now() - interval '15 minutes')
                       ORDER BY creada FOR UPDATE SKIP LOCKED LIMIT 1)
        RETURNING id, org_id, nombre, spec, ejemplo_key, intentos`,
       [vistos],
@@ -80,6 +87,10 @@ export async function drenarBuilds(deps: DisparoDeps, opts?: { lote?: number }):
         fallidos++;
       } else {
         pendientes++;
+        // SOLTAR el arrendamiento al fallar: protege el trabajo EN VUELO, no debe retrasar el
+        // reintento. Sin esto una falla transitoria dejaba la fila apartada 15 min antes de
+        // reintentarse — y el presupuesto de 3 intentos tardaba 45 min en agotarse.
+        await deps.pool.query("UPDATE build_pendiente SET tomada_en = NULL WHERE id = $1", [row.id]).catch(() => {});
         console.error(`[disparo] error arrancando build ${row.id} (intento ${row.intentos}, se reintenta):`, (e as { message?: string })?.message ?? e);
       }
     }
