@@ -15,7 +15,9 @@ import { TogglePeriodo, type Periodo } from "./_componentes/toggle-periodo";
 import { TarjetaPlan } from "./_componentes/tarjeta-plan";
 
 const garantias: { Icono: LucideIcon; texto: string }[] = [
-  { Icono: Infinito, texto: "Ejecuciones sin límite" },
+  // No prometemos "sin límite": la BD corta duro en 500/2,000/10,000 ejecuciones al mes según el
+  // plan (tabla `planes`), así que la garantía es que construir no se cobra por corrida.
+  { Icono: Infinito, texto: "Pagas por construirla, no por cada uso" },
   { Icono: Wrench, texto: "Reparaciones gratis siempre" },
   {
     Icono: DoorOpen,

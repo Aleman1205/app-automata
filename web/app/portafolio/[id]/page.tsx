@@ -43,6 +43,13 @@ const PASOS_EJECUCION = [
 
 const EASING: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
+// El nombre real del archivo que se baja. Se conserva la base que puso el agente ("dashboard.xlsx"
+// → "dashboard.json") para que el cliente reconozca cuál es, pero la extensión dice la verdad.
+function nombreDescarga(archivoSalida?: string): string {
+  const base = (archivoSalida ?? "").trim().replace(/\.[^./\\]+$/, "");
+  return `${base.length > 0 ? base : "resultado"}.json`;
+}
+
 function Girador() {
   return (
     <svg
@@ -318,14 +325,18 @@ export default function PaginaDetalle({
     avisar("Automatización definitiva");
   };
 
-  // Descarga el resultado: en real, baja el JSON de verdad; en demo, solo avisa.
+  // Descarga el resultado: en real baja el JSON de verdad; en demo solo avisa.
+  // El nombre SIEMPRE termina en .json porque es lo que realmente se serializa. Antes usaba
+  // archivoSalida tal cual (p.ej. "dashboard.xlsx"), así que el cliente bajaba un .xlsx que era
+  // JSON adentro y Excel se lo rechazaba como archivo corrupto. El .xlsx de verdad lo escribe el
+  // script en el runner y hoy no se conserva — hasta que se conserve, no se puede ofrecer.
   const descargar = () => {
     if (esReal && resultadoMostrar) {
       const blob = new Blob([JSON.stringify(resultadoMostrar, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const enlace = document.createElement("a");
       enlace.href = url;
-      enlace.download = resultadoMostrar.archivoSalida || "resultado.json";
+      enlace.download = nombreDescarga(resultadoMostrar.archivoSalida);
       enlace.click();
       URL.revokeObjectURL(url);
       return;
@@ -536,7 +547,7 @@ export default function PaginaDetalle({
               icono="descarga"
               onClick={descargar}
             >
-              {`Descargar ${resultadoMostrar.archivoSalida}`}
+              {`Descargar ${esReal ? nombreDescarga(resultadoMostrar.archivoSalida) : resultadoMostrar.archivoSalida}`}
             </Boton>
           </Reveal>
         </section>

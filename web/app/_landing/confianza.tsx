@@ -19,8 +19,10 @@ const tarjetas: { Icono: LucideIcon; titulo: string; detalle: string }[] = [
   },
   {
     Icono: Infinito,
-    titulo: "Ejecuciones sin límite",
-    detalle: "Usa tus automatizaciones las veces que necesites.",
+    // Decía "sin límite", pero los planes cortan en 500/2,000/10,000 al mes (tabla `planes`).
+    // Prometer lo que la BD niega deja al cliente sin servicio a media mensualidad.
+    titulo: "Usarla no se cobra aparte",
+    detalle: "Pagas por construir la automatización, no por cada vez que la corres.",
   },
 ];
 

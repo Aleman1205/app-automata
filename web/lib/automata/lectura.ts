@@ -203,7 +203,19 @@ export async function verAutomatizacion(id: string): Promise<Automatizacion | nu
       ultimaEjecucion: d.ultimaEjecucion ? fechaCorta(d.ultimaEjecucion) : undefined,
       ajustesUsados: d.ajustesUsados,
       entradas: [
-        { id: "archivo", tipo: "archivo", etiqueta: "Tu archivo de ventas", ayuda: "CSV con columnas: vendedor, monto", formatos: ["csv"] },
+        // Genérica A PROPÓSITO: el manifiesto real (nombre y formato que espera esta automatización)
+        // vive en el artefacto y el endpoint de detalle todavía no lo expone. Antes esto decía "Tu
+        // archivo de ventas — CSV con columnas: vendedor, monto" y sólo aceptaba .csv para CUALQUIER
+        // automatización: a un hotel con facturas en XML el selector no le dejaba ni escoger su
+        // archivo, y el texto describía un proceso que no era el suyo. Mejor pedir el archivo sin
+        // inventarle columnas y aceptar lo que el gate admite; el gate rechaza lo que no sirva.
+        {
+          id: "archivo",
+          tipo: "archivo",
+          etiqueta: "Tu archivo",
+          ayuda: "Sube el archivo que esta automatización procesa (el mismo tipo que nos diste de ejemplo).",
+          formatos: ["csv", "xlsx", "xls", "pdf", "txt", "xml", "zip", "jpg", "jpeg", "png"],
+        },
       ],
       resultado: undefined, // llega del Run real
       historial,
