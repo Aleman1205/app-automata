@@ -11,11 +11,22 @@
 -- Rol de aplicación: LOGIN (la app conecta como él), NOSUPERUSER, NOBYPASSRLS,
 -- NO dueño de las tablas. El password se fija fuera de banda (secreto); en local
 -- con --auth=trust conecta sin password.
+-- NOSUPERUSER/NOBYPASSRLS NO se escriben en el DDL a propósito: son los valores por defecto de
+-- CREATE ROLE, y nombrarlos —incluso para reafirmarlos— cuenta como "cambiar el atributo
+-- SUPERUSER", que solo un superusuario puede hacer. En Postgres administrado (Neon, RDS) el rol
+-- dueño NO es superusuario, así que la versión anterior fallaba con "permission denied to alter
+-- role" al re-aplicar el esquema. En vez de pedir un privilegio que no existe ahí, se AFIRMA el
+-- resultado: si el rol quedara superuser o bypassrls, RLS no aplicaría y el aislamiento entre
+-- clientes sería ficción, así que se aborta ruidosamente en vez de continuar. (El arranque de la
+-- app lo revisa otra vez: afirmarRolSeguro en core/src/db/pg.ts rechaza conectar con un rol así.)
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'automata_app') THEN
-    CREATE ROLE automata_app LOGIN NOSUPERUSER NOBYPASSRLS;
+    CREATE ROLE automata_app LOGIN;
   ELSE
-    ALTER ROLE automata_app LOGIN NOSUPERUSER NOBYPASSRLS;
+    ALTER ROLE automata_app LOGIN;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'automata_app' AND (rolsuper OR rolbypassrls)) THEN
+    RAISE EXCEPTION 'automata_app es SUPERUSER o BYPASSRLS: RLS no lo contendría y el aislamiento por org sería ficción. Corrígelo con un rol superusuario antes de seguir.';
   END IF;
 END $$;
 
@@ -534,11 +545,16 @@ $fn$;
 -- Rol del pool de webhooks: no-super, no-dueño (afirmarRolSeguro lo acepta), con los
 -- privilegios MÍNIMOS para el receptor + los handlers, y sujeto a RLS (por eso necesita
 -- los resolvers y app.current_org). NO puede leer cross-org por sí mismo.
+-- Mismo criterio que automata_app: los atributos por defecto no se nombran (nombrarlos exige
+-- superusuario y rompe en Postgres administrado) y el resultado se AFIRMA.
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'automata_webhook') THEN
-    CREATE ROLE automata_webhook LOGIN NOSUPERUSER NOBYPASSRLS;
+    CREATE ROLE automata_webhook LOGIN;
   ELSE
-    ALTER ROLE automata_webhook LOGIN NOSUPERUSER NOBYPASSRLS;
+    ALTER ROLE automata_webhook LOGIN;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'automata_webhook' AND (rolsuper OR rolbypassrls)) THEN
+    RAISE EXCEPTION 'automata_webhook es SUPERUSER o BYPASSRLS: los handlers dejarían de estar contenidos por RLS. Corrígelo con un rol superusuario antes de seguir.';
   END IF;
 END $$;
 
