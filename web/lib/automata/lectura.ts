@@ -268,8 +268,10 @@ export async function listarEjecuciones(automatizacionId: string): Promise<Ejecu
   try {
     const r = await fetch(`/api/orgs/${org}/ejecuciones?id=${encodeURIComponent(automatizacionId)}`, { headers: { accept: "application/json" }, cache: "no-store" });
     if (!r.ok) return [];
-    const d = (await r.json()) as { ejecuciones: { id: string; estado: string; ms: number; creada: string | null }[] };
+    const d = (await r.json()) as { ejecuciones: { id: string; estado: string; ms: number; creada: string | null; tieneResultado?: boolean }[] };
     return d.ejecuciones.map((e) => ({
+      id: e.id,
+      tieneResultado: !!e.tieneResultado,
       fecha: fechaCorta(e.creada),
       archivo: "—",
       duracion: e.ms >= 1000 ? `${(e.ms / 1000).toFixed(1)} s` : `${e.ms} ms`,
@@ -459,6 +461,20 @@ export async function construirDesdeSpec(spec: SpecIntake, file: File): Promise<
   const d = (await r.json().catch(() => ({}))) as { id?: string };
   if (!d.id) throw new Error("No se pudo iniciar la construcción. Intenta de nuevo.");
   return d.id;
+}
+
+/** Baja el resultado de una corrida PASADA (GET /resultado). El Run ya lo guardaba en el storage,
+ *  pero nadie lo leía de vuelta: el cliente corría su automatización, cerraba la pestaña, y su
+ *  reporte quedaba inalcanzable. La clave del objeto la resuelve el backend bajo RLS — aquí solo
+ *  viaja el id de la ejecución. Devuelve null si esa corrida no dejó resultado (p.ej. falló). */
+export async function resultadoDeCorrida(ejecucionId: string): Promise<ResultadoDemo | null> {
+  const org = await orgActual();
+  if (!org) return null;
+  const r = await pedir(`/api/orgs/${org}/resultado?ejecucionId=${encodeURIComponent(ejecucionId)}`, {
+    headers: { accept: "application/json" },
+  });
+  if (!r.ok) return null;
+  return (await r.json().catch(() => null)) as ResultadoDemo | null;
 }
 
 // ── Posventa: pedir un cambio / reportar una falla ───────────────────────────

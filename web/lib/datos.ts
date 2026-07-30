@@ -62,6 +62,10 @@ export interface ResultadoDemo {
 }
 
 export interface EjecucionPrevia {
+  // id + tieneResultado: lo que hace falta para volver a bajar lo que produjo esa corrida.
+  // Opcionales porque los datos falsos del prototipo no los traen.
+  id?: string;
+  tieneResultado?: boolean;
   fecha: string;
   archivo: string;
   duracion: string;

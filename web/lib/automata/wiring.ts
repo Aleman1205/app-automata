@@ -555,3 +555,35 @@ export async function correrAutomatizacion(req: Request, orgId: string): Promise
   return handler(req, orgId);
 }
 
+
+// ── Descargar el resultado de una corrida PASADA ─────────────────────────────
+// El Run ya guardaba el resultado en el storage (`resultados/<ejecucionId>.json`) y dejaba el
+// puntero en `ejecuciones.resultado_key`, pero NADIE lo leía de vuelta: el cliente corría su
+// automatización el lunes, cerraba la pestaña, y el martes su reporte era inalcanzable. El
+// historial mostraba la corrida sin forma de recuperar lo que produjo.
+//
+// Camino sancionado aparte (como subirEjemplo/correrAutomatizacion): pasa por las MISMAS 8 capas
+// vía adaptarUpload —que acepta el método, aquí GET— con acción "descargar" (admin y operador: el
+// que ejecuta también baja lo que produjo). La clave se lee de la BD bajo RLS y NUNCA del query
+// string: si viniera del cliente podría pedir el resultado de otra org.
+export async function descargarResultado(req: Request, orgId: string): Promise<Response> {
+  const handler = adaptarUpload(await getDeps(), getCfg(), { metodo: "GET", accion: "descargar" }, async (r, _org, cliente) => {
+    const id = new URL(r.url).searchParams.get("ejecucionId") ?? "";
+    if (!/^[0-9a-fA-F-]{36}$/.test(id)) return R.malParametro("ejecucionId (uuid) requerido");
+    // RLS acota a la org: una ejecución ajena simplemente no existe para esta consulta.
+    const q = await cliente.query<{ resultado_key: string | null }>(
+      "SELECT resultado_key FROM ejecuciones WHERE id = $1",
+      [id],
+    );
+    const key = q.rows[0]?.resultado_key;
+    if (q.rows.length === 0) return { status: 404, cuerpo: { error: "no_encontrada" } };
+    if (!key) return { status: 404, cuerpo: { error: "sin_resultado" } }; // corrida fallida o anterior a que se guardaran
+    try {
+      return { status: 200, cuerpo: JSON.parse(await almacen().getText(key)) as unknown };
+    } catch {
+      // El puntero existe pero el objeto no se pudo leer: no se finge un resultado vacío.
+      return { status: 502, cuerpo: { error: "resultado_no_disponible" } };
+    }
+  });
+  return handler(req, orgId);
+}
