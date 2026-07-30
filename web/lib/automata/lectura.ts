@@ -130,14 +130,19 @@ export async function verCuenta(): Promise<CuentaVista | null> {
 export interface MiembroVista {
   id: string;
   nombre: string;
-  correo: string; // vacío hasta que Clerk aporte el perfil
+  correo: string; // vacío en miembros ya registrados (el perfil vive en Clerk); real en pendientes
   rol: "admin" | "operador";
   esTu: boolean;
+  pendiente: boolean; // invitación enviada que esa persona aún no acepta
 }
 const prettyUser = (userId: string): string => {
   const base = userId.replace(/^(u_|user_)/, "");
   return base.charAt(0).toUpperCase() + base.slice(1);
 };
+// Del correo invitado sale un nombre presentable mientras esa persona no se registra:
+// "ana.rivera@hotel.mx" → "Ana Rivera".
+const prettyCorreo = (correo: string): string =>
+  correo.split("@")[0]!.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim() || correo;
 
 export async function listarEquipo(): Promise<MiembroVista[] | null> {
   const org = await orgActual();
@@ -145,8 +150,19 @@ export async function listarEquipo(): Promise<MiembroVista[] | null> {
   try {
     const r = await fetch(`/api/orgs/${org}/miembros`, { headers: { accept: "application/json" }, cache: "no-store" });
     if (!r.ok) return null;
-    const d = (await r.json()) as { miembros: { userId: string; rol: "admin" | "operador"; esTu: boolean }[] };
-    return d.miembros.map((m) => ({ id: m.userId, nombre: prettyUser(m.userId), correo: "", rol: m.rol, esTu: m.esTu }));
+    const d = (await r.json()) as {
+      miembros: { userId: string; rol: "admin" | "operador"; esTu: boolean }[];
+      invitaciones?: { correo: string; rol: "admin" | "operador" }[];
+    };
+    const activos: MiembroVista[] = d.miembros.map((m) => ({
+      id: m.userId, nombre: prettyUser(m.userId), correo: "", rol: m.rol, esTu: m.esTu, pendiente: false,
+    }));
+    // Los invitados que aún no aceptan: de ellos SÍ conocemos el correo (es lo único que hay hasta
+    // que se registran), y ocupan lugar del plan, así que se muestran como parte del equipo.
+    const pendientes: MiembroVista[] = (d.invitaciones ?? []).map((i) => ({
+      id: `inv:${i.correo}`, nombre: prettyCorreo(i.correo), correo: i.correo, rol: i.rol, esTu: false, pendiente: true,
+    }));
+    return [...activos, ...pendientes];
   } catch {
     return null;
   }
@@ -241,34 +257,38 @@ export async function listarEjecuciones(automatizacionId: string): Promise<Ejecu
   }
 }
 
-/** Invita a un miembro (POST /miembros). En dev el step-up de MFA pasa (la sesión stub trae
- *  mfaVerificadoEn=ahora). Lanza con mensaje de cliente si la cuota/único-admin/etc. rechaza. */
-export async function invitarMiembro(userId: string, rol: "admin" | "operador"): Promise<void> {
+/** Invita por CORREO (POST /miembros): deja una invitación pendiente que se vuelve membresía cuando
+ *  esa persona se registra con ese correo. Antes se mandaba un user_id derivado del correo, que
+ *  nunca casaba con el id real de Clerk. Lanza con mensaje de cliente si la cuota/MFA rechaza. */
+export async function invitarMiembro(correo: string, rol: "admin" | "operador"): Promise<void> {
   const org = await orgActual();
   if (!org) throw new Error("No hay backend configurado.");
-  const r = await fetch(`/api/orgs/${org}/miembros`, {
+  const r = await pedir(`/api/orgs/${org}/miembros`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ userId, rol }),
+    body: JSON.stringify({ correo, rol }),
   });
   if (!r.ok) {
     const err = (await r.json().catch(() => ({}))) as { error?: string };
     const msg =
       err.error === "cuota_excedida" ? "Alcanzaste el límite de personas de tu plan."
       : err.error === "step_up_requerido" ? "Necesitas verificar tu identidad (MFA)."
+      : r.status === 400 ? "Revisa el correo: no parece válido."
       : "No se pudo invitar (¿ya está en el equipo?).";
     throw new Error(msg);
   }
 }
 
-/** Quita a un miembro (DELETE /miembros). El backend no deja la org sin admin (→ mensaje). */
-export async function quitarMiembro(userId: string): Promise<void> {
+/** Quita del equipo (DELETE /miembros). Acepta el id de un miembro registrado o `inv:<correo>` para
+ *  cancelar una invitación que nadie aceptó (el id que arma listarEquipo). */
+export async function quitarMiembro(id: string): Promise<void> {
   const org = await orgActual();
   if (!org) throw new Error("No hay backend configurado.");
-  const r = await fetch(`/api/orgs/${org}/miembros`, {
+  const cuerpo = id.startsWith("inv:") ? { correo: id.slice(4) } : { userId: id };
+  const r = await pedir(`/api/orgs/${org}/miembros`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ userId }),
+    body: JSON.stringify(cuerpo),
   });
   if (!r.ok) {
     const err = (await r.json().catch(() => ({}))) as { error?: string };

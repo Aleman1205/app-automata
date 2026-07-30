@@ -190,15 +190,39 @@ export async function webhookClerk(req: Request): Promise<Response> {
   };
   const v = verificarStandardWebhook(rawBody, headers, env("CLERK_WEBHOOK_SECRET"), Date.now());
   if (!v.ok) return json(401, { error: "firma_invalida", motivo: v.motivo });
-  let evt: { type?: string; data?: { id?: string; first_name?: string | null; last_name?: string | null } };
+  let evt: {
+    type?: string;
+    data?: {
+      id?: string;
+      first_name?: string | null;
+      last_name?: string | null;
+      primary_email_address_id?: string | null;
+      email_addresses?: { id?: string; email_address?: string; verification?: { status?: string } | null }[];
+    };
+  };
   try { evt = JSON.parse(rawBody); } catch { return json(400, { error: "json_invalido" }); }
   if (evt.type !== "user.created") return json(200, { estado: "ignorado", tipo: evt.type ?? null });
   const userId = evt.data?.id;
   if (!userId) return json(200, { estado: "sin_user_id" }); // ack para no reintentar en bucle
   const persona = [evt.data?.first_name, evt.data?.last_name].filter(Boolean).join(" ").trim();
   const nombre = persona ? `Negocio de ${persona}` : undefined;
-  const { org, creada } = await provisionarUsuario(await getPool(), userId, nombre);
+  const { org, creada } = await provisionarUsuario(await getPool(), userId, nombre, correoVerificado(evt.data));
   return json(200, { estado: creada ? "provisionada" : "ya_existia", orgId: org.orgId });
+}
+
+// Correo VERIFICADO del payload de Clerk (el primario si está verificado; si no, el primero que lo
+// esté). Sin verificar NO se devuelve: el correo decide si el usuario entra a un equipo que lo
+// invitó, así que aceptar uno sin verificar dejaría que alguien se cuele poniendo el correo de otro
+// al registrarse.
+function correoVerificado(data?: {
+  primary_email_address_id?: string | null;
+  email_addresses?: { id?: string; email_address?: string; verification?: { status?: string } | null }[];
+}): string | undefined {
+  const lista = data?.email_addresses ?? [];
+  const verificado = (e: (typeof lista)[number]) => e.verification?.status === "verified" && !!e.email_address;
+  const primario = lista.find((e) => e.id === data?.primary_email_address_id);
+  const elegido = primario && verificado(primario) ? primario : lista.find(verificado);
+  return elegido?.email_address?.trim().toLowerCase();
 }
 
 // ── GET /api/yo: "¿en qué org estoy?" + onboarding perezoso ──────────────────
@@ -215,28 +239,34 @@ export async function misOrgs(req: Request): Promise<Response> {
   const pool = await getPool();
   let orgs = await orgsDeUsuario(pool, ident.userId);
   if (orgs.length === 0) {
-    // Primer acceso sin org → onboarding al vuelo. El nombre lo toma del perfil de Clerk (si hay).
-    const nombre = await nombreSugerido(ident.userId);
-    await provisionarUsuario(pool, ident.userId, nombre);
+    // Primer acceso sin org → onboarding al vuelo. Nombre y correo salen del perfil de Clerk; el
+    // correo (solo si está VERIFICADO) es lo que puede meterlo al equipo que lo invitó en vez de
+    // darle una org propia. Este es el camino que corre cuando el webhook no llegó.
+    const perfil = await perfilClerk(ident.userId);
+    await provisionarUsuario(pool, ident.userId, perfil.nombre, perfil.correo);
     orgs = await orgsDeUsuario(pool, ident.userId);
   }
   return json(200, { userId: ident.userId, orgs: orgs.map((o) => ({ id: o.orgId, rol: o.rol, nombre: o.nombre })) });
 }
 
-// Nombre bonito para la org nueva, tomado del perfil de Clerk (si el userId tiene cuenta). En DEV
-// no hay Clerk → undefined → la SD usa 'Mi negocio'. Best-effort: cualquier fallo → sin nombre.
-async function nombreSugerido(userId: string): Promise<string | undefined> {
+// Perfil del usuario en Clerk: nombre bonito para la org nueva + su correo VERIFICADO (el que puede
+// canjear una invitación pendiente). En DEV no hay Clerk → ambos undefined → la SD usa 'Mi negocio'
+// y no canjea nada. Best-effort: cualquier fallo → sin datos, el alta sigue.
+async function perfilClerk(userId: string): Promise<{ nombre?: string; correo?: string }> {
   try {
     const clerk = await clerkClient();
     const u = await clerk.users.getUser(userId);
+    const primario = u.primaryEmailAddress ?? u.emailAddresses[0];
+    // Solo verificado: ver correoVerificado() — el correo abre la puerta a un equipo ajeno.
+    const correo =
+      primario?.verification?.status === "verified" ? primario.emailAddress?.trim().toLowerCase() : undefined;
     const persona = [u.firstName, u.lastName].filter(Boolean).join(" ").trim();
-    if (persona) return `Negocio de ${persona}`;
-    const email = u.primaryEmailAddress?.emailAddress ?? u.emailAddresses[0]?.emailAddress;
-    if (email) return `Negocio de ${email.split("@")[0]}`;
+    const base = primario?.emailAddress?.split("@")[0];
+    return { nombre: persona ? `Negocio de ${persona}` : base ? `Negocio de ${base}` : undefined, correo };
   } catch {
-    /* userId sin cuenta Clerk (dev/sembrado) o Clerk no disponible → sin nombre */
+    /* userId sin cuenta Clerk (dev/sembrado) o Clerk no disponible → sin datos */
+    return {};
   }
-  return undefined;
 }
 
 // ── Cron de ops (a2): reaper de builds colgados fuera del camino de request ──

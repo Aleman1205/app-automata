@@ -80,10 +80,10 @@ async function main() {
     check("quitar sin MFA reciente → 403 step_up", err(await quitar({ sesionToken: "tok_ana_stale", cuerpo: { userId: "u_temp" } })) === "step_up_requerido");
     check("quitar con MFA en el FUTURO → 403 step_up (no evade)", err(await quitar({ sesionToken: "tok_ana_futuro", cuerpo: { userId: "u_temp" } })) === "step_up_requerido");
     check("quitar con MFA fresco → 200", (await quitar({ sesionToken: "tok_ana", cuerpo: { userId: "u_temp" } })).status === 200);
-    check("invitar SIN MFA (invitar ahora es peligrosa) → 403 step_up", err(await invitar({ sesionToken: "tok_ana_stale", cuerpo: { userId: "u_nuevo", rol: "operador" } })) === "step_up_requerido");
-    check("invitar con MFA fresco → 201", (await invitar({ cuerpo: { userId: "u_nuevo", rol: "operador" } })).status === 201);
-    check("operador NO puede invitar → 403", (await invitar({ sesionToken: "tok_luis", cuerpo: { userId: "z", rol: "operador" } })).status === 403);
-    check("invitar con rol inválido → 400", (await invitar({ cuerpo: { userId: "z", rol: "root" } })).status === 400);
+    check("invitar SIN MFA (invitar ahora es peligrosa) → 403 step_up", err(await invitar({ sesionToken: "tok_ana_stale", cuerpo: { correo: "nuevo@vitrales.mx", rol: "operador" } })) === "step_up_requerido");
+    check("invitar con MFA fresco → 201", (await invitar({ cuerpo: { correo: "nuevo@vitrales.mx", rol: "operador" } })).status === 201);
+    check("operador NO puede invitar → 403", (await invitar({ sesionToken: "tok_luis", cuerpo: { correo: "z@vitrales.mx", rol: "operador" } })).status === 403);
+    check("invitar con rol inválido → 400", (await invitar({ cuerpo: { correo: "z@vitrales.mx", rol: "root" } })).status === 400);
 
     console.log("\n4. Capa 6-7 (membresía viva) — IDOR cross-org por HTTP:");
     check("admin de A que pega a la org B → 403 (no es miembro de B)", (await crear({ orgId: B, cuerpo: { nombre: "robo" } })).status === 403);

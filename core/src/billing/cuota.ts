@@ -71,14 +71,18 @@ export async function crearAutomatizacion(c: PoolClient, nombre: string): Promis
 }
 
 /**
- * Invita/añade un miembro a la org. El trigger de la BD hace cumplir el tope de
- * usuarios del plan. Lanza CuotaExcedida('usuarios') si está lleno.
+ * Invita a alguien por CORREO: deja una invitación pendiente que se vuelve membresía cuando esa
+ * persona se registra (app_aceptar_invitaciones, desde el alta). No se puede insertar la membresía
+ * aquí porque el user_id real lo asigna Clerk al registrarse — inventarlo (p.ej. del correo) dejaba
+ * una fila huérfana que nunca casaba con el JWT.
+ * El trigger de la BD hace cumplir el tope de usuarios del plan contando miembros + pendientes.
+ * Lanza CuotaExcedida('usuarios') si está lleno.
  */
-export async function invitarMiembro(c: PoolClient, userId: string, rol: Rol): Promise<void> {
+export async function invitarPorCorreo(c: PoolClient, correo: string, rol: Rol): Promise<void> {
   try {
     await c.query(
-      "INSERT INTO memberships (org_id, user_id, rol) VALUES (app_current_org(), $1, $2)",
-      [userId, rol],
+      "INSERT INTO invitaciones (org_id, correo, rol) VALUES (app_current_org(), $1, $2) ON CONFLICT (org_id, correo) DO UPDATE SET rol = EXCLUDED.rol",
+      [correo, rol],
     );
   } catch (e) {
     comoCuota(e);

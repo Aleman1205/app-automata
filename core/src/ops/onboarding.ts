@@ -32,15 +32,25 @@ export async function orgsDeUsuario(cliente: Consultable, userId: string): Promi
 
 /** Onboarding idempotente: si el usuario ya tiene org, la devuelve; si no, crea org + plan base +
  *  membresía admin. Devuelve la org resuelta y si se creó en ESTA llamada. Concurrencia-segura
- *  (advisory lock por-usuario dentro de la SD): dos llamadas simultáneas → una sola org. */
+ *  (advisory lock por-usuario dentro de la SD): dos llamadas simultáneas → una sola org.
+ *
+ *  `correo` debe ser el correo VERIFICADO del proveedor de identidad (Clerk), nunca uno que venga
+ *  del cliente: si hay invitaciones pendientes para él, el usuario entra a ESE equipo en vez de
+ *  recibir una org propia, así que aceptar por un correo sin verificar sería colarse a un equipo
+ *  ajeno. Sin correo el alta sigue funcionando (crea org propia, como antes). */
 export async function provisionarUsuario(
   cliente: Consultable,
   userId: string,
   nombre?: string,
+  correo?: string,
 ): Promise<{ org: OrgDeUsuario; creada: boolean }> {
   const antes = await orgsDeUsuario(cliente, userId);
   const orgId = (
-    await cliente.query<{ id: string }>("SELECT app_provisionar_usuario($1, $2) AS id", [userId, nombre ?? null])
+    await cliente.query<{ id: string }>("SELECT app_provisionar_usuario($1, $2, $3) AS id", [
+      userId,
+      nombre ?? null,
+      correo ?? null,
+    ])
   ).rows[0]!.id;
   const orgs = await orgsDeUsuario(cliente, userId);
   const org = orgs.find((o) => o.orgId === orgId) ?? orgs[0]!;

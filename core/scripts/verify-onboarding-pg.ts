@@ -18,8 +18,11 @@ const U_NUEVO = "u_onb_nuevo";       // sin org → se provisiona
 const U_NOMBRE = "u_onb_nombre";     // se provisiona con nombre explícito
 const U_EXIST = "u_onb_existente";   // ya tiene una org sembrada
 const U_CONC = "u_onb_concurrente";  // dos altas en paralelo
+const U_INV = "user_onb_invitado";   // lo invitaron por correo ANTES de registrarse
+const U_SOLO = "user_onb_sin_invit"; // mismo camino, pero a él nadie lo invitó
+const CORREO_INV = "luis.invitado@vitrales.mx";
 const SEED_ORG = "0dbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1";
-const USERS = [U_NUEVO, U_NOMBRE, U_EXIST, U_CONC];
+const USERS = [U_NUEVO, U_NOMBRE, U_EXIST, U_CONC, U_INV, U_SOLO];
 
 let ok = true;
 const check = (n: string, p: boolean) => { console.log(`  ${p ? "✓" : "✗"} ${n}`); ok = ok && p; };
@@ -82,6 +85,28 @@ async function main() {
     });
     check("bajo su org ve su membresía admin", dentro.rol === "admin");
     check("RLS aísla: NO ve membresías de otra org", dentro.fugaCrossOrg === 0);
+
+    // El caso que estaba roto: a un invitado se le creaba su NEGOCIO PROPIO y la invitación quedaba
+    // colgada, así que el portafolio compartido —el pitch del plan Equipo— era inalcanzable.
+    console.log("\n7. INVITADO: se registra y entra al equipo que lo invitó (no a una org propia):");
+    await conOrg(app, SEED_ORG, (c) =>
+      c.query("INSERT INTO invitaciones (org_id, correo, rol) VALUES (app_current_org(), $1, 'operador')", [CORREO_INV]));
+    check("la invitación quedó pendiente en la org que invita", (await admin.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM invitaciones WHERE org_id = $1 AND correo = $2", [SEED_ORG, CORREO_INV])).rows[0]?.n === 1);
+    const rInv = await provisionarUsuario(app, U_INV, "Negocio de Luis", CORREO_INV);
+    check("aterriza en la org que lo invitó, NO en una nueva", rInv.org.orgId === SEED_ORG);
+    check("con el rol que le dieron (operador, no admin)", rInv.org.rol === "operador");
+    check("NO se le creó org propia", (await orgsDeUsuario(app, U_INV)).length === 1);
+    check("la invitación se consumió (ya no ocupa lugar del plan)", (await admin.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM invitaciones WHERE correo = $1", [CORREO_INV])).rows[0]?.n === 0);
+    // Segunda llamada: no debe duplicar ni, ahora que ya es miembro, crearle una org aparte.
+    const rInv2 = await provisionarUsuario(app, U_INV, undefined, CORREO_INV);
+    check("2ª alta es idempotente (misma org)", rInv2.org.orgId === SEED_ORG);
+
+    console.log("\n8. Un correo SIN invitación sigue recibiendo su propio negocio:");
+    const rSolo = await provisionarUsuario(app, U_SOLO, undefined, "nadie-lo-invito@ejemplo.mx");
+    check("se le crea org propia como admin", rSolo.org.rol === "admin" && rSolo.creada === true);
+    check("no se colgó de la org ajena", rSolo.org.orgId !== SEED_ORG);
   } finally {
     await limpiar();
     await admin.end();

@@ -38,6 +38,24 @@ CREATE TABLE IF NOT EXISTS memberships (
   PRIMARY KEY (org_id, user_id)
 );
 
+-- Invitaciones PENDIENTES (por correo). Un admin invita a alguien que quizá todavía no tiene
+-- cuenta, así que no hay user_id que guardar: el id de Clerk (user_…) sólo existe cuando la
+-- persona se registra. La invitación espera aquí y se convierte en membresía en ese momento
+-- (app_aceptar_invitaciones). Sin esto, invitar guardaba un user_id INVENTADO que nunca
+-- coincidía con el de Clerk: la fila quedaba huérfana y a la persona se le creaba su propia
+-- org en vez de unirla al equipo.
+-- El correo se guarda normalizado (minúsculas, sin espacios) para que el cruce con el correo
+-- verificado de Clerk sea exacto. Cuenta contra la cuota de usuarios del plan (ver
+-- verificar_cuota_usuario): un lugar apalabrado ya está ocupado, o el equipo se sobrevende.
+CREATE TABLE IF NOT EXISTS invitaciones (
+  id      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id  uuid NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  correo  text NOT NULL CHECK (correo = lower(btrim(correo)) AND position('@' IN correo) > 1),
+  rol     text NOT NULL CHECK (rol IN ('admin', 'operador')),
+  creada  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (org_id, correo)
+);
+
 CREATE TABLE IF NOT EXISTS automatizaciones (
   id      uuid NOT NULL DEFAULT gen_random_uuid(),
   org_id  uuid NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
@@ -605,7 +623,41 @@ GRANT EXECUTE ON FUNCTION app_orgs_de_usuario(text) TO automata_app, automata_we
 -- serializa altas concurrentes (webhook user.created + primer acceso a la vez → 1 org, no 2). SD porque
 -- INSERT orgs es owner-only. La cuota de usuarios NO aplica al primer admin: verificar_cuota_usuario
 -- hace bypass cuando app_current_org() es NULL (que es el caso — esto corre FUERA de conOrg).
-CREATE OR REPLACE FUNCTION app_provisionar_usuario(p_user text, p_nombre text)
+-- Convierte en membresías las invitaciones pendientes para el correo del usuario. La llama el alta
+-- (webhook user.created / primer acceso) con el correo VERIFICADO de Clerk — el llamador es
+-- responsable de eso: aceptar por un correo no verificado dejaría que cualquiera se cuele a un
+-- equipo poniendo el correo de otro. Devuelve cuántas aceptó. Idempotente (borra la invitación al
+-- convertirla) y tolerante a que ya sea miembro (ON CONFLICT DO NOTHING).
+CREATE OR REPLACE FUNCTION app_aceptar_invitaciones(p_user text, p_correo text)
+RETURNS int LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_correo text; v_n int := 0; v_inv record;
+BEGIN
+  IF p_user IS NULL OR length(trim(p_user)) = 0 THEN RAISE EXCEPTION 'app_aceptar_invitaciones: user vacío'; END IF;
+  v_correo := lower(btrim(coalesce(p_correo, '')));
+  IF position('@' IN v_correo) < 2 THEN RETURN 0; END IF; -- sin correo usable no hay nada que cruzar
+  FOR v_inv IN SELECT id, org_id, rol FROM invitaciones WHERE correo = v_correo ORDER BY creada LOOP
+    -- BORRAR ANTES DE INSERTAR: la cuota cuenta miembros + invitaciones, así que si la invitación
+    -- siguiera viva al insertar la membresía, el lugar se contaría doble y el último invitado del
+    -- plan no podría entrar.
+    DELETE FROM invitaciones WHERE id = v_inv.id;
+    INSERT INTO memberships (org_id, user_id, rol) VALUES (v_inv.org_id, p_user, v_inv.rol)
+      ON CONFLICT (org_id, user_id) DO NOTHING;
+    v_n := v_n + 1;
+  END LOOP;
+  RETURN v_n;
+END $fn$;
+GRANT EXECUTE ON FUNCTION app_aceptar_invitaciones(text, text) TO automata_app, automata_webhook;
+
+-- Onboarding IDEMPOTENTE: si el usuario ya tiene membresía devuelve su org (sin crear nada); si no,
+-- crea org + subscription (plan base) + membresía admin y devuelve la org. Un advisory lock por-usuario
+-- serializa altas concurrentes (webhook user.created + primer acceso a la vez → 1 org, no 2). SD porque
+-- INSERT orgs es owner-only. La cuota de usuarios NO aplica al primer admin: verificar_cuota_usuario
+-- hace bypass cuando app_current_org() es NULL (que es el caso — esto corre FUERA de conOrg).
+-- p_correo (opcional): si hay invitaciones pendientes para ese correo, el usuario ENTRA A ESE EQUIPO
+-- y NO se le crea org propia. Sin esto, a un invitado se le creaba su negocio personal y la
+-- invitación quedaba colgada — el equipo compartido, que es medular al producto, no funcionaba.
+DROP FUNCTION IF EXISTS app_provisionar_usuario(text, text);
+CREATE OR REPLACE FUNCTION app_provisionar_usuario(p_user text, p_nombre text, p_correo text DEFAULT NULL)
 RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_org uuid; v_nombre text;
 BEGIN
@@ -615,13 +667,19 @@ BEGIN
   SELECT m.org_id INTO v_org FROM memberships m
     WHERE m.user_id = p_user ORDER BY (m.rol = 'admin') DESC, org_id ASC LIMIT 1;
   IF v_org IS NOT NULL THEN RETURN v_org; END IF; -- ya pertenece a una org → idempotente
+  -- ¿Lo estaban esperando en un equipo? Entonces su lugar es ese, no uno nuevo.
+  IF app_aceptar_invitaciones(p_user, p_correo) > 0 THEN
+    SELECT m.org_id INTO v_org FROM memberships m
+      WHERE m.user_id = p_user ORDER BY (m.rol = 'admin') DESC, org_id ASC LIMIT 1;
+    IF v_org IS NOT NULL THEN RETURN v_org; END IF;
+  END IF;
   v_nombre := left(coalesce(nullif(trim(p_nombre), ''), 'Mi negocio'), 200);
   INSERT INTO orgs (nombre) VALUES (v_nombre) RETURNING id INTO v_org;
   INSERT INTO subscriptions (org_id, plan) VALUES (v_org, 'base');
   INSERT INTO memberships (org_id, user_id, rol) VALUES (v_org, p_user, 'admin');
   RETURN v_org;
 END $fn$;
-GRANT EXECUTE ON FUNCTION app_provisionar_usuario(text, text) TO automata_app, automata_webhook;
+GRANT EXECUTE ON FUNCTION app_provisionar_usuario(text, text, text) TO automata_app, automata_webhook;
 
 -- Congelado VOLUNTARIO ("esta ya quedó", docs/08 §3). Va por función porque el app
 -- perdió el UPDATE sobre ciclo_estado (si lo tuviera, podría des-congelarse y
@@ -776,8 +834,11 @@ BEGIN
   IF v_activas >= v_lim THEN RAISE EXCEPTION 'CUOTA_EXCEDIDA:espacios:%:%', v_lim, v_plan; END IF;
   RETURN NEW;
 END $fn$;
+-- Cuota de usuarios: cuenta miembros + invitaciones PENDIENTES (un lugar apalabrado ya está
+-- ocupado; si no contara, invitar a 10 con 3 lugares sobrevendería el equipo). Sirve al trigger de
+-- memberships y al de invitaciones — el mismo tope para los dos caminos, sin lógica duplicada.
 CREATE OR REPLACE FUNCTION verificar_cuota_usuario() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
-DECLARE v_lim int; v_plan text; v_estado text; v_miembros int;
+DECLARE v_lim int; v_plan text; v_estado text; v_ocupados int;
 BEGIN
   IF NEW.org_id IS DISTINCT FROM app_current_org() THEN RETURN NEW; END IF;
   PERFORM pg_advisory_xact_lock(hashtext('usuario:' || NEW.org_id::text));
@@ -785,8 +846,9 @@ BEGIN
     FROM subscriptions s JOIN planes p ON p.plan = s.plan WHERE s.org_id = NEW.org_id;
   IF v_plan IS NULL THEN RAISE EXCEPTION 'org % sin subscription: no puede invitar', NEW.org_id; END IF;
   IF v_estado <> 'activa' THEN RAISE EXCEPTION 'subscription en estado %: no puede invitar', v_estado; END IF;
-  SELECT count(*) INTO v_miembros FROM memberships WHERE org_id = NEW.org_id;
-  IF v_miembros >= v_lim THEN RAISE EXCEPTION 'CUOTA_EXCEDIDA:usuarios:%:%', v_lim, v_plan; END IF;
+  SELECT (SELECT count(*) FROM memberships  WHERE org_id = NEW.org_id)
+       + (SELECT count(*) FROM invitaciones WHERE org_id = NEW.org_id) INTO v_ocupados;
+  IF v_ocupados >= v_lim THEN RAISE EXCEPTION 'CUOTA_EXCEDIDA:usuarios:%:%', v_lim, v_plan; END IF;
   RETURN NEW;
 END $fn$;
 
@@ -821,7 +883,7 @@ END $fn$;
 DO $$
 DECLARE t text;
 BEGIN
-  FOR t IN SELECT unnest(ARRAY['orgs', 'memberships', 'automatizaciones', 'versiones', 'ejecuciones', 'subscriptions', 'uso_periodo'])
+  FOR t IN SELECT unnest(ARRAY['orgs', 'memberships', 'invitaciones', 'automatizaciones', 'versiones', 'ejecuciones', 'subscriptions', 'uso_periodo'])
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE  ROW LEVEL SECURITY', t);
@@ -832,6 +894,8 @@ END $$;
 CREATE POLICY aislada_por_org ON orgs
   USING (id = app_current_org()) WITH CHECK (id = app_current_org());
 CREATE POLICY aislada_por_org ON memberships
+  USING (org_id = app_current_org()) WITH CHECK (org_id = app_current_org());
+CREATE POLICY aislada_por_org ON invitaciones
   USING (org_id = app_current_org()) WITH CHECK (org_id = app_current_org());
 CREATE POLICY aislada_por_org ON automatizaciones
   USING (org_id = app_current_org()) WITH CHECK (org_id = app_current_org());
@@ -850,6 +914,11 @@ CREATE TRIGGER trg_cuota_espacio BEFORE INSERT OR UPDATE OF activa ON automatiza
   FOR EACH ROW EXECUTE FUNCTION verificar_cuota_espacio();
 DROP TRIGGER IF EXISTS trg_cuota_usuario ON memberships;
 CREATE TRIGGER trg_cuota_usuario BEFORE INSERT ON memberships
+  FOR EACH ROW EXECUTE FUNCTION verificar_cuota_usuario();
+-- Mismo tope para el otro camino: invitar también ocupa lugar (si sólo se cobrara al aceptar,
+-- un admin podría apalabrar 50 correos con un plan de 3 y el equipo se sobrevendería).
+DROP TRIGGER IF EXISTS trg_cuota_invitacion ON invitaciones;
+CREATE TRIGGER trg_cuota_invitacion BEFORE INSERT ON invitaciones
   FOR EACH ROW EXECUTE FUNCTION verificar_cuota_usuario();
 
 -- Ciclo de vida: normaliza el ciclo al crear (app) y sella la entrega al publicar.

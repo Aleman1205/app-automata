@@ -9,7 +9,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { crearPool, conOrg } from "../src/db/pg.ts";
 import {
-  crearAutomatizacion, invitarMiembro, consumirGeneracion, consumirEjecucion, puedeExportar, CuotaExcedida,
+  crearAutomatizacion, invitarPorCorreo, consumirGeneracion, consumirEjecucion, puedeExportar, CuotaExcedida,
 } from "../src/billing/cuota.ts";
 import { PLANES, type Plan } from "../src/billing/planes.ts";
 import { type Pool, type PoolClient } from "pg";
@@ -122,12 +122,14 @@ async function main() {
     check("la ejecución 500 pasa", v1 === 500);
     check("la 501 concurrente es cortada (CuotaExcedida)", v2 instanceof CuotaExcedida);
 
-    console.log("\n8. Tope de usuarios (base = 1):");
-    check("invita al 1er miembro (0→1)", await (async () => {
-      try { await conOrg(app, A, (c) => invitarMiembro(c, "u_ana", "admin")); return true; } catch { return false; }
+    // El tope cuenta miembros + invitaciones PENDIENTES: un lugar apalabrado ya está ocupado, así
+    // que la 2ª invitación choca aunque nadie haya aceptado la 1ª (si no, se sobrevendería).
+    console.log("\n8. Tope de usuarios (base = 1), invitando por CORREO:");
+    check("invita al 1er correo (0→1)", await (async () => {
+      try { await conOrg(app, A, (c) => invitarPorCorreo(c, "ana@vitrales.mx", "admin")); return true; } catch { return false; }
     })());
-    check("el 2º miembro lanza CuotaExcedida('usuarios')", await esCuota(() =>
-      conOrg(app, A, (c) => invitarMiembro(c, "u_luis", "operador"))));
+    check("el 2º correo lanza CuotaExcedida('usuarios')", await esCuota(() =>
+      conOrg(app, A, (c) => invitarPorCorreo(c, "luis@vitrales.mx", "operador"))));
 
     console.log("\n9. SEGURIDAD — el rol de app NO puede saltarse la cuota:");
     check("NO puede auto-ascender su plan (UPDATE subscriptions → permiso denegado)", await lanzaNoCuota(() =>

@@ -1,4 +1,4 @@
-import { crearAutomatizacion, invitarMiembro } from "../billing/cuota.ts";
+import { crearAutomatizacion, invitarPorCorreo } from "../billing/cuota.ts";
 import { congelar, AjusteNoPermitido } from "../ciclo/servicio.ts";
 import { IntakeAgent, IntakeError } from "../intake/agent.ts";
 import { type EntradaHistorial } from "../intake/prompt.ts";
@@ -27,23 +27,34 @@ const esquemaNombre: Esquema<{ nombre: string }> = {
   },
 };
 
-const esquemaInvitar: Esquema<{ userId: string; rol: Rol }> = {
+// Invitar es por CORREO (el user_id lo asigna Clerk al registrarse; ver invitarPorCorreo). Se
+// normaliza a minúsculas sin espacios para que el cruce con el correo verificado de Clerk sea
+// exacto — "Ana@X.com " y "ana@x.com" son la misma persona.
+const esquemaInvitar: Esquema<{ correo: string; rol: Rol }> = {
   analizar(x) {
     if (!esObjeto(x)) return { ok: false, problemas: ["cuerpo no es objeto"] };
-    const u = x["userId"];
+    const c = x["correo"];
     const r = x["rol"];
-    if (typeof u !== "string" || u.trim().length === 0) return { ok: false, problemas: ["userId requerido"] };
+    if (typeof c !== "string") return { ok: false, problemas: ["correo requerido"] };
+    const correo = c.trim().toLowerCase();
+    if (correo.length < 3 || correo.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correo)) {
+      return { ok: false, problemas: ["correo inválido"] };
+    }
     if (r !== "admin" && r !== "operador") return { ok: false, problemas: ["rol inválido"] };
-    return { ok: true, valor: { userId: u.trim(), rol: r } };
+    return { ok: true, valor: { correo, rol: r } };
   },
 };
 
-// Quitar solo necesita a QUIÉN (el rol del objetivo se lee vivo de la DB, no del cuerpo).
-const esquemaUserId: Esquema<{ userId: string }> = {
+// Quitar solo necesita a QUIÉN (el rol del objetivo se lee vivo de la DB, no del cuerpo). Acepta
+// `userId` (miembro ya registrado) o `correo` (invitación que aún no acepta nadie): son las dos
+// formas en que alguien puede estar en el equipo, y el admin debe poder retirar ambas.
+const esquemaQuitar: Esquema<{ userId?: string; correo?: string }> = {
   analizar(x) {
     if (!esObjeto(x)) return { ok: false, problemas: ["cuerpo no es objeto"] };
     const u = x["userId"];
-    if (typeof u !== "string" || u.trim().length === 0) return { ok: false, problemas: ["userId requerido"] };
+    const c = x["correo"];
+    if (typeof c === "string" && c.trim().length > 0) return { ok: true, valor: { correo: c.trim().toLowerCase() } };
+    if (typeof u !== "string" || u.trim().length === 0) return { ok: false, problemas: ["userId o correo requerido"] };
     return { ok: true, valor: { userId: u.trim() } };
   },
 };
@@ -61,24 +72,31 @@ export const crearAutomatizacionEP: Endpoint<{ nombre: string }> = {
 
 /** Invitar a un miembro (admin, PELIGROSA → step-up: añadir un admin con cookie robada
  *  sería escalada). El trigger de cuota impone el tope de usuarios. */
-export const invitarEP: Endpoint<{ userId: string; rol: Rol }> = {
+export const invitarEP: Endpoint<{ correo: string; rol: Rol }> = {
   nombre: "POST /orgs/:orgId/miembros",
   metodo: "POST",
   accion: "invitar",
   esquema: esquemaInvitar,
   handler: async ({ cliente, input }) => {
-    await invitarMiembro(cliente, input.userId, input.rol);
+    await invitarPorCorreo(cliente, input.correo, input.rol);
     return R.creado({ ok: true });
   },
 };
 
 /** Quitar a un miembro (admin, PELIGROSA → step-up). No deja la org sin ningún admin. */
-export const quitarMiembroEP: Endpoint<{ userId: string }> = {
+export const quitarMiembroEP: Endpoint<{ userId?: string; correo?: string }> = {
   nombre: "DELETE /orgs/:orgId/miembros",
   metodo: "DELETE",
   accion: "quitar_gente",
-  esquema: esquemaUserId,
+  esquema: esquemaQuitar,
   handler: async ({ cliente, input }) => {
+    // Invitación pendiente: no hay membresía ni riesgo de dejar la org sin admin (nadie la aceptó
+    // todavía), así que se cancela directo y libera el lugar del plan.
+    if (input.correo) {
+      const d = await cliente.query("DELETE FROM invitaciones WHERE correo = $1", [input.correo]);
+      if (d.rowCount === 0) return R.malParametro("no hay invitación para ese correo");
+      return R.ok({ ok: true });
+    }
     const obj = await cliente.query<{ rol: Rol }>("SELECT rol FROM memberships WHERE user_id = $1", [input.userId]);
     const rol = obj.rows[0]?.rol;
     if (!rol) return R.malParametro("no es miembro de esta org");
@@ -274,9 +292,15 @@ export const listarEquipoEP: Endpoint<Record<string, never>> = {
     const r = await cliente.query<{ user_id: string; rol: Rol }>(
       "SELECT user_id, rol FROM memberships ORDER BY rol, user_id", // admin antes que operador (orden alfabético)
     );
+    // Las invitaciones sin aceptar son parte del equipo a ojos del admin (ocupan lugar del plan),
+    // así que viajan también: si no, invitaría a alguien y la pantalla se quedaría igual.
+    const inv = await cliente.query<{ correo: string; rol: Rol }>(
+      "SELECT correo, rol FROM invitaciones ORDER BY rol, correo",
+    );
     return R.ok({
       miembros: r.rows.map((f) => ({ userId: f.user_id, rol: f.rol, esTu: f.user_id === identidad.userId })),
-      total: r.rows.length,
+      invitaciones: inv.rows.map((f) => ({ correo: f.correo, rol: f.rol })),
+      total: r.rows.length + inv.rows.length,
     });
   },
 };

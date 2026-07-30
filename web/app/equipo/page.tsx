@@ -49,7 +49,7 @@ export default function Equipo() {
     listarEquipo()
       .then((reales) => {
         setEsReal(!!reales);
-        setMiembros(reales ? reales.map((m) => ({ ...m, estado: "activo" as const })) : seedFake());
+        setMiembros(reales ? reales.map((m) => ({ ...m, estado: m.pendiente ? ("pendiente" as const) : ("activo" as const) })) : seedFake());
       })
       .catch(() => setMiembros(seedFake()));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -58,7 +58,7 @@ export default function Equipo() {
   const refrescar = () =>
     listarEquipo()
       .then((reales) => {
-        if (reales) setMiembros(reales.map((m) => ({ ...m, estado: "activo" as const })));
+        if (reales) setMiembros(reales.map((m) => ({ ...m, estado: m.pendiente ? ("pendiente" as const) : ("activo" as const) })));
       })
       .catch(() => {});
 
@@ -70,13 +70,13 @@ export default function Equipo() {
   const invitar = async () => {
     if (!correo.trim()) return;
     if (esReal) {
-      // El backend guarda user_id + rol (no correo); en dev derivamos el user_id del correo.
-      const userId = correo.split("@")[0].trim().toLowerCase();
+      // Se invita por CORREO: queda pendiente hasta que esa persona se registre con él (el user_id
+      // real lo asigna Clerk en ese momento).
       try {
-        await invitarMiembro(userId, rolNuevo);
+        await invitarMiembro(correo.trim().toLowerCase(), rolNuevo);
         setCorreo("");
         setInvitando(false);
-        avisar("Miembro agregado al equipo");
+        avisar("Invitación enviada");
         refrescar();
       } catch (e) {
         avisar(e instanceof Error ? e.message : "No se pudo invitar");
