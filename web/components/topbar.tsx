@@ -24,11 +24,13 @@ const enlacesVenta = [
 ];
 
 const enlacesApp = [
-  { href: "/panel", etiqueta: "Panel" },
   { href: "/portafolio", etiqueta: "Portafolio" },
   { href: "/equipo", etiqueta: "Equipo" },
 ];
 
+// /panel sigue aqui para que la barra se pinte en modo app si alguien llega por URL, pero YA NO se
+// ofrece en el nav ni desde el logo: es 100% demo (pinta los datos del hotel de ejemplo) y a un
+// cliente real le mostraria el negocio de otro. Se re-agrega cuando consuma las APIs.
 const RUTAS_APP = ["/panel", "/portafolio", "/equipo", "/cuenta", "/nueva"];
 const RUTAS_LIMPIAS = ["/entrar"]; // sin topbar (login)
 
@@ -52,7 +54,7 @@ export function Topbar() {
     <header className="pointer-events-none fixed inset-x-0 top-0 z-50">
       <div className="relative flex items-center justify-between px-6 py-4">
         <Link
-          href={esApp ? "/panel" : "/"}
+          href={esApp ? "/portafolio" : "/"}
           className="pointer-events-auto text-lg font-black tracking-tight"
         >
           {MARCA}

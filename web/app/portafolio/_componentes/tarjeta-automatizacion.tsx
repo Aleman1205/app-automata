@@ -93,15 +93,18 @@ export function TarjetaAutomatizacion({
                 {datos.motivoFallo}
               </p>
             )}
+            {/* Decía "Reintentar gratis" y solo mostraba un toast: el cliente creía haber
+                relanzado el build, se quedaba esperando un correo que nunca llegaba, y mientras
+                tanto la generación YA se le había cobrado y el espacio seguía ocupado. Prometer un
+                reintento que no existe es peor que no ofrecerlo. Hasta que exista
+                POST /reintentar, se le dice la verdad y se le da una salida real. */}
             <Boton
               variante="fantasma"
               tamano="sm"
               icono="reintentar"
-              onClick={() =>
-                alAvisar("Reintento lanzado — te avisamos por correo")
-              }
+              href="/contacto"
             >
-              Reintentar gratis
+              Escríbenos y la reponemos
             </Boton>
           </div>
         )}
