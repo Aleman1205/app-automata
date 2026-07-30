@@ -217,11 +217,28 @@ export const ejecutarEP: Endpoint<Record<string, never>> = {
 // operador). El id del detalle llega por query (?id=…) — el adaptador lo pone en `cuerpo`.
 const iso = (v: unknown): string | null => (v instanceof Date ? v.toISOString() : v == null ? null : String(v));
 // EstadoAuto de la UI derivado del ciclo + la última versión (contrato de web/lib/datos.ts).
-function estadoAuto(ultimaVersion: string | null, ciclo: string): "lista" | "generando" | "fallo" | "congelada" {
+/** El estado que ve el cliente. La pregunta que responde es "¿la puedo usar?", NO "¿cómo le fue al
+ *  último build?".
+ *
+ *  Antes derivaba solo de la ÚLTIMA versión por número, y eso le ESCONDÍA una automatización que
+ *  ya había pagado: al pedir un cambio se inserta una versión nueva en 'building' → la pantalla
+ *  decía "generando" y el front bloqueaba el detalle, aunque la versión vigente seguía perfectamente
+ *  ejecutable (el Run corre la última 'lista' CON artefacto, no la última a secas). Y si el build
+ *  del ajuste fallaba, quedaba en "fallo" PARA SIEMPRE: nada reescribía eso, así que la
+ *  automatización quedaba ladrilleada en la UI mientras seguía funcionando por debajo.
+ *
+ *  Con `hayEjecutable` el orden se invierte: si hay algo que correr, está LISTA — y si además hay un
+ *  build en vuelo, eso es un detalle que la UI puede mostrar aparte (`cambioEnCurso`), no un motivo
+ *  para quitarle el acceso. */
+function estadoAuto(
+  ultimaVersion: string | null,
+  ciclo: string,
+  hayEjecutable: boolean,
+): "lista" | "generando" | "fallo" | "congelada" {
   if (ciclo === "frozen") return "congelada";
-  if (ultimaVersion === "lista") return "lista";
-  if (ultimaVersion === "failed") return "fallo";
-  return "generando"; // queued/building/ready o aún sin versión
+  if (hayEjecutable) return "lista"; // usable, aunque haya un ajuste en vuelo o uno que falló
+  if (ultimaVersion === "failed") return "fallo"; // nunca llegó a entregarse nada
+  return "generando"; // primer build en curso (queued/building/ready) o aún sin versión
 }
 const esquemaLista: Esquema<Record<string, never>> = { analizar: () => ({ ok: true, valor: {} }) };
 const esquemaVerId: Esquema<{ id: string }> = {
@@ -241,6 +258,10 @@ export const listarAutomatizacionesEP: Endpoint<Record<string, never>> = {
     const r = await cliente.query(
       `SELECT a.id, a.nombre, a.activa, a.ciclo_estado, a.ajustes_usados, a.creada, a.entregada,
          (SELECT v.estado FROM versiones v WHERE v.automatizacion_id = a.id ORDER BY v.numero DESC LIMIT 1) AS ultima,
+         -- MISMO criterio que usa el Run para elegir qué correr (pipeline/run.ts): si esto existe,
+         -- el cliente la puede usar, punto — aunque encima haya un ajuste en vuelo o uno fallido.
+         EXISTS (SELECT 1 FROM versiones v WHERE v.automatizacion_id = a.id AND v.estado = 'lista' AND v.artefacto_key IS NOT NULL) AS ejecutable,
+         EXISTS (SELECT 1 FROM versiones v WHERE v.automatizacion_id = a.id AND v.estado = 'building') AS cambio_en_curso,
          (SELECT count(*)::int FROM ejecuciones e JOIN versiones v ON e.version_id = v.id WHERE v.automatizacion_id = a.id) AS ejecuciones,
          (SELECT max(e.creada) FROM ejecuciones e JOIN versiones v ON e.version_id = v.id WHERE v.automatizacion_id = a.id) AS ultima_ejec
        FROM automatizaciones a ORDER BY a.creada DESC`,
@@ -249,7 +270,8 @@ export const listarAutomatizacionesEP: Endpoint<Record<string, never>> = {
       automatizaciones: r.rows.map((f) => ({
         id: f.id, nombre: f.nombre, activa: f.activa, cicloEstado: f.ciclo_estado,
         ajustesUsados: f.ajustes_usados, creada: iso(f.creada), entregada: iso(f.entregada),
-        estado: estadoAuto(f.ultima ?? null, f.ciclo_estado), ejecuciones: f.ejecuciones, ultimaEjecucion: iso(f.ultima_ejec),
+        estado: estadoAuto(f.ultima ?? null, f.ciclo_estado, !!f.ejecutable),
+        cambioEnCurso: !!f.cambio_en_curso, ejecuciones: f.ejecuciones, ultimaEjecucion: iso(f.ultima_ejec),
       })),
     });
   },
@@ -264,7 +286,10 @@ export const verAutomatizacionEP: Endpoint<{ id: string }> = {
     const a = await cliente.query("SELECT id, nombre, activa, ciclo_estado, ajustes_usados, creada, entregada, en_revision FROM automatizaciones WHERE id = $1", [input.id]);
     const auto = a.rows[0];
     if (!auto) return { status: 404, cuerpo: { error: "no_encontrada" } }; // RLS: ajena/inexistente → 0 filas
-    const vs = await cliente.query("SELECT numero, estado, tipo, creada FROM versiones WHERE automatizacion_id = $1 ORDER BY numero DESC", [input.id]);
+    const vs = await cliente.query("SELECT numero, estado, tipo, creada, (artefacto_key IS NOT NULL) AS con_artefacto FROM versiones WHERE automatizacion_id = $1 ORDER BY numero DESC", [input.id]);
+    // MISMO criterio que el Run: hay algo que correr => la puede usar (aunque haya un ajuste en
+    // vuelo encima, o uno que fallo).
+    const hayEjecutable = vs.rows.some((v) => v.estado === "lista" && v.con_artefacto);
     const vista = await cliente.query("SELECT vista FROM versiones WHERE automatizacion_id = $1 AND estado = 'lista' AND vista IS NOT NULL ORDER BY numero DESC LIMIT 1", [input.id]);
     const ejec = await cliente.query("SELECT count(*)::int AS n, max(e.creada) AS ultima FROM ejecuciones e JOIN versiones v ON e.version_id = v.id WHERE v.automatizacion_id = $1", [input.id]);
     // El CICLO completo, no solo el contador: la UI necesita saber si el próximo cambio es GRATIS
@@ -279,7 +304,8 @@ export const verAutomatizacionEP: Endpoint<{ id: string }> = {
       ajustesRestantes: ciclo.ajustesRestantes,
       ventanaGratis: ciclo.ventanaGratis,
       ventanaHasta: ciclo.ventanaHasta,
-      estado: estadoAuto(vs.rows[0]?.estado ?? null, auto.ciclo_estado),
+      estado: estadoAuto(vs.rows[0]?.estado ?? null, auto.ciclo_estado, hayEjecutable),
+      cambioEnCurso: vs.rows.some((v) => v.estado === "building"),
       ejecuciones: ejec.rows[0]?.n ?? 0, ultimaEjecucion: iso(ejec.rows[0]?.ultima ?? null),
       versiones: vs.rows.map((v) => ({ numero: v.numero, estado: v.estado, tipo: v.tipo, creada: iso(v.creada) })),
       vista: vista.rows[0]?.vista ?? null, // el layout de la última versión lista; los DATOS del resultado son otro slice (ejecución)

@@ -35,9 +35,9 @@ async function main() {
     for (const o of [A, B]) { await admin.query("INSERT INTO orgs (id,nombre) VALUES ($1,'o')", [o]); await admin.query("INSERT INTO subscriptions (org_id,plan) VALUES ($1,'equipo')", [o]); }
     // A: 3 automatizaciones con estados distintos.
     await admin.query("INSERT INTO automatizaciones (id,org_id,nombre) VALUES ($1,$2,'Lista'),($3,$2,'Generando'),($4,$2,'Congelada')", [A1, A, A2, A3]);
-    await admin.query("INSERT INTO versiones (automatizacion_id,org_id,numero,estado,vista) VALUES ($1,$2,1,'lista',$3::jsonb)", [A1, A, vista]);
+    await admin.query("INSERT INTO versiones (automatizacion_id,org_id,numero,estado,vista,artefacto_key) VALUES ($1,$2,1,'lista',$3::jsonb,'artefactos/a1.json')", [A1, A, vista]);
     await admin.query("INSERT INTO versiones (id,automatizacion_id,org_id,numero,estado) VALUES ('a1000000-0000-0000-0000-0000000000f1',$1,$2,1,'building')", [A2, A]);
-    await admin.query("INSERT INTO versiones (automatizacion_id,org_id,numero,estado) VALUES ($1,$2,1,'lista')", [A3, A]);
+    await admin.query("INSERT INTO versiones (automatizacion_id,org_id,numero,estado,artefacto_key) VALUES ($1,$2,1,'lista','artefactos/a3.json')", [A3, A]);
     await admin.query("UPDATE automatizaciones SET ciclo_estado='frozen' WHERE id=$1", [A3]); // congelada
     // 2 ejecuciones sobre A1.
     const verA1 = (await admin.query<{ id: string }>("SELECT id FROM versiones WHERE automatizacion_id=$1 LIMIT 1", [A1])).rows[0]!.id;
@@ -68,6 +68,25 @@ async function main() {
     check("pedir la automatización de B desde A → 404", ajena.status === 404);
     const listaB = await conOrg(app, B, (c) => invocar(listarAutomatizacionesEP, c, {}));
     check("listar como B ve solo la suya (1)", (listaB.cuerpo as { automatizaciones: unknown[] }).automatizaciones.length === 1);
+
+    // El bug que esto cubre: pedir un cambio insertaba una version nueva en building y el estado
+    // pasaba a generando, asi que el front le BLOQUEABA una automatizacion que seguia ejecutable.
+    // Y si el ajuste fallaba, quedaba en fallo para siempre. El cliente perdia lo que ya pago.
+    console.log(String.fromCharCode(10) + "5. Un ajuste encima NO esconde la automatizacion que ya funciona:");
+    await admin.query("INSERT INTO versiones (automatizacion_id,org_id,numero,estado) VALUES ($1,$2,2,'building')", [A1, A]);
+    const listar = async () => {
+      const r = await conOrg(app, A, (c) => invocar(listarAutomatizacionesEP, c, {}));
+      const as = (r.cuerpo as { automatizaciones: Array<{ id: string; estado: string; cambioEnCurso?: boolean }> }).automatizaciones;
+      return Object.fromEntries(as.map((a) => [a.id, a]));
+    };
+    const conAjuste = await listar();
+    check("con un cambio EN VUELO sigue lista (usable)", conAjuste[A1]?.estado === "lista");
+    check("y avisa que hay un cambio en curso", conAjuste[A1]?.cambioEnCurso === true);
+    await admin.query("UPDATE versiones SET estado='failed' WHERE automatizacion_id=$1 AND numero=2", [A1]);
+    const conFallo = await listar();
+    check("con el ajuste FALLIDO sigue lista (no queda ladrillada)", conFallo[A1]?.estado === "lista");
+    check("y ya no reporta cambio en curso", conFallo[A1]?.cambioEnCurso === false);
+    await admin.query("DELETE FROM versiones WHERE automatizacion_id=$1 AND numero=2", [A1]);
   } finally {
     await admin.query("DELETE FROM orgs WHERE id = ANY($1)", [[A, B]]).catch(() => {});
     await admin.end(); await app.end();
