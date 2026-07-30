@@ -200,9 +200,16 @@ export async function verAutomatizacion(id: string): Promise<Automatizacion | nu
       .sort((a, b) => a.numero - b.numero)
       .map((v) => ({
         version: v.numero,
-        titulo: v.tipo === "ajuste" ? "Ajuste aplicado" : "Construcción inicial",
+        // La BD solo puede guardar 'cambio' | 'reparacion' | NULL (CHECK de versiones.tipo). El front
+        // comparaba contra "ajuste", un valor que NUNCA existe, así que TODA versión caía en el else
+        // y el historial decía "Construcción inicial" incluso para un ajuste. Y perdía la distinción
+        // que más le importa al cliente: si le costó uno de sus 3 cambios o fue reparación gratis.
+        titulo:
+          v.tipo === "cambio" ? "Cambio que pediste"
+          : v.tipo === "reparacion" ? "Reparación (sin costo)"
+          : "Construcción inicial",
         fecha: fechaCorta(v.creada),
-        tipo: v.tipo === "ajuste" ? "ajuste" : "construccion",
+        tipo: v.tipo === "cambio" || v.tipo === "reparacion" ? "ajuste" : "construccion",
       }));
     const historial = await listarEjecuciones(id); // corridas reales, para la tabla del detalle
     return {

@@ -10,13 +10,17 @@ import { useAviso } from "@/components/ui/aviso";
 import { Reveal } from "@/components/motion/reveal";
 import { TextoRevelado } from "@/components/motion/texto-revelado";
 import { automatizaciones, creadoPor, equipo, obtenerMiembro } from "@/lib/datos";
-import { listarAutomatizaciones, listarEquipo } from "@/lib/automata/lectura";
+import { listarAutomatizaciones, listarEquipo, verCuenta } from "@/lib/automata/lectura";
 import {
   TarjetaAutomatizacion,
   type DatosTarjeta,
 } from "./_componentes/tarjeta-automatizacion";
 
-const ESPACIOS_TOTALES = 10; // plan Equipo
+// Tope del plan REAL. Estaba clavado en 10 ("plan Equipo") para todos, cuando base da 3 y pro 6:
+// un cliente de base leia "1 de 10 espacios usados" y creia tener 9 libres — hasta que crear la
+// cuarta moria con CUOTA_EXCEDIDA sin explicacion. /cuenta ya expone limites.espacios (el mismo dato
+// que la BD impone), asi que se lee de ahi. 10 queda solo como respaldo sin backend.
+const ESPACIOS_RESPALDO = 10;
 
 // Datos de creador para una automatización, listos para la tarjeta.
 function creador(automationId: string) {
@@ -41,6 +45,10 @@ export default function PaginaPortafolio() {
   const [celebrar, setCelebrar] = useState(false);
   // Datos REALES desde la API (modo dev / prod con backend). null = aún cargando o sin
   // backend → se usan los datos falsos de lib/datos (el prototipo sigue funcionando solo).
+  const [espaciosTotal, setEspaciosTotal] = useState<number>(ESPACIOS_RESPALDO);
+  useEffect(() => {
+    verCuenta().then((c) => { if (c) setEspaciosTotal(c.espaciosTotal); }).catch(() => {});
+  }, []);
   const [reales, setReales] = useState<DatosTarjeta[] | null>(null);
   // Refresca MIENTRAS haya algo construyéndose. Sin esto el cliente aprobaba su
   // automatización, veía "generando…" y la pantalla se quedaba así para siempre: el build
@@ -150,14 +158,14 @@ export default function PaginaPortafolio() {
           </Link>
           <div className="flex flex-col items-start gap-2.5 md:items-end">
             <Etiqueta>
-              {espaciosUsados} de {ESPACIOS_TOTALES} espacios usados
+              {espaciosUsados} de {espaciosTotal} espacios usados
             </Etiqueta>
             <div className="h-1 w-28 overflow-hidden rounded-full bg-linea">
               <motion.div
                 className="h-full rounded-full bg-tinta"
                 initial={{ width: 0 }}
                 animate={{
-                  width: `${(espaciosUsados / ESPACIOS_TOTALES) * 100}%`,
+                  width: `${Math.min(100, (espaciosUsados / Math.max(1, espaciosTotal)) * 100)}%`,
                 }}
                 transition={{
                   duration: 0.9,
