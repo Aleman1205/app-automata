@@ -27,7 +27,8 @@
     "./entrada/puente": "./src/entrada/puente.ts",
     "./webhooks/receptor": "./src/webhooks/receptor.ts",
     "./webhooks/firma": "./src/webhooks/firma.ts",
-    "./webhooks/handlers": "./src/webhooks/handlers.ts"
+    "./webhooks/handlers": "./src/webhooks/handlers.ts",
+    "./pipeline/ajuste": "./src/pipeline/ajuste.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

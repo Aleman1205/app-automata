@@ -142,6 +142,11 @@ export interface Automatizacion {
   orgId: string;
   nombre: string;
   versionActual?: string;
+  // CON QUÉ SE CONSTRUYÓ, para que un AJUSTE pueda reconstruir: mismo spec (que el Verifier juzgue
+  // contra los mismos criterios) y mismo ejemplo (probar la versión nueva con los datos del
+  // cliente). Su otra copia, build_pendiente, se borra al drenar.
+  spec?: Spec;
+  ejemploKey?: string;
 }
 
 export interface Version {

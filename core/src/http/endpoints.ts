@@ -1,5 +1,5 @@
 import { crearAutomatizacion, invitarPorCorreo } from "../billing/cuota.ts";
-import { congelar, AjusteNoPermitido } from "../ciclo/servicio.ts";
+import { congelar, estadoDelCiclo, AjusteNoPermitido } from "../ciclo/servicio.ts";
 import { IntakeAgent, IntakeError } from "../intake/agent.ts";
 import { type EntradaHistorial } from "../intake/prompt.ts";
 import { verificarFreno } from "../ops/killswitch.ts";
@@ -267,15 +267,69 @@ export const verAutomatizacionEP: Endpoint<{ id: string }> = {
     const vs = await cliente.query("SELECT numero, estado, tipo, creada FROM versiones WHERE automatizacion_id = $1 ORDER BY numero DESC", [input.id]);
     const vista = await cliente.query("SELECT vista FROM versiones WHERE automatizacion_id = $1 AND estado = 'lista' AND vista IS NOT NULL ORDER BY numero DESC LIMIT 1", [input.id]);
     const ejec = await cliente.query("SELECT count(*)::int AS n, max(e.creada) AS ultima FROM ejecuciones e JOIN versiones v ON e.version_id = v.id WHERE v.automatizacion_id = $1", [input.id]);
+    // El CICLO completo, no solo el contador: la UI necesita saber si el próximo cambio es GRATIS
+    // (ventana de 30 días desde la entrega) o gasta uno de los 3, para poder decírselo al cliente
+    // ANTES de que confirme. Con solo ajustesUsados la pantalla decía "Ajuste 2 de 3" incluso
+    // cuando el cambio no iba a costarle nada.
+    const ciclo = await estadoDelCiclo(cliente, input.id);
     return R.ok({
       id: auto.id, nombre: auto.nombre, activa: auto.activa, cicloEstado: auto.ciclo_estado,
       ajustesUsados: auto.ajustes_usados, creada: iso(auto.creada), entregada: iso(auto.entregada),
       enRevision: !!auto.en_revision,
+      ajustesRestantes: ciclo.ajustesRestantes,
+      ventanaGratis: ciclo.ventanaGratis,
+      ventanaHasta: ciclo.ventanaHasta,
       estado: estadoAuto(vs.rows[0]?.estado ?? null, auto.ciclo_estado),
       ejecuciones: ejec.rows[0]?.n ?? 0, ultimaEjecucion: iso(ejec.rows[0]?.ultima ?? null),
       versiones: vs.rows.map((v) => ({ numero: v.numero, estado: v.estado, tipo: v.tipo, creada: iso(v.creada) })),
       vista: vista.rows[0]?.vista ?? null, // el layout de la última versión lista; los DATOS del resultado son otro slice (ejecución)
     });
+  },
+};
+
+// ── Pedir un AJUSTE (POST): el cliente quiere un cambio, o reporta una falla ──
+// Solo ENCOLA (app_solicitar_ajuste); el drainer corre la regresión y abre la sesión de CMA fuera
+// del request, como el disparo de builds. Acción "ajustar" (admin, sin step-up).
+//
+// `confirmado` es OBLIGATORIO y tiene que venir en true. No es burocracia: el TIPO del ajuste
+// (cambio que gasta 1 de 3, o reparación gratis) lo decide la regresión, y hoy sin runner sale
+// "indeterminado" → CAMBIO. El cliente tiene derecho a saber eso ANTES de que se le cobre, así que
+// la UI le muestra la consecuencia (con ajustesRestantes / ventanaGratis del endpoint de detalle) y
+// solo entonces manda confirmado:true. Sin esta guarda, una llamada suelta —o un botón que la UI
+// pinte sin el aviso— le gastaría un ajuste sin que él lo supiera.
+interface PedirAjuste { id: string; peticion: string; confirmado: boolean }
+const esquemaAjuste: Esquema<PedirAjuste> = {
+  analizar(x) {
+    if (!esObjeto(x)) return { ok: false, problemas: ["cuerpo no es objeto"] };
+    const id = x["id"];
+    if (typeof id !== "string" || !/^[0-9a-fA-F-]{36}$/.test(id)) return { ok: false, problemas: ["id (uuid) requerido"] };
+    const p = x["peticion"];
+    if (typeof p !== "string" || p.trim().length === 0) return { ok: false, problemas: ["peticion requerida"] };
+    if (p.length > 2000) return { ok: false, problemas: ["peticion > 2000"] };
+    if (x["confirmado"] !== true) return { ok: false, problemas: ["confirmado debe ser true (el cliente tiene que ver el costo antes)"] };
+    return { ok: true, valor: { id, peticion: p.trim(), confirmado: true } };
+  },
+};
+export const pedirAjusteEP: Endpoint<PedirAjuste> = {
+  nombre: "POST /orgs/:orgId/ajustar",
+  metodo: "POST",
+  accion: "ajustar",
+  esquema: esquemaAjuste,
+  handler: async ({ cliente, input }) => {
+    try {
+      const r = await cliente.query<{ id: string }>("SELECT app_solicitar_ajuste($1,$2) AS id", [input.id, input.peticion]);
+      return R.creado({ id: r.rows[0]?.id }); // encolado; el drainer construye
+    } catch (e) {
+      // La SD rechaza lo que se puede saber sin correr nada, para que el cliente reciba el "no" al
+      // instante en vez de un correo de fracaso minutos después.
+      const msg = (e as { message?: string })?.message ?? "";
+      const m = /AJUSTE_NO_PERMITIDO:(no_existe|inactiva|build_en_vuelo|peticion_vacia)/.exec(msg);
+      if (m?.[1] === "no_existe") return { status: 404, cuerpo: { error: "no_encontrada" } };
+      if (m?.[1] === "inactiva") return { status: 409, cuerpo: { error: "inactiva" } };
+      if (m?.[1] === "build_en_vuelo") return { status: 409, cuerpo: { error: "cambio_en_curso" } };
+      if (m?.[1] === "peticion_vacia") return R.malParametro("peticion requerida");
+      throw e;
+    }
   },
 };
 
@@ -389,4 +443,4 @@ export const congelarEP: Endpoint<{ id: string }> = {
 // Registro central. NOTA (revisión): esto NO es la garantía anti-olvido completa —
 // en Next hace falta un test que ESCANEE app/api/**/route.ts y falle si algún handler
 // con efecto no delega en withEfecto. Aquí registrarse es la convención.
-export const ENDPOINTS = [crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, solicitarBuildEP, intakeEP, listarAutomatizacionesEP, verAutomatizacionEP, listarEquipoEP, verCuentaEP, listarEjecucionesEP, congelarEP] as const;
+export const ENDPOINTS = [crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, solicitarBuildEP, intakeEP, pedirAjusteEP, listarAutomatizacionesEP, verAutomatizacionEP, listarEquipoEP, verCuentaEP, listarEjecucionesEP, congelarEP] as const;

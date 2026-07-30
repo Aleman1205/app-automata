@@ -8,6 +8,7 @@ import { crearPool, crearPoolApp } from "automata-core/db/pg";
 import { reaparBuildsColgados } from "automata-core/ciclo/servicio";
 import { drenarCosecha, type CosechaDeps } from "automata-core/pipeline/cosecha";
 import { drenarBuilds, type DisparoDeps } from "automata-core/pipeline/disparo";
+import { drenarAjustes, type DrenarAjustesDeps } from "automata-core/pipeline/ajuste";
 import { CmaBuildClient } from "automata-core/cma/build";
 import { PlannerAgent } from "automata-core/planner/agent";
 import { R2Storage, crearClienteR2 } from "automata-core/storage/r2";
@@ -410,6 +411,28 @@ function getDisparoDeps(): DisparoDeps {
     ahora: () => new Date().toISOString(),
     notificador: getNotificador(), // si el build se descarta tras 3 intentos, avisarle al cliente
   };
+}
+
+// ── Cron de AJUSTES: drena la cola que /ajustar encoló ──
+// Corre con el pool de APP (el ciclo de vida vive bajo RLS), no con el dueño: a diferencia del
+// disparo de builds, aquí no se crea ningún tenant.
+async function getAjusteDeps(): Promise<DrenarAjustesDeps> {
+  return {
+    pool: await getPool(),
+    poolOwner: getPoolOwner(), // la cola tiene REVOKE ALL para el app: reclamarla es del dueño
+    cosechador: new CmaBuildClient(),
+    storage: almacen(),
+    ahora: () => new Date().toISOString(),
+    notificador: getNotificador(), // si el ajuste se descarta tras 3 intentos, avisarle al cliente
+  };
+}
+
+/** Ruta de cron: drena ajuste_pendiente → regresión → arrancarAjuste (sesión de CMA para la
+ *  versión siguiente). Auth por CRON_SECRET. */
+export async function cronAjustes(req: Request): Promise<Response> {
+  if (!autorizadoCron(req)) return new Response(JSON.stringify({ error: "no_autorizado" }), { status: 401, headers: { "content-type": "application/json" } });
+  const r = await drenarAjustes(await getAjusteDeps());
+  return new Response(JSON.stringify(r), { status: 200, headers: { "content-type": "application/json" } });
 }
 
 /** Ruta de cron: drena las solicitudes de build encoladas por /construir → corre el planner y

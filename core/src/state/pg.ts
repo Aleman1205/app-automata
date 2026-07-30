@@ -58,7 +58,12 @@ export class PgStateRepo implements StateRepo {
     // org_id = app_current_org() (RLS-consistente). El ciclo (ciclo_estado/ajustes_usados/
     // entregada/en_revision) lo normaliza el trigger.
     const r = await conOrg(this.pool, this.orgId, (c) =>
-      c.query<AutoRow>("INSERT INTO automatizaciones (org_id, nombre) VALUES (app_current_org(), $1) RETURNING id, org_id, nombre", [a.nombre]),
+      c.query<AutoRow>(
+        // spec/ejemplo_key se guardan AQUÍ porque son lo único con que un ajuste futuro puede
+        // reconstruir: build_pendiente (su otra copia) se borra al drenar.
+        "INSERT INTO automatizaciones (org_id, nombre, spec, ejemplo_key) VALUES (app_current_org(), $1, $2, $3) RETURNING id, org_id, nombre",
+        [a.nombre, a.spec ? JSON.stringify(a.spec) : null, a.ejemploKey ?? null],
+      ),
     ).catch((e) => comoCuota(e)); // trg_cuota_espacio → CuotaExcedida('espacios')
     const row = r.rows[0];
     if (!row) throw new Error("crearAutomatizacion: sin fila devuelta");

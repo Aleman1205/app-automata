@@ -91,10 +91,17 @@ export async function construir(
  *  drainer cosecha. Compensa (desactiva la automatización) ante cualquier fallo del arranque. */
 export async function arrancarConstruccion(
   deps: { state: StateRepo; cosechador: BuildClientAsync; ahora: () => string },
-  args: { orgId: string; nombre: string; spec: Spec; vista: Vista; ejemploPath: string; ejemploExt?: string; contratoTexto?: string },
+  args: { orgId: string; nombre: string; spec: Spec; vista: Vista; ejemploPath: string; ejemploExt?: string; contratoTexto?: string; ejemploKey?: string },
 ): Promise<{ version: Version; sessionId: string }> {
   await gatearEjemplo(args.ejemploPath, { nombre: args.nombre, extension: args.ejemploExt }); // a4
-  const auto = await deps.state.crearAutomatizacion({ orgId: args.orgId, nombre: args.nombre });
+  // spec + ejemploKey quedan GUARDADOS en la automatización: son lo único con que un ajuste
+  // posterior puede reconstruir (build_pendiente, su otra copia, se borra al drenar).
+  const auto = await deps.state.crearAutomatizacion({
+    orgId: args.orgId,
+    nombre: args.nombre,
+    spec: args.spec,
+    ejemploKey: args.ejemploKey,
+  });
   try {
     // RESERVA antes de gastar: crear la versión (cobrar_build) ANTES de abrir la sesión de CMA.
     const version = await deps.state.crearVersion({ automatizacionId: auto.id, numero: 1, estado: "building", vista: args.vista, creada: deps.ahora() });

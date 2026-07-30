@@ -91,6 +91,13 @@ CREATE TABLE IF NOT EXISTS automatizaciones (
   -- rearma (limpiarRevision). Un rate-limit por mes calendario se auto-rearmaba el día 1
   -- y una automatización rota volvía a tener N builds gratis cada mes (hallazgo ALTA).
   en_revision timestamptz,
+  -- CON QUÉ SE CONSTRUYÓ. Sin esto un ajuste no tiene con qué trabajar: el spec y el ejemplo
+  -- vivían SOLO en build_pendiente, que el drainer BORRA al terminar, así que después del primer
+  -- build la información desaparecía. Un ajuste necesita el mismo spec (para que el Verifier lo
+  -- juzgue contra los mismos criterios) y el mismo ejemplo (para probar la versión nueva con los
+  -- datos reales del cliente). Se escriben una vez, al crear la automatización.
+  spec        jsonb,
+  ejemplo_key text,
   PRIMARY KEY (id),
   UNIQUE (id, org_id)                                   -- ancla para FK compuesta
 );
@@ -98,6 +105,8 @@ CREATE TABLE IF NOT EXISTS automatizaciones (
 -- solo aplica en instalaciones nuevas).
 ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS entregada   timestamptz;
 ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS en_revision timestamptz;
+ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS spec        jsonb;
+ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS ejemplo_key text;
 
 CREATE TABLE IF NOT EXISTS versiones (
   id                uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -310,6 +319,24 @@ CREATE TABLE IF NOT EXISTS build_pendiente (
   creada      timestamptz NOT NULL DEFAULT now()
 );
 
+-- Cola de AJUSTES pedidos por el cliente. Misma disciplina que build_pendiente: el request solo
+-- ENCOLA (barato, cabe en el presupuesto de una petición HTTP) y el drainer hace el trabajo caro
+-- fuera —regresión, planner, sesión de CMA— porque eso tarda segundos y no puede colgar al cliente
+-- ni retener una conexión de BD. `peticion` es el texto del cliente tal como lo escribió: es lo que
+-- se le manda al agente, así que no se normaliza ni se resume.
+-- UNIQUE parcial por automatización: dos clics del botón no encolan dos ajustes (el ciclo ya
+-- rechazaría el segundo por "un build en vuelo", pero entonces el cliente vería un error en vez de
+-- que simplemente no pase nada).
+CREATE TABLE IF NOT EXISTS ajuste_pendiente (
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id            uuid NOT NULL,
+  automatizacion_id uuid NOT NULL REFERENCES automatizaciones(id) ON DELETE CASCADE,
+  peticion          text NOT NULL,
+  intentos          int  NOT NULL DEFAULT 0,
+  creada            timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (automatizacion_id)
+);
+
 -- Dedupe de webhooks entrantes (docs/13 §4): nivel PLATAFORMA, sin org_id (no RLS).
 -- La lo escribe el receptor de webhooks con la conexión de DUEÑO (corre sin usuario);
 -- el rol de app no lo toca. El PK hace el dedupe atómico (INSERT ON CONFLICT DO NOTHING).
@@ -365,6 +392,10 @@ REVOKE ALL ON incidentes FROM automata_app;
 REVOKE ALL ON cosecha_pendiente FROM automata_app;
 -- Outbox de disparo de build: el app SOLO inserta vía el SD app_solicitar_build; el dueño drena.
 REVOKE ALL ON build_pendiente FROM automata_app;
+-- Igual que la cola de builds: solo se escribe por app_solicitar_ajuste, que valida antes de
+-- encolar. Con INSERT directo el app podría saltarse esas guardas (encolar sobre una
+-- automatización inactiva o con un build en vuelo) y el drainer se comería el error.
+REVOKE ALL ON ajuste_pendiente FROM automata_app;
 -- EL RECICLADOR (docs/06 §3, hallazgo ALTA de la revisión): el REVOKE UPDATE protege
 -- la fila, pero NO su existencia — borrar y recrear reseteaba entregada, ajustes_usados
 -- y ciclo_estado (ventana gratis + 3 ajustes nuevos, en bucle, con builds reales de
@@ -614,6 +645,35 @@ BEGIN
   RETURN v_id;
 END $fn$;
 GRANT EXECUTE ON FUNCTION app_solicitar_build(text, jsonb, text) TO automata_app;
+
+-- Encola un AJUSTE. SD como app_solicitar_build (el app no escribe la cola directo). Valida aquí lo
+-- que se puede saber sin correr nada, para no encolar trabajo destinado a fallar y para que el
+-- cliente reciba el "no" al instante en vez de un correo de fracaso minutos después:
+--   · la automatización es de SU org y está activa
+--   · no hay ya un ajuste encolado ni un build en vuelo
+-- Lo que NO se valida aquí es si le quedan ajustes: eso depende del TIPO, que solo se sabe al correr
+-- la regresión en el drainer (una reparación se permite incluso congelada y sin ajustes).
+CREATE OR REPLACE FUNCTION app_solicitar_ajuste(p_auto uuid, p_peticion text)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_org uuid := app_current_org(); v_id uuid; v_activa boolean;
+BEGIN
+  IF v_org IS NULL THEN RAISE EXCEPTION 'app_solicitar_ajuste sin contexto de org'; END IF;
+  IF p_peticion IS NULL OR length(btrim(p_peticion)) = 0 THEN RAISE EXCEPTION 'AJUSTE_NO_PERMITIDO:peticion_vacia'; END IF;
+  SELECT activa INTO v_activa FROM automatizaciones WHERE id = p_auto AND org_id = v_org;
+  IF v_activa IS NULL THEN RAISE EXCEPTION 'AJUSTE_NO_PERMITIDO:no_existe'; END IF;
+  IF NOT v_activa THEN RAISE EXCEPTION 'AJUSTE_NO_PERMITIDO:inactiva'; END IF;
+  IF EXISTS (SELECT 1 FROM versiones WHERE automatizacion_id = p_auto AND estado = 'building') THEN
+    RAISE EXCEPTION 'AJUSTE_NO_PERMITIDO:build_en_vuelo';
+  END IF;
+  INSERT INTO ajuste_pendiente (org_id, automatizacion_id, peticion)
+    VALUES (v_org, p_auto, btrim(p_peticion))
+    ON CONFLICT (automatizacion_id) DO NOTHING
+    RETURNING id INTO v_id;
+  -- Ya había uno encolado: el pedido del cliente NO se pierde ni se duplica; se devuelve el vigente.
+  IF v_id IS NULL THEN SELECT id INTO v_id FROM ajuste_pendiente WHERE automatizacion_id = p_auto; END IF;
+  RETURN v_id;
+END $fn$;
+GRANT EXECUTE ON FUNCTION app_solicitar_ajuste(uuid, text) TO automata_app;
 
 -- ── Onboarding de un usuario nuevo (Clerk user.created / primer acceso) ──────────────────────
 -- Crear un tenant es OWNER-ONLY (REVOKE INSERT ON orgs FROM automata_app): el rol de app NO puede

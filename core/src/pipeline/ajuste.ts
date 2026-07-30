@@ -7,6 +7,7 @@ import { iniciarAjuste, fallarAjuste } from "../ciclo/servicio.ts";
 import { PgStateRepo } from "../state/pg.ts";
 import type { Artefacto, BuildClientAsync, PeticionAjuste, Spec, Storage } from "../types.ts";
 import type { ResultadoRegresion, TipoAjuste } from "../ciclo/estados.ts";
+import type { Notificador } from "../ops/notificaciones.ts";
 import { artefactoKey } from "./build-pipeline.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -67,6 +68,19 @@ async function codigoVigente(storage: Storage, versionId: string): Promise<strin
   }
 }
 
+/** Corre la REGRESIÓN: el ejemplo original contra la versión vigente. Es lo que decide si el
+ *  cliente paga o no (docs/08 §2), así que no se adivina.
+ *
+ *  Hoy devuelve "indeterminado" —que el ciclo trata como CAMBIO, fail-safe— porque correrla exige
+ *  ejecutar el artefacto y el Run de producción todavía no existe (runner gVisor sin desplegar).
+ *  Deliberadamente NO se devuelve "falla" por defecto: eso volvería gratis cualquier cambio con solo
+ *  reportarlo como avería. El cliente NO se lleva la sorpresa: el endpoint le dice de frente que
+ *  contará como cambio ANTES de comprometer nada, y él decide. Cuando el runner exista, esta función
+ *  ejecuta el ejemplo y devuelve "pasa"/"falla" con datos. */
+export async function correrRegresion(): Promise<ResultadoRegresion> {
+  return "indeterminado";
+}
+
 /** Arranca el build de un ajuste sobre una automatización que YA existe. Lanza lo que lance el
  *  ciclo (AjusteNoPermitido / AjusteEnCurso / AutomatizacionNoDisponible / CuotaExcedida /
  *  ServicioSuspendido): el llamador los traduce a mensajes de cliente. */
@@ -111,4 +125,81 @@ export async function arrancarAjuste(deps: AjusteDeps, args: AjusteArgs): Promis
     await conOrg(deps.pool, args.orgId, (c) => fallarAjuste(c, args.automatizacionId, iniciado.versionId)).catch(() => {});
     throw e;
   }
+}
+
+// ── Drainer de la cola de ajustes ────────────────────────────────────────────
+// Misma disciplina que drenarBuilds: el request solo encoló; aquí se hace el trabajo caro
+// (regresión + sesión de CMA) fuera de la petición del cliente. Corre con el pool de APP porque el
+// ciclo vive bajo RLS — a diferencia del drainer de builds, que necesita el dueño para crear el
+// tenant. La org se toma de la FILA, no de un parámetro: la cola es global.
+
+export interface DrenarAjustesDeps extends AjusteDeps {
+  // DOS pools, como el drainer de builds: la cola tiene REVOKE ALL para el rol de app (solo se
+  // escribe por app_solicitar_ajuste, que valida), así que reclamarla exige el DUEÑO; el ciclo en
+  // cambio vive bajo RLS y va con el pool de app (deps.pool).
+  poolOwner: Pool;
+  notificador?: Notificador; // avisa al cliente si su ajuste se descarta (best-effort)
+}
+
+const MAX_INTENTOS_AJUSTE = 3;
+
+export async function drenarAjustes(
+  deps: DrenarAjustesDeps,
+  opts?: { lote?: number },
+): Promise<{ arrancados: number; fallidos: number; pendientes: number }> {
+  const lote = opts?.lote ?? 10;
+  let arrancados = 0, fallidos = 0, pendientes = 0;
+  const vistos: string[] = [];
+  for (let i = 0; i < lote; i++) {
+    // Las vistas se excluyen EN el SELECT (no tras reclamarlas): reclamar para descartar
+    // incrementaría `intentos` sin procesar y el presupuesto de reintentos se gastaría al doble.
+    const claim = await deps.poolOwner.query<{
+      id: string; org_id: string; automatizacion_id: string; peticion: string; intentos: number;
+      nombre: string; spec: Spec | null; ejemplo_key: string | null;
+    }>(
+      `UPDATE ajuste_pendiente SET intentos = intentos + 1
+         WHERE id = (SELECT ap.id FROM ajuste_pendiente ap WHERE NOT (ap.id = ANY($1::uuid[]))
+                      ORDER BY ap.creada FOR UPDATE SKIP LOCKED LIMIT 1)
+       RETURNING id, org_id, automatizacion_id, peticion, intentos,
+                 (SELECT nombre      FROM automatizaciones a WHERE a.id = automatizacion_id) AS nombre,
+                 (SELECT spec        FROM automatizaciones a WHERE a.id = automatizacion_id) AS spec,
+                 (SELECT ejemplo_key FROM automatizaciones a WHERE a.id = automatizacion_id) AS ejemplo_key`,
+      [vistos],
+    );
+    const row = claim.rows[0];
+    if (!row) break;
+    vistos.push(row.id);
+    try {
+      // Una automatización construida ANTES de que se guardaran spec/ejemplo_key no se puede
+      // ajustar: sin ellos el agente no tiene ni criterios ni datos con que probar. Se descarta con
+      // aviso en vez de mandarle al agente un spec vacío y entregar cualquier cosa.
+      if (!row.spec || !row.ejemplo_key) {
+        throw new Error("la automatización no guardó su spec/ejemplo (se construyó antes de que se persistieran): no se puede ajustar");
+      }
+      const regresion = await correrRegresion();
+      await arrancarAjuste(deps, {
+        orgId: row.org_id,
+        automatizacionId: row.automatizacion_id,
+        peticion: row.peticion,
+        spec: row.spec,
+        ejemploKey: row.ejemplo_key,
+        regresion,
+      });
+      await deps.poolOwner.query("DELETE FROM ajuste_pendiente WHERE id = $1", [row.id]);
+      arrancados++;
+    } catch (e) {
+      const msg = (e as { message?: string })?.message ?? String(e);
+      if (row.intentos >= MAX_INTENTOS_AJUSTE) {
+        await deps.poolOwner.query("DELETE FROM ajuste_pendiente WHERE id = $1", [row.id]);
+        // El cliente pidió un cambio y ya vio "en eso estamos": si se descarta en silencio se queda
+        // esperando algo que no va a llegar (el mismo agujero que tenía el disparo de builds).
+        await deps.notificador?.notificar({ tipo: "fallo", orgId: row.org_id, nombre: row.nombre }).catch(() => {});
+        fallidos++;
+      } else {
+        pendientes++;
+        console.error(`[ajuste] error arrancando ${row.id} (intento ${row.intentos}, se reintenta):`, msg);
+      }
+    }
+  }
+  return { arrancados, fallidos, pendientes };
 }

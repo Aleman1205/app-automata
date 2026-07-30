@@ -9,7 +9,7 @@
 //   ADMIN_URL=... DATABASE_URL=... npm run verify:ajuste:pg
 // ─────────────────────────────────────────────────────────────────────────────
 import { crearPool, conOrg } from "../src/db/pg.ts";
-import { arrancarAjuste, type AjusteDeps } from "../src/pipeline/ajuste.ts";
+import { arrancarAjuste, drenarAjustes, type AjusteDeps } from "../src/pipeline/ajuste.ts";
 import { estadoDelCiclo, AjusteNoPermitido } from "../src/ciclo/servicio.ts";
 import type { ArranqueBuild, BuildClientAsync, PeticionAjuste, ResultadoCosecha, Spec, Storage } from "../src/types.ts";
 
@@ -121,6 +121,33 @@ async function main() {
     check(`rechaza con AjusteNoPermitido('frozen') (fue: ${motivo})`, motivo === "frozen");
     check("una REPARACIÓN sí se permite aunque esté frozen (mantenerla viva es obligación)",
       (await arrancarAjuste(deps, args(id5, "se rompió", "falla"))).tipo === "reparacion");
+
+    // El camino REAL de producción: el request solo encola (app_solicitar_ajuste) y el drainer hace
+    // el trabajo caro. Antes esto no existía: no había cola ni forma de llegar a arrancarAjuste.
+    console.log("\n6. Cola + drainer (el camino que usa el endpoint):");
+    const id6 = await sembrar();
+    await admin.query("UPDATE automatizaciones SET spec=$2, ejemplo_key=$3 WHERE id=$1",
+      [id6, JSON.stringify(spec), EJEMPLO]);
+    const enc = await conOrg(app, O, (c) => c.query<{ id: string }>("SELECT app_solicitar_ajuste($1,$2) AS id", [id6, "Agrega el promedio"]));
+    check("app_solicitar_ajuste encoló", !!enc.rows[0]?.id);
+    check("el app NO puede escribir la cola directo (REVOKE ALL)", await (async () => {
+      try { await conOrg(app, O, (c) => c.query("INSERT INTO ajuste_pendiente (org_id, automatizacion_id, peticion) VALUES (app_current_org(),$1,x)", [id6])); return false; } catch { return true; }
+    })());
+    check("dos clics no encolan dos veces (UNIQUE por automatización)",
+      (await conOrg(app, O, (c) => c.query<{ id: string }>("SELECT app_solicitar_ajuste($1,$2) AS id", [id6, "otra vez"]))).rows[0]?.id === enc.rows[0]?.id);
+    const dr = await drenarAjustes({ ...deps, poolOwner: admin, notificador: { async notificar() {} } });
+    check(`el drainer lo arrancó (arrancados=${dr.arrancados})`, dr.arrancados === 1);
+    check("y lo sacó de la cola", (await uno("SELECT count(*)::int AS n FROM ajuste_pendiente WHERE automatizacion_id=$1", [id6]))?.["n"] === 0);
+    check("dejó la versión 2 building con sesión de CMA", !!(await uno("SELECT cma_session_id FROM versiones WHERE automatizacion_id=$1 AND numero=2", [id6]))?.["cma_session_id"]);
+
+    console.log("\n7. Una automatización SIN spec/ejemplo guardados no se puede ajustar (se avisa, no se finge):");
+    const id7 = await sembrar(); // sin spec ni ejemplo_key
+    await conOrg(app, O, (c) => c.query("SELECT app_solicitar_ajuste($1,$2) AS id", [id7, "cambio"]));
+    const avisos: string[] = [];
+    let r7 = { arrancados: 0, fallidos: 0, pendientes: 0 };
+    for (let i = 0; i < 3; i++) r7 = await drenarAjustes({ ...deps, poolOwner: admin, notificador: { async notificar(e) { avisos.push(e.tipo); } } });
+    check("se descarta tras los intentos", r7.fallidos === 1);
+    check("y se le avisa al cliente (no se queda esperando)", avisos.length === 1 && avisos[0] === "fallo");
   } finally {
     await admin.query("DELETE FROM orgs WHERE id=$1", [O]).catch(() => {});
     await admin.end(); await app.end();
