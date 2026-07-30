@@ -144,6 +144,22 @@ async function main() {
     check("resolver_sesion_cma la mapea (el webhook podrá encontrarla)", (await uno("SELECT version_id FROM resolver_sesion_cma('sess_arr_1')"))?.["version_id"] === vArr.id);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
 
+    // El bug que este archivo NO cazaba: probaba cosecharYConfirmar por ítem, nunca el BUCLE. Con
+    // la fila no terminal como la MÁS VIEJA, drenarCosecha la re-reclamaba y cortaba, así que los
+    // builds ya terminados de los demás clientes no se cosechaban nunca (y el reaper los mataba a
+    // las 6 h). `en_curso` es el caso NORMAL, no una rareza: el webhook encola en status_idled.
+    console.log("\n8bis. Una sesión ATORADA de primera no bloquea a las demás:");
+    await admin.query("DELETE FROM cosecha_pendiente WHERE org_id = $1", [A]);
+    const vAtorada = await sembrar("s_atorada", 30);
+    cosechador.r.set("s_atorada", { estado: "en_curso" }); // se queda en el outbox
+    const vBuena = await sembrar("s_despues", 31);
+    cosechador.r.set("s_despues", { estado: "satisfecho", codigo, costoUsd: 0, iteraciones: 1 });
+    const dr = await drenarCosecha(deps);
+    check(`cosechó la de atrás pese a la atorada (cosechados=${dr.cosechados})`, dr.cosechados === 1);
+    check("la buena quedó 'lista'", (await estadoVer(vBuena))?.["estado"] === "lista");
+    check("la atorada sigue en el outbox para reintentar", (await enOutbox("s_atorada")) === 1);
+    check("y su versión sigue 'building' (no se la mató)", (await estadoVer(vAtorada))?.["estado"] === "building");
+
     console.log("\n9. El reaper limpia el outbox de los builds que mata (a3-s4):");
     const vr = await admin.query<{ id: string }>("INSERT INTO versiones (automatizacion_id,org_id,numero,estado,creada) VALUES ($1,$2,20,'building', now() - interval '2 hours') RETURNING id", [AUTO, A]);
     const vReap = vr.rows[0]!.id;

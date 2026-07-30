@@ -103,17 +103,25 @@ export async function drenarCosecha(deps: CosechaDeps, opts?: { lote?: number })
   // Cada fila se procesa a lo sumo UNA vez por drenado: los no-terminales (en_curso/sin_bytes)
   // se quedan en el outbox, así que sin esto el loop los re-reclamaría en círculo. Al re-encontrar
   // uno ya visto, ya dimos la vuelta a lo pendiente → cortamos.
-  const vistos = new Set<string>();
+  // Las ya vistas se EXCLUYEN en el SELECT, no después de reclamarlas. Con el chequeo posterior el
+  // drenado se ATORABA en la primera fila no terminal: `en_curso` es el caso NORMAL (el webhook
+  // encola en status_idled y la sesión todavía itera), esa fila se queda en el outbox, la siguiente
+  // vuelta re-reclamaba LA MISMA y el guard cortaba el bucle. Resultado: los builds de los demás
+  // clientes —ya terminados— no se cosechaban nunca y a las 6 h el reaper los marcaba 'failed'.
+  // Mismo arreglo que en disparo.ts y ajuste.ts (que sí excluyen en el SELECT).
+  const vistos: string[] = [];
   for (let i = 0; i < lote; i++) {
     const claim = await deps.pool.query<{ session_id: string; version_id: string; auto_id: string; org_id: string }>(
       `UPDATE cosecha_pendiente SET intentos = intentos + 1
-         WHERE session_id = (SELECT session_id FROM cosecha_pendiente ORDER BY creada FOR UPDATE SKIP LOCKED LIMIT 1)
+         WHERE session_id = (SELECT session_id FROM cosecha_pendiente
+                              WHERE NOT (session_id = ANY($1::text[]))
+                              ORDER BY creada FOR UPDATE SKIP LOCKED LIMIT 1)
        RETURNING session_id, version_id, auto_id, org_id`,
+      [vistos],
     );
     const row = claim.rows[0];
-    if (!row) break; // outbox vacío
-    if (vistos.has(row.session_id)) break; // ya recorrimos todo lo pendiente
-    vistos.add(row.session_id);
+    if (!row) break; // no queda nada pendiente que no hayamos recorrido
+    vistos.push(row.session_id);
     const item: ItemCosecha = { sessionId: row.session_id, versionId: row.version_id, autoId: row.auto_id, orgId: row.org_id };
     let estado: EstadoCosecha;
     try {

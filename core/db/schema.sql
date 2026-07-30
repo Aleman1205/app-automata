@@ -622,7 +622,12 @@ END $$;
 -- Privilegios MÍNIMOS del rol de webhooks (sujeto a RLS; resuelve cross-org solo por los
 -- SECURITY DEFINER de arriba). Nada de GRANT ALL: lo justo para el receptor + los handlers.
 GRANT USAGE ON SCHEMA public TO automata_webhook;
-GRANT INSERT ON webhook_events TO automata_webhook;                     -- dedupe (no-org, sin RLS)
+-- SELECT además de INSERT: el dedupe hace `INSERT … ON CONFLICT (fuente,id) DO NOTHING RETURNING id`
+-- y el conflict target por sí solo exige SELECT sobre las columnas del índice árbitro. Con solo
+-- INSERT, Postgres respondía "permission denied for table webhook_events" y el receptor hacía
+-- ROLLBACK + throw → 500 en TODO webhook: ningún build se cosechaba y ningún pago de Stripe movía
+-- nada. No se notaba porque verify-webhooks.ts conecta como superusuario, no con este rol.
+GRANT INSERT, SELECT ON webhook_events TO automata_webhook;             -- dedupe (no-org, sin RLS)
 -- INSERT + SELECT: el ON CONFLICT (session_id) DO NOTHING del handler necesita SELECT para
 -- leer el índice árbitro (sin él: "permission denied", aunque haya INSERT). El outbox no tiene
 -- secretos (ids de sesión/versión/org ya resueltos por el SD firmado); leerlo es benigno.
