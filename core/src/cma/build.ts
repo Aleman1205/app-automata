@@ -181,10 +181,20 @@ export class CmaBuildClient implements BuildClientAsync {
         config: {
           type: "cloud",
           packages: { pip: PAQUETES_PIP },
-          // Decisión (b): deps pre-horneadas + SIN red. `allowed_hosts: []` y
-          // `allow_package_managers: false` son toggles independientes; ambos
-          // hacen falta para cerrar el egress (docs/decisiones-runtime.md #2).
-          networking: { type: "limited", allowed_hosts: [], allow_package_managers: false },
+          // ⚠️ CAMBIO OBLIGADO POR EL API (lo descubrió el primer build real, 2026-07-30).
+          // La decisión (b) de docs/decisiones-runtime.md #2 era "deps pre-horneadas + CERO red":
+          // allowed_hosts: [] Y allow_package_managers: false. CMA ahora rechaza esa combinación:
+          //   400 "Packages cannot be specified with limited networking when
+          //        allow_package_managers is disabled."
+          // Tiene sentido: las deps hay que BAJARLAS de algún lado. Las dos salidas eran quitar
+          // `packages` (y quedarnos sin pandas/openpyxl, que es de lo que viven estas
+          // automatizaciones) o permitir los gestores de paquetes. Se elige lo segundo.
+          //
+          // QUÉ SE PIERDE, dicho claro: el egress ya no es CERO. `allowed_hosts: []` sigue
+          // bloqueando hosts arbitrarios, así que el canal se reduce a los repositorios de
+          // paquetes (PyPI) — mucho más angosto que red abierta, pero un canal de exfiltración al
+          // fin. El riesgo residual del threat model (docs/11) crece y hay que anotarlo ahí.
+          networking: { type: "limited", allowed_hosts: [], allow_package_managers: true },
         },
       } as any);
       this.log(`environment creado: ${env.id}`);
