@@ -58,6 +58,32 @@ function aplicarEsquema(): string | null {
   return (r.status ?? 1) === 0 ? null : `${r.stdout ?? ""}\n${r.stderr ?? ""}`.trim().slice(-600);
 }
 
+/**
+ * ¿El texto a mutar vive DENTRO de un `CREATE TABLE`? Entonces la mutación NUNCA llega a la BD:
+ * el esquema usa `CREATE TABLE IF NOT EXISTS` y sobre una tabla que ya existe no hace nada. El
+ * verify corre contra la BD intacta, pasa, y el arnés reportaría "SOBREVIVE" — un hallazgo
+ * FANTASMA. Pasó de verdad auditando el tope de ajustes: `CHECK (ajustes_usados <= 3)` mutado a
+ * `<= 99` daba SOBREVIVE mientras la BD seguía con el 3.
+ * Se detecta comparando la última sentencia abierta antes del match: si el `CREATE TABLE` está
+ * DESPUÉS del último `;`, estamos dentro de él.
+ */
+function dentroDeCreateTable(texto: string, posicion: number): boolean {
+  // Los comentarios se quitan ANTES de buscar el `;`: este esquema está lleno de prosa y uno de
+  // esos comentarios ("…3 ajustes (cambios) incluidos;") tiene punto y coma, que hacía creer al
+  // detector que la sentencia ya había cerrado. Se compara el orden dentro del texto limpio, así
+  // que las posiciones desplazadas no importan.
+  const antes = texto.slice(0, posicion).replace(/--[^\n]*/g, "");
+  return antes.toUpperCase().lastIndexOf("CREATE TABLE") > antes.lastIndexOf(";");
+}
+
+if (sql && dentroDeCreateTable(original, original.indexOf(buscar))) {
+  console.log("INCONCLUSO — el texto está dentro de un CREATE TABLE, y el esquema usa");
+  console.log("   CREATE TABLE IF NOT EXISTS: sobre una tabla que ya existe, la mutación NO llega a");
+  console.log("   la BD. El resultado sería un 'SOBREVIVE' falso. Para probar un constraint, mútalo");
+  console.log("   con un ALTER TABLE … DROP/ADD CONSTRAINT, o recrea la BD desde cero.");
+  process.exit(2);
+}
+
 const restaurar = () => {
   if (readFileSync(ruta, "utf8") !== original) writeFileSync(ruta, original);
   // Restaurar el ARCHIVO no basta: la BD se quedó con la función mutada y envenenaría todo lo que

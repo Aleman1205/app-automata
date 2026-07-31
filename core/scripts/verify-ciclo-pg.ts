@@ -11,6 +11,7 @@ import {
   iniciarAjuste, confirmarAjuste, fallarAjuste, congelar, estadoDelCiclo, reaparBuildsColgados,
   AjusteNoPermitido, AjusteEnCurso, AutomatizacionNoDisponible,
 } from "../src/ciclo/servicio.ts";
+import { MAX_AJUSTES } from "../src/ciclo/estados.ts";
 import { type Pool, type PoolClient } from "pg";
 
 const ADMIN_URL = process.env.ADMIN_URL ?? "postgres://postgres@127.0.0.1:55432/postgres";
@@ -182,10 +183,21 @@ async function main() {
       try { await admin.query("INSERT INTO versiones (automatizacion_id,org_id,numero,estado) VALUES ($1,$2,1,'x')", [CICLO, A]); return false; }
       catch (e) { return (e as { code?: string }).code === "23505"; }
     })());
-    check("CHECK ajustes_usados<=3 (== MAX_AJUSTES): 4 → violación", await (async () => {
-      try { await admin.query("UPDATE automatizaciones SET ajustes_usados=4 WHERE id=$1", [FAIL]); return false; }
+    // El tope está declarado DOS VECES —MAX_AJUSTES en TS y un CHECK en el esquema— y hasta ahora
+    // nada comprobaba que coincidieran: este check decía "== MAX_AJUSTES" en su nombre pero
+    // hardcodeaba el 4. Una auditoría por mutación lo demostró: poniendo MAX_AJUSTES = 99, este
+    // test seguía en VERDE. Y si alguien sube el tope a 5 por decisión de negocio, la app dejaría
+    // pedir el 4º y el 5º ajuste y la BD los rechazaría con una violación cruda: el cliente vería
+    // un 500 en vez de un "ya usaste tus ajustes".
+    check(`CHECK ajustes_usados<=${MAX_AJUSTES}: ${MAX_AJUSTES + 1} → violación`, await (async () => {
+      try { await admin.query("UPDATE automatizaciones SET ajustes_usados=$2 WHERE id=$1", [FAIL, MAX_AJUSTES + 1]); return false; }
       catch (e) { return (e as { code?: string }).code === "23514"; }
     })());
+    check(`y el tope del CHECK es EXACTAMENTE MAX_AJUSTES (${MAX_AJUSTES}): ${MAX_AJUSTES} sí entra`, await (async () => {
+      try { await admin.query("UPDATE automatizaciones SET ajustes_usados=$2 WHERE id=$1", [FAIL, MAX_AJUSTES]); return true; }
+      catch { return false; } // el CHECK es MÁS estricto que el código: se agotarían antes de tiempo
+    })());
+    await admin.query("UPDATE automatizaciones SET ajustes_usados=0 WHERE id=$1", [FAIL]);
   } finally {
     await admin.query("DELETE FROM orgs WHERE id = ANY($1)", [[A, OTRA]]).catch(() => {});
     await admin.end();
