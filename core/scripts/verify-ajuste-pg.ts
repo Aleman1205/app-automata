@@ -195,6 +195,22 @@ async function main() {
     check("al agente le llegó el CONTRATO del resultado (sin él, las refs @resultado.* no resuelven)",
       !!cosechador.ultimoContrato && cosechador.ultimoContrato.includes("campos"));
 
+    // No se puede COBRAR un "cambio" de algo que el cliente nunca recibió: si el primer build falló,
+    // no existe versión vigente contra la cual comparar, así que la regresión ni siquiera aplica.
+    // Antes salía 'indeterminado' → cambio → le facturaba una generación encima del build fallido.
+    console.log("\n6ter. Un ajuste sobre algo NUNCA ENTREGADO es reparación (gratis), no cambio:");
+    // NO se usa sembrar(): ese deja la v1 'lista', y pasar por 'lista' sella `entregada` para
+    // siempre (trg_marcar_entrega) — marcarla 'failed' después NO la des-entrega. Hay que nacerla
+    // fallida, que es justo el caso real: el primer build tronó y el cliente nunca recibió nada.
+    const id6b = (await uno("INSERT INTO automatizaciones (org_id, nombre, spec, ejemplo_key) VALUES ($1,'Nunca entregada',$2,$3) RETURNING id", [O, JSON.stringify(spec), EJEMPLO]))!["id"] as string;
+    await admin.query("INSERT INTO versiones (automatizacion_id, org_id, numero, estado) VALUES ($1,$2,1,'failed')", [id6b, O]);
+    check("la automatización no tiene fecha de entrega", !(await uno("SELECT entregada FROM automatizaciones WHERE id=$1", [id6b]))?.["entregada"]);
+    await conOrg(app, O, (c) => c.query("SELECT app_solicitar_ajuste($1,$2)", [id6b, "reconstruye esto"]));
+    await drenarAjustes({ ...deps, poolOwner: admin, planeador, notificador: { async notificar() {} } });
+    const vNueva = await uno("SELECT tipo FROM versiones WHERE automatizacion_id=$1 AND estado='building'", [id6b]);
+    check("se clasifica como reparacion (no le cobra un cambio de lo que nunca recibió)", vNueva?.["tipo"] === "reparacion");
+    check("y NO consumió ajuste", (await conOrg(app, O, (c) => estadoDelCiclo(c, id6b))).ajustesUsados === 0);
+
     console.log("\n7. Una automatización SIN spec/ejemplo guardados no se puede ajustar (se avisa, no se finge):");
     const id7 = await sembrar(); // sin spec ni ejemplo_key
     await conOrg(app, O, (c) => c.query("SELECT app_solicitar_ajuste($1,$2) AS id", [id7, "cambio"]));

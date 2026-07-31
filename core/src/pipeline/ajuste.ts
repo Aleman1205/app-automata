@@ -83,7 +83,13 @@ async function codigoVigente(storage: Storage, versionId: string): Promise<strin
  *  reportarlo como avería. El cliente NO se lleva la sorpresa: el endpoint le dice de frente que
  *  contará como cambio ANTES de comprometer nada, y él decide. Cuando el runner exista, esta función
  *  ejecuta el ejemplo y devuelve "pasa"/"falla" con datos. */
-export async function correrRegresion(): Promise<ResultadoRegresion> {
+export async function correrRegresion(opts?: { entregada?: string | Date | null }): Promise<ResultadoRegresion> {
+  // NUNCA ENTREGADA ⇒ no hay nada que "cambiar". La regresión compara el ejemplo original contra la
+  // versión VIGENTE, y si el primer build falló no existe tal versión: la comparación no es que dé
+  // indeterminado, es que no aplica. Cobrarlo como cambio le facturaba al cliente una modificación
+  // de algo que nunca recibió, encima del build fallido que ya pagó. Se trata como REPARACIÓN
+  // (gratis, permitida aun congelada, acotada por el circuit breaker), que es justo lo que es.
+  if (opts && !opts.entregada) return "falla";
   return "indeterminado";
 }
 
@@ -166,6 +172,7 @@ export async function drenarAjustes(
     const claim = await deps.poolOwner.query<{
       id: string; org_id: string; automatizacion_id: string; peticion: string; intentos: number;
       nombre: string; spec: Spec | null; ejemplo_key: string | null; vista_anterior: Vista | null;
+      entregada: Date | null;
     }>(
       // Mismo ARRENDAMIENTO que el disparo de builds, por la misma razón: el lock del claim no
       // sobrevive al trabajo caro, así que sin `tomada_en` dos crons solapados arrancarían dos
@@ -179,6 +186,7 @@ export async function drenarAjustes(
                  (SELECT nombre      FROM automatizaciones a WHERE a.id = automatizacion_id) AS nombre,
                  (SELECT spec        FROM automatizaciones a WHERE a.id = automatizacion_id) AS spec,
                  (SELECT ejemplo_key FROM automatizaciones a WHERE a.id = automatizacion_id) AS ejemplo_key,
+                 (SELECT entregada    FROM automatizaciones a WHERE a.id = automatizacion_id) AS entregada,
                  -- La vista VIGENTE, para que el planner la EVOLUCIONE en vez de reinventar el
                  -- reporte que el cliente ya reconoce. Se califica con el nombre de la tabla: aquí
                  -- un automatizacion_id a secas resolvería a la columna de versiones (v.automatizacion_id
@@ -198,7 +206,7 @@ export async function drenarAjustes(
       if (!row.spec || !row.ejemplo_key) {
         throw new Error("la automatización no guardó su spec/ejemplo (se construyó antes de que se persistieran): no se puede ajustar");
       }
-      const regresion = await correrRegresion();
+      const regresion = await correrRegresion({ entregada: row.entregada });
       // PLANEAR ANTES DE RESERVAR (mismo orden que drenarBuilds). iniciarAjuste es lo que COBRA la
       // generación: si el planner truena después de reservar, el cliente ya pagó un build que no
       // existe. Planeando primero, un fallo del planner solo deja el ajuste en la cola para el
