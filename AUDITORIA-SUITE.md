@@ -1,6 +1,6 @@
 # Auditoría de la suite por MUTACIÓN — en curso
 
-**Estado:** ~68 corridas de mutación sobre 20 de los 38 verify. **8 hallazgos, 8 arreglados y
+**Estado:** ~72 corridas de mutación sobre 21 de los 38 verify. **9 hallazgos, 9 arreglados y
 verificados** (la mutación que sobrevivía ahora MATA), más **1 observación** sobre cómo falla
 `verify:plan:pg`. Ningún hallazgo abierto.
 
@@ -37,6 +37,8 @@ vigilar?"**. Método y reglas en `NIGHT-RUN.md`. Arnés: `core/scripts/mutar.ts`
 | Downgrade: no desactivar el excedente / conservar las más nuevas | `verify:plan:pg` **pero COLGÁNDOSE** | — | ver observación |
 | **`verificar_freno` fail-OPEN** sin fila de `interruptores` (kill-switch inerte) | (nadie) | `verify:killswitch:pg` | **Alta** ✅ arreglado |
 | Kill-switch: fail-open del TRIGGER / suspensión por-org desactivada | `verify:killswitch:pg` | — | — cubierto |
+| **Quitar `lower(btrim())` del correo entrante** (la invitación no cruza nunca) | (nadie) | `verify:onboarding:pg` | **Media** ✅ arreglado |
+| Invitación: no borrarla antes de crear la membresía (lugar contado doble) | `verify:onboarding:pg` | — | — cubierto |
 
 ## Hallazgo 1 — `verify:pg` probaba el aislamiento de UNA tabla de ocho ✅ ARREGLADO
 
@@ -185,6 +187,24 @@ Nota de método: al escribir este check falló SIN mutación, y la regla del bri
 cambiando el test. Al investigar resultó ser **mi aserción** (esperaba el mensaje crudo de SQL, pero
 `verificarFreno` lo convierte con `comoSuspension()`), no un bug del producto. Comprobado antes de
 concluir, en ambas direcciones.
+
+## Hallazgo 9 — un correo con mayúsculas rompía la invitación en silencio ✅ ARREGLADO
+
+`app_aceptar_invitaciones` normaliza el correo entrante con `lower(btrim(...))` antes de cruzarlo
+con `invitaciones`. Quitando esa normalización, `verify:onboarding:pg` seguía en verde.
+
+**Qué pasaría:** las invitaciones se guardan en minúsculas (el esquema del endpoint las normaliza),
+pero el correo que llega de Clerk al registrarse **no tiene por qué venir normalizado**. Si viene
+como `Ana@Vitrales.MX`, el cruce falla: la persona se registra, **no entra al equipo**, se le crea
+una org propia, y su lugar del plan sigue ocupado para siempre. Nadie recibe un error.
+
+Es exactamente la clase de bug que este proyecto ya sufrió dos veces con las invitaciones (el
+`user_id` inventado del local-part; la invitación que solo servía si la persona nunca se había
+registrado).
+
+**Arreglo** (`verify:onboarding:pg` §7bis): se invita en minúsculas y se registra con
+`"  Mayus.Prueba@Ejemplo.MX  "` — debe entrar igual, con su rol, consumiendo la invitación y sin
+recibir org propia. Verificado: la mutación ahora MATA.
 
 ## Observación — `verify:plan:pg` detecta el fallo, pero COLGÁNDOSE
 
