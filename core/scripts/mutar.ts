@@ -23,9 +23,18 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
-const [archivo, buscar, reemplazar, verify] = process.argv.slice(2);
+// --sql: tras mutar, REAPLICA el esquema (y lo restaura al terminar). Sin esto, mutar schema.sql
+// no tiene ningún efecto —la BD sigue con las funciones viejas— y todo saldría "MATA" por error,
+// que es la peor forma de fallar: te dice que el test vigila algo que ni siquiera se rompió.
+// Casi todo el cobro real (cobrar_build, los triggers de cuota, el circuit breaker) vive en SQL,
+// así que sin este modo la auditoría del camino del dinero sería de mentira.
+// OJO: solo es fiable en objetos que se recrean, o sea CREATE OR REPLACE FUNCTION. Un CREATE TABLE
+// IF NOT EXISTS mutado NO altera la tabla existente: esa mutación no llega a la BD.
+const args = process.argv.slice(2);
+const sql = args.includes("--sql");
+const [archivo, buscar, reemplazar, verify] = args.filter((a) => a !== "--sql");
 if (!archivo || buscar === undefined || reemplazar === undefined || !verify) {
-  console.error("uso: tsx scripts/mutar.ts <archivo> <buscar> <reemplazar> <script-verify>");
+  console.error("uso: tsx scripts/mutar.ts [--sql] <archivo> <buscar> <reemplazar> <script-verify>");
   process.exit(2);
 }
 
@@ -43,8 +52,43 @@ if (apariciones > 1) {
   process.exit(2);
 }
 
+/** Aplica el esquema tal como está EN DISCO. Devuelve null si aplicó, o el error si no. */
+function aplicarEsquema(): string | null {
+  const r = spawnSync("./scripts/bd-prueba.sh", [], { encoding: "utf8", stdio: "pipe" });
+  return (r.status ?? 1) === 0 ? null : `${r.stdout ?? ""}\n${r.stderr ?? ""}`.trim().slice(-600);
+}
+
+/**
+ * ¿El texto a mutar vive DENTRO de un `CREATE TABLE`? Entonces la mutación NUNCA llega a la BD:
+ * el esquema usa `CREATE TABLE IF NOT EXISTS` y sobre una tabla que ya existe no hace nada. El
+ * verify corre contra la BD intacta, pasa, y el arnés reportaría "SOBREVIVE" — un hallazgo
+ * FANTASMA. Pasó de verdad auditando el tope de ajustes: `CHECK (ajustes_usados <= 3)` mutado a
+ * `<= 99` daba SOBREVIVE mientras la BD seguía con el 3.
+ * Se detecta comparando la última sentencia abierta antes del match: si el `CREATE TABLE` está
+ * DESPUÉS del último `;`, estamos dentro de él.
+ */
+function dentroDeCreateTable(texto: string, posicion: number): boolean {
+  // Los comentarios se quitan ANTES de buscar el `;`: este esquema está lleno de prosa y uno de
+  // esos comentarios ("…3 ajustes (cambios) incluidos;") tiene punto y coma, que hacía creer al
+  // detector que la sentencia ya había cerrado. Se compara el orden dentro del texto limpio, así
+  // que las posiciones desplazadas no importan.
+  const antes = texto.slice(0, posicion).replace(/--[^\n]*/g, "");
+  return antes.toUpperCase().lastIndexOf("CREATE TABLE") > antes.lastIndexOf(";");
+}
+
+if (sql && dentroDeCreateTable(original, original.indexOf(buscar))) {
+  console.log("INCONCLUSO — el texto está dentro de un CREATE TABLE, y el esquema usa");
+  console.log("   CREATE TABLE IF NOT EXISTS: sobre una tabla que ya existe, la mutación NO llega a");
+  console.log("   la BD. El resultado sería un 'SOBREVIVE' falso. Para probar un constraint, mútalo");
+  console.log("   con un ALTER TABLE … DROP/ADD CONSTRAINT, o recrea la BD desde cero.");
+  process.exit(2);
+}
+
 const restaurar = () => {
   if (readFileSync(ruta, "utf8") !== original) writeFileSync(ruta, original);
+  // Restaurar el ARCHIVO no basta: la BD se quedó con la función mutada y envenenaría todo lo que
+  // corra después. Se reaplica el esquema bueno.
+  if (sql) aplicarEsquema();
 };
 // Un Ctrl-C a media corrida dejaría el código mutado en el árbol.
 for (const s of ["SIGINT", "SIGTERM"] as const) process.on(s, () => { restaurar(); process.exit(130); });
@@ -52,7 +96,28 @@ for (const s of ["SIGINT", "SIGTERM"] as const) process.on(s, () => { restaurar(
 let salida = 1;
 try {
   writeFileSync(ruta, original.replace(buscar, reemplazar));
-  const r = spawnSync("npm", ["run", verify], { encoding: "utf8", stdio: "pipe" });
+  if (sql) {
+    const err = aplicarEsquema();
+    if (err) {
+      // El esquema mutado ni siquiera aplica: no se probó nada. Decirlo, en vez de contarlo como
+      // "MATA" (el verify habría fallado por la BD rota, no porque el test vigile algo).
+      console.log(`INCONCLUSO — el esquema mutado no aplica, así que la mutación nunca llegó a la BD.`);
+      console.log(`   ${err.split("\n").slice(-3).join(" | ")}`);
+      process.exit(2);
+    }
+  }
+  // TIMEOUT: una mutación puede COLGAR el verify en vez de romperlo (p.ej. si rompe un lock y el
+  // test se queda esperando a otra transacción). Sin tope, el arnés se queda ahí para siempre y se
+  // pierde la corrida — pasó auditando el downgrade de plan. Colgarse NO es "MATA": es su propia
+  // categoría, y en CI es peor que fallar, porque bloquea en vez de reportar.
+  const r = spawnSync("npm", ["run", verify], { encoding: "utf8", stdio: "pipe", timeout: 180_000 });
+  if (r.error && (r.error as { code?: string }).code === "ETIMEDOUT") {
+    console.log(`SE CUELGA — ${verify} no terminó en 180s con la mutación (no falla: se queda esperando).`);
+    console.log(`   ${archivo}: ${JSON.stringify(buscar)} → ${JSON.stringify(reemplazar)}`);
+    console.log("   Detecta el cambio, pero colgarse en CI bloquea el pipeline en vez de reportar.");
+    restaurar();
+    process.exit(0); // cuenta como detectado, pero queda anotado como cuelgue
+  }
   salida = r.status ?? 1;
   const fallos = (r.stdout ?? "").split("\n").filter((l) => l.includes("✗")).slice(0, 4);
   if (salida !== 0) {

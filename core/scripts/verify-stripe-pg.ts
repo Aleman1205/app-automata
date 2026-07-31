@@ -92,6 +92,26 @@ async function main() {
     check("la otra org sigue en su plan", (await planDe(B)) === "base");
     check("el customer sigue siendo de la org original", (await uno("SELECT resolver_org_stripe($1) AS o", [CUST]))?.["o"] === A);
 
+    // La OTRA dirección del guard, que no se probaba: la org ya tiene un customer y llega un
+    // checkout con OTRO. `app_stripe_vincular` es write-once por eso, y una auditoría por mutación
+    // lo destapó: quitando ese IF, este verify seguía en verde.
+    // Qué pasaría: el stripe_customer_id de la org se re-apunta al customer nuevo y TODOS los
+    // eventos del viejo (pagos, fallos, cancelaciones) pasan a ser no-op silenciosos —
+    // resolver_org_stripe ya no los mapea. Es exactamente el bug que este proyecto ya sufrió
+    // cuando stripe_customer_id no tenía escritor: Stripe cobrando y el producto sin enterarse.
+    console.log("\n3bis. Y la org tampoco puede cambiar de customer (write-once):");
+    const OTRO_CUST = "cus_prueba_segundo";
+    let doble = "";
+    try {
+      await procesar(evento("checkout.session.completed", { orgRef: A, customerId: OTRO_CUST, priceId: "price_fake_pro" }));
+    } catch (e) { doble = (e as Error).message; }
+    check(`falla con STRIPE_ORG_YA_TIENE_CUSTOMER (fue: ${doble.slice(0, 40)})`, /STRIPE_ORG_YA_TIENE_CUSTOMER/.test(doble));
+    check("la org sigue apuntando a su customer ORIGINAL", (await uno("SELECT stripe_customer_id AS c FROM subscriptions WHERE org_id=$1", [A]))?.["c"] === CUST);
+    check("y el customer nuevo no quedó mapeado a nadie", (await uno("SELECT resolver_org_stripe($1) AS o", [OTRO_CUST]))?.["o"] === null);
+    // Re-vincular el MISMO customer sigue siendo idempotente (un webhook duplicado no debe fallar).
+    check("re-vincular el MISMO customer no falla (idempotente ante webhooks duplicados)",
+      await procesar(evento("checkout.session.completed", { orgRef: A, priceId: "price_fake_pro" })).then(() => true).catch(() => false));
+
     console.log("\n4. Un upgrade aplica de inmediato (el cliente pagó para poder usarlo YA):");
     await admin.query("UPDATE subscriptions SET plan='base' WHERE org_id=$1", [A]);
     await procesar(evento("customer.subscription.updated", { priceId: "price_fake_equipo" }, 2000));

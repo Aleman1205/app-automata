@@ -119,6 +119,24 @@ async function main() {
     await admin.query("DELETE FROM interruptores");
     check("sin fila de interruptores: build en-contexto → BLOQUEADO (no fail-open)", await mensaje(() => build(A, autoA, 40), /SERVICIO_SUSPENDIDO:builds/));
     check("sin fila de interruptores: run en-contexto → BLOQUEADO", await mensaje(() => run(A, verA), /SERVICIO_SUSPENDIDO:ejecuciones/));
+    // Los dos checks de arriba pasan por el TRIGGER de la BD. Falta el otro camino: la función
+    // `verificar_freno`, que es la que consultan el guard temprano del Run (ejecutarEP) y el
+    // checkout de Stripe (exigirCobrosActivos). Una auditoría por mutación lo destapó: cambiando su
+    // `coalesce(v_congelado, true)` a `false`, este verify seguía en VERDE — el kill-switch quedaba
+    // FAIL-OPEN por ese camino justo cuando la fila no está, que es el escenario para el que existe
+    // un kill-switch. Y 'cobros' es palanca SOLO de esa función: el trigger no la cubre en absoluto.
+    // Se afirma sobre el ERROR TRADUCIDO (ServicioSuspendido + motivo), no sobre el texto crudo de
+    // Postgres: `verificarFreno` lo convierte con comoSuspension(), y el motivo es justo el contrato
+    // del que dependen los llamadores (el pipeline lo mapea a 503).
+    const suspende = async (fn: () => Promise<unknown>, motivo: string) => {
+      try { await fn(); return false; } catch (e) { return e instanceof ServicioSuspendido && e.motivo === motivo; }
+    };
+    for (const op of ["builds", "ejecuciones", "cobros"] as const) {
+      check(`sin fila de interruptores: verificar_freno('${op}') → BLOQUEA (fail-closed)`,
+        await suspende(() => conOrg(app, A, (c) => verificarFreno(c, op)), op));
+    }
+    check("sin fila de interruptores: exigirCobrosActivos → BLOQUEA (no se acepta dinero a ciegas)",
+      await suspende(() => conOrg(app, A, (c) => exigirCobrosActivos(c)), "cobros"));
     await admin.query("INSERT INTO interruptores (id) VALUES (true) ON CONFLICT (id) DO NOTHING");
     check("restaurada la fila, el build vuelve a proceder", (await build(A, autoA, 41)).rowCount === 1);
 

@@ -22,7 +22,13 @@ const U_INV = "user_onb_invitado";   // lo invitaron por correo ANTES de registr
 const U_SOLO = "user_onb_sin_invit"; // mismo camino, pero a él nadie lo invitó
 const CORREO_INV = "luis.invitado@vitrales.mx";
 const SEED_ORG = "0dbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1";
-const USERS = [U_NUEVO, U_NOMBRE, U_EXIST, U_CONC, U_INV, U_SOLO];
+const U_CASE = "user_onb_mayusculas"; // invitado en minúsculas, se registra con MAYÚSCULAS
+const CORREO_CASE = "mayus.prueba@ejemplo.mx";
+// U_CASE va en la lista de limpieza como todos: si no, su membresía sobrevive a la corrida y la
+// SIGUIENTE encuentra al usuario ya dentro del equipo, sin invitación que cruzar. El síntoma es un
+// test que pasa aislado y falla en la suite — que es exactamente la trampa de hermeticidad que este
+// repo ya documenta.
+const USERS = [U_NUEVO, U_NOMBRE, U_EXIST, U_CONC, U_INV, U_SOLO, U_CASE];
 
 let ok = true;
 const check = (n: string, p: boolean) => { console.log(`  ${p ? "✓" : "✗"} ${n}`); ok = ok && p; };
@@ -113,6 +119,22 @@ async function main() {
     // Segunda llamada: no debe duplicar ni, ahora que ya es miembro, crearle una org aparte.
     const rInv2 = await provisionarUsuario(app, U_INV, undefined, CORREO_INV);
     check("2ª alta es idempotente (misma org)", rInv2.org.orgId === SEED_ORG);
+
+    // El correo que llega de Clerk NO tiene por qué venir normalizado: "Ana@Vitrales.MX" y
+    // "  ana@vitrales.mx " son la misma persona. La invitación se guarda en minúsculas (el esquema
+    // del endpoint la normaliza), así que si el correo ENTRANTE no se normaliza, el cruce falla en
+    // silencio: la persona se registra, NO entra al equipo, y su lugar del plan sigue ocupado para
+    // siempre. Es la misma clase de bug que este proyecto ya sufrió con las invitaciones.
+    // Una auditoría por mutación lo destapó: quitando el lower(btrim(...)), este verify seguía verde.
+    console.log("\n7bis. El correo entrante se NORMALIZA (mayúsculas/espacios no rompen la invitación):");
+    await conOrg(app, SEED_ORG, (c) =>
+      c.query("INSERT INTO invitaciones (org_id, correo, rol) VALUES (app_current_org(), $1, 'operador')", [CORREO_CASE]));
+    const rCase = await provisionarUsuario(app, U_CASE, "Con Mayúsculas", "  Mayus.Prueba@Ejemplo.MX  ");
+    check("se registra con MAYÚSCULAS y espacios → entra igual al equipo que lo invitó", rCase.org.orgId === SEED_ORG);
+    check("y con su rol de operador", rCase.org.rol === "operador");
+    check("la invitación se consumió (el lugar del plan se libera)", (await admin.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM invitaciones WHERE correo = $1", [CORREO_CASE])).rows[0]?.n === 0);
+    check("NO se le creó org propia por no haber cruzado", (await orgsDeUsuario(app, U_CASE)).length === 1);
 
     console.log("\n8. Un correo SIN invitación sigue recibiendo su propio negocio:");
     const rSolo = await provisionarUsuario(app, U_SOLO, undefined, "nadie-lo-invito@ejemplo.mx");

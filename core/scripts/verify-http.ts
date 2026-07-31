@@ -23,6 +23,13 @@ const IDS: Record<string, Identidad> = {
   tok_ana: { userId: "u_ana", mfaVerificadoEn: new Date(NOW - 60_000) }, // admin, MFA fresco
   tok_ana_stale: { userId: "u_ana" }, // admin, sin MFA reciente
   tok_ana_futuro: { userId: "u_ana", mfaVerificadoEn: new Date(NOW + 60_000) }, // MFA en el futuro (inválido)
+  // MFA presente pero VIEJO (6 min > la ventana de 5). Faltaba justo este caso: los otros dos
+  // prueban ausencia y futuro, que fallan sin llegar a comparar contra la ventana. Por eso
+  // ensanchar VENTANA_STEPUP_MS a un año no rompía ningún test — una cookie robada seguiría
+  // siendo privilegiada durante 12 meses y la suite en verde.
+  tok_ana_viejo: { userId: "u_ana", mfaVerificadoEn: new Date(NOW - 6 * 60_000) },
+  // Y justo DENTRO de la ventana (4 min): fija el otro borde, para que encogerla también se cace.
+  tok_ana_borde: { userId: "u_ana", mfaVerificadoEn: new Date(NOW - 4 * 60_000) },
   tok_luis: { userId: "u_luis" }, // operador
   tok_intruso: { userId: "u_intruso" }, // no es miembro de A/B/Q
 };
@@ -79,6 +86,9 @@ async function main() {
     console.log("\n3. Capa 5 (step-up MFA), doble cota:");
     check("quitar sin MFA reciente → 403 step_up", err(await quitar({ sesionToken: "tok_ana_stale", cuerpo: { userId: "u_temp" } })) === "step_up_requerido");
     check("quitar con MFA en el FUTURO → 403 step_up (no evade)", err(await quitar({ sesionToken: "tok_ana_futuro", cuerpo: { userId: "u_temp" } })) === "step_up_requerido");
+    check("quitar con MFA VIEJO (6 min > ventana de 5) → 403 step_up", err(await quitar({ sesionToken: "tok_ana_viejo", cuerpo: { userId: "u_temp" } })) === "step_up_requerido");
+    check("quitar con MFA de 4 min (DENTRO de la ventana) → pasa el step-up", (await quitar({ sesionToken: "tok_ana_borde", cuerpo: { userId: "u_temp" } })).status !== 403);
+    await admin.query("INSERT INTO memberships (org_id,user_id,rol) VALUES ($1,'u_temp','operador') ON CONFLICT DO NOTHING", [A]);
     check("quitar con MFA fresco → 200", (await quitar({ sesionToken: "tok_ana", cuerpo: { userId: "u_temp" } })).status === 200);
     check("invitar SIN MFA (invitar ahora es peligrosa) → 403 step_up", err(await invitar({ sesionToken: "tok_ana_stale", cuerpo: { correo: "nuevo@vitrales.mx", rol: "operador" } })) === "step_up_requerido");
     check("invitar con MFA fresco → 201", (await invitar({ cuerpo: { correo: "nuevo@vitrales.mx", rol: "operador" } })).status === 201);
