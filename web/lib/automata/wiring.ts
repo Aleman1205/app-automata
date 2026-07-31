@@ -25,6 +25,7 @@ import { R } from "automata-core/http/tipos";
 import { type Deps, type Endpoint } from "automata-core/http/pipeline";
 import { type Sesion, type RateLimiter, type Solicitud, type Respuesta } from "automata-core/http/tipos";
 import { plantillaCorreo, type Notificador, type EventoCorreo, type Correo } from "automata-core/ops/notificaciones";
+import { MARCA } from "automata-core/marca";
 import { orgsDeUsuario, provisionarUsuario } from "automata-core/ops/onboarding";
 import { recibir, type Evento } from "automata-core/webhooks/receptor";
 import { aplicarDowngrade } from "automata-core/billing/plan";
@@ -394,7 +395,7 @@ export async function cronReaper(req: Request): Promise<Response> {
 async function enviarResend(a: string[], correo: Correo): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey || a.length === 0) return; // sin llave o sin destinatarios → no-op
-  const from = process.env.RESEND_FROM ?? "Automata <onboarding@resend.dev>";
+  const from = process.env.RESEND_FROM ?? `${MARCA} <onboarding@resend.dev>`;
   const r = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },

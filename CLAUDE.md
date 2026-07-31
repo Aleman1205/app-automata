@@ -1,4 +1,4 @@
-# Automata — contexto del proyecto
+# Nokron — contexto del proyecto
 
 > Contexto para retomar el proyecto en cualquier sesión. Conciso a propósito:
 > el detalle vive en los documentos; esto es el mapa.
@@ -255,7 +255,15 @@ spike/             prueba técnica — Node + npm (raíz)
 - **Precios MXN provisionales** — dependen del costo real por build (spike).
 - **Equipo:** cuenta del negocio, portafolio compartido, **2 roles**
   (admin crea/ajusta/invita/factura, operador solo ejecuta).
-- **Marca "Automata" es provisional** (se cambia en `web/lib/marca.ts`).
+- **La marca es "Nokron"** (2026-07-31; antes "Automata"). El nombre y el dominio viven en
+  **`core/src/marca.ts`**, no en `web/` — el core también escribe texto que lee el cliente (el
+  correo de invitación), y cuando el nombre vivía solo en el front ese correo lo tenía
+  hardcodeado: renombrar dejaba correos saliendo con el nombre viejo sin que nadie se enterara.
+  `web/lib/marca.ts` REEXPORTA de ahí. `verify:notificaciones` contrasta contra la constante,
+  así que volver a hardcodearlo tumba el test.
+  El nombre viene de la Ciudad Eterna de Elden Ring: una civilización enterrada, invisible, que
+  sostiene algo más grande de lo que aparenta — que es lo que hace el producto. **El sitio nunca
+  nombra esa referencia**; solo la transmite.
 - **Se invita por CORREO, nunca por user_id.** El id real lo asigna Clerk al registrarse,
   así que la invitación ESPERA en la tabla `invitaciones` y se vuelve membresía cuando esa
   persona se da de alta (con su correo **verificado** — aceptar uno sin verificar dejaría
@@ -278,7 +286,7 @@ spike/             prueba técnica — Node + npm (raíz)
   la regresión, el planner y la sesión de CMA tardan segundos y no deben colgar al cliente
   ni retener una conexión de BD. (El intake es la excepción conocida y está marcada como
   follow-up.)
-- **No es Zapier.** Automata NO es automatización de integración (conectar apps
+- **No es Zapier.** Nokron NO es automatización de integración (conectar apps
   A→B con disparadores); es "desastre → resultado terminado y verificado", a
   demanda, para PyME no-técnica. La respuesta a "¿esto no es Zapier?" vive en
   `docs/posicionamiento.md` (munición de pitch).

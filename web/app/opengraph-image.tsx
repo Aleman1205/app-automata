@@ -1,7 +1,8 @@
 import { ImageResponse } from "next/og";
+import { MARCA, ESLOGAN } from "@/lib/marca";
 
 // Imagen que aparece al compartir el link (WhatsApp, Slack, X…).
-export const alt = "Automata — Tu proceso, construido por agentes.";
+export const alt = `${MARCA} — ${ESLOGAN}`;
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -56,7 +57,7 @@ export default function OgImage() {
               lineHeight: 1,
             }}
           >
-            Automata
+            {MARCA}
             <span style={{ color: "#FF4D00" }}>.</span>
           </div>
           <div

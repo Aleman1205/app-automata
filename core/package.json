@@ -32,7 +32,8 @@
     "./billing/plan": "./src/billing/plan.ts",
     "./billing/pasarela": "./src/billing/pasarela.ts",
     "./ops/killswitch": "./src/ops/killswitch.ts",
-    "./salida/csv": "./src/salida/csv.ts"
+    "./salida/csv": "./src/salida/csv.ts",
+    "./marca": "./src/marca.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

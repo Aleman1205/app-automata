@@ -14,7 +14,7 @@
 - "Solopreneur score" mediana 72/95 — la mayoría son manejables por equipos
   chicos.
 
-## Qué VALIDA para Automata
+## Qué VALIDA para Nokron
 
 ### 1. El núcleo (datos → reporte/dashboard) es un negocio probado
 
@@ -26,7 +26,7 @@ Análogos casi directos, rentables y de **costo inicial casi nulo**:
 | **Data Aggregation And Visualisation** | $167K | $250K | Developers, Business Teams, Operations, SMBs |
 | Rapid/secure embedded analytics | $225K | $0 | SaaS, Retail, Healthcare |
 
-"Automated reporting platform" es prácticamente Automata en EUA: convertir datos
+"Automated reporting platform" es prácticamente Nokron en EUA: convertir datos
 en reportes, sin código, para no-técnicos. **$287K/mes con $0 de arranque.** La
 *forma* del producto funciona.
 

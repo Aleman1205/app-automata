@@ -1,4 +1,4 @@
-# Posicionamiento — Automata no es Zapier
+# Posicionamiento — Nokron no es Zapier
 
 > La respuesta a *"¿esto no es Zapier / Make / n8n?"* — la pregunta que un
 > inversionista (o un cliente técnico) va a hacer seguro. Respuesta corta: no,
@@ -9,11 +9,11 @@
 Al investigar catálogos de automatización aparecen miles de flujos (n8n: 9,400+
 workflows; Zapier: 8,000+ apps; Make: miles de plantillas). Es tentador pensar
 "podemos hacer todo eso". **Es una trampa de categoría.** Casi todo ese mundo es
-**automatización de integración**, no lo que hace Automata.
+**automatización de integración**, no lo que hace Nokron.
 
 ## Dos categorías distintas
 
-| | **Zapier / Make / n8n** (integración) | **Automata** |
+| | **Zapier / Make / n8n** (integración) | **Nokron** |
 |---|---|---|
 | Qué hace | Conecta apps que **ya tienes** (A → B) | Toma un **desastre** y devuelve un **resultado terminado** |
 | Disparador | Eventos, webhooks, cron (corre solo) | **A demanda** — el cliente sube algo y pica un botón |
@@ -29,7 +29,7 @@ comodidad técnica para cablear nodos. El nuestro —un hotel, un restaurante, u
 despacho— tiene un **WhatsApp, un Excel y un fajo de tickets en papel.** No sabe
 qué es un webhook y nunca lo va a arrastrar en una pizarra.
 
-Zapier/n8n sirven a quien **ya vive en la nube de apps**. Automata sirve a quien
+Zapier/n8n sirven a quien **ya vive en la nube de apps**. Nokron sirve a quien
 **está afuera de ella** y se está ahogando en trabajo manual de archivos. No
 competimos por el mismo cliente.
 
@@ -63,6 +63,6 @@ no *"cablea tú los nodos"*.
 
 > **Zapier te da los tubos. Nosotros entregamos el agua.**
 
-Zapier automatiza el flujo entre las apps que ya usas. Automata construye —de
+Zapier automatiza el flujo entre las apps que ya usas. Nokron construye —de
 cero y verificada— la automatización que ni siquiera sabías cómo pedir, para el
 negocio que no tiene apps que conectar.

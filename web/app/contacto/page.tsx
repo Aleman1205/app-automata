@@ -7,6 +7,7 @@ import { Boton } from "@/components/ui/boton";
 import { Reveal } from "@/components/motion/reveal";
 import { TextoRevelado } from "@/components/motion/texto-revelado";
 import { useAviso } from "@/components/ui/aviso";
+import { CORREO_CONTACTO, CORREO_SOPORTE } from "@/lib/marca";
 
 export default function Contacto() {
   const { avisar, elemento } = useAviso();
@@ -93,12 +94,12 @@ export default function Contacto() {
           <div className="flex flex-col gap-6">
             <div>
               <Etiqueta className="mb-2">Correo</Etiqueta>
-              <p className="text-sepia">hola@automata.mx</p>
+              <p className="text-sepia">{CORREO_CONTACTO}</p>
             </div>
             <div>
               <Etiqueta className="mb-2">Soporte</Etiqueta>
               <p className="text-sepia">
-                Desde tu cuenta, o en soporte@automata.mx
+                Desde tu cuenta, o en {CORREO_SOPORTE}
               </p>
             </div>
             <div>

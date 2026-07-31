@@ -23,6 +23,7 @@ import {
   type TurnoIntake,
 } from "@/lib/automata/lectura";
 import type { PreguntaEntrevista } from "@/lib/datos";
+import { MARCA } from "@/lib/marca";
 
 type Paso = "idea" | "pensando" | "preguntas" | "resumen" | "listo" | "rechazado";
 
@@ -233,7 +234,7 @@ export default function NuevaAutomatizacion() {
                 Esto no lo podemos construir.
               </h2>
               <p className="max-w-xl leading-relaxed text-sepia">
-                Automata convierte procesos de tipo &ldquo;archivo → resultado&rdquo;. Lo que
+                {MARCA} convierte procesos de tipo &ldquo;archivo → resultado&rdquo;. Lo que
                 describiste queda fuera de eso (o necesita algo que hoy no hacemos). Prueba
                 describiendo un proceso donde subes un archivo y quieres un reporte de vuelta.
               </p>

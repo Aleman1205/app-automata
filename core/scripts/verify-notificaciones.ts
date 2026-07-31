@@ -6,11 +6,12 @@
 //   npm run verify:notificaciones
 // ─────────────────────────────────────────────────────────────────────────────
 import { plantillaCorreo, type TipoCorreo } from "../src/ops/notificaciones.ts";
+import { MARCA, DOMINIO } from "../src/marca.ts";
 
 let ok = true;
 const check = (n: string, p: boolean) => { console.log(`  ${p ? "✓" : "✗"} ${n}`); ok = ok && p; };
 
-const URL = "https://automata.mx/portafolio/abc";
+const URL = `https://${DOMINIO}/portafolio/abc`;
 
 // Exhaustivo POR TIPOS, no una lista a mano: el Record obliga a que agregar un TipoCorreo NO
 // compile hasta listarlo aquí. Antes eran tres strings sueltos y 'invitacion' se coló sin una sola
@@ -32,7 +33,7 @@ check("lista dice 'lista'", /lista/i.test(lista.asunto));
 check("fallo dice 'revisión' y 'no se te cobró'", /revisi/i.test(fallo.asunto) && /no se te cobr/i.test(fallo.texto));
 
 console.log("\n2bis. La invitación le habla a alguien que AÚN NO es cliente:");
-const invi = plantillaCorreo("invitacion", { nombre: "Hotel Vitrales", url: "https://automata.mx/registrarse" });
+const invi = plantillaCorreo("invitacion", { nombre: "Hotel Vitrales", url: `https://${DOMINIO}/registrarse` });
 check("el asunto dice quién lo invita", invi.asunto.includes("Hotel Vitrales"));
 // Le pide registrarse con ESE correo porque la invitación vive en la tabla `invitaciones` indexada
 // por correo: si se registra con otro, no entra al equipo y el lugar del plan se queda ocupado.
@@ -43,6 +44,14 @@ check("aclara que no se creó cuenta a su nombre", /no se creó ninguna cuenta/i
 // El botón NO puede decir "Abrir mi portafolio": quien lee no tiene cuenta y el middleware
 // (default-deny de páginas) lo rebotaría a login.
 check("el botón lleva a registrarse, no al portafolio", invi.html.includes("Entrar al equipo") && !invi.html.includes("Abrir mi portafolio"));
+// La invitación es el ÚNICO correo que nombra a la EMPRESA (los demás hablan de la automatización
+// del cliente, que ya sabe quiénes somos). Aquí llega a alguien que quizá no nos conoce: sin el
+// nombre, el correo dice "te invitaron a Hotel Vitrales" y nadie entiende de dónde salió.
+// Se contrasta contra la constante MARCA, no contra un literal: así, si alguien vuelve a
+// hardcodear el nombre aquí, renombrar la empresa TUMBA este test en vez de mandar correos con el
+// nombre viejo — que es exactamente lo que pasaba antes de que MARCA viviera en el core.
+check("la invitación nombra a la empresa en asunto, texto y HTML",
+  invi.asunto.includes(MARCA) && invi.texto.includes(MARCA) && invi.html.includes(MARCA));
 
 console.log("\n3. Escapa HTML del nombre (anti-inyección en el correo):");
 const malicioso = plantillaCorreo("lista", { nombre: "<script>alert(1)</script>" });

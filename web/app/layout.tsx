@@ -7,7 +7,7 @@ import { Pie } from "@/components/pie";
 import { ScrollSuave } from "@/components/scroll-suave";
 import { ProveedorReverificacion } from "@/components/reverificacion";
 import { DEV } from "@/lib/automata/dev";
-import { MARCA, ESLOGAN } from "@/lib/marca";
+import { MARCA, ESLOGAN, DOMINIO } from "@/lib/marca";
 
 const archivo = Archivo({
   subsets: ["latin"],
@@ -26,7 +26,7 @@ const DESCRIPCION =
   "Describe tu proceso una vez. Un equipo de agentes lo convierte en una automatización lista para usar desde tu portafolio.";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://automata.mx"),
+  metadataBase: new URL(`https://${DOMINIO}`),
   title: `${MARCA} — ${ESLOGAN}`,
   description: DESCRIPCION,
   openGraph: {

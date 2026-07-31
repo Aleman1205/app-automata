@@ -1,6 +1,6 @@
 @AGENTS.md
 
-# Front de Automata (prototipo)
+# Front de Nokron (prototipo)
 
 Contexto del proyecto completo: `../CLAUDE.md`. Lo esencial para el front:
 
@@ -20,4 +20,6 @@ Contexto del proyecto completo: `../CLAUDE.md`. Lo esencial para el front:
 - **Verificación:** el navegador se congela tras varios scrolls en este
   entorno; verificar por DOM (`javascript_tool`) es más confiable. `pnpm build`
   corre TypeScript y es la señal fiable de que compila.
-- La marca "Automata" es provisional — está en `lib/marca.ts`.
+- La marca es **"Nokron"**. `lib/marca.ts` solo REEXPORTA de `core/src/marca.ts` (fuente única:
+  el core la usa en el correo de invitación). Ahí viven también `DOMINIO`, `CORREO_CONTACTO` y
+  `CORREO_SOPORTE` — no escribas el nombre ni el dominio a mano en una página.

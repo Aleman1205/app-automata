@@ -9,6 +9,8 @@
 // falla, el build YA quedó — nunca se tumba por un correo.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { MARCA } from "../marca.ts";
+
 export type TipoCorreo = "lista" | "fallo" | "revision" | "invitacion";
 
 export interface EventoCorreo {
@@ -75,9 +77,9 @@ export function plantillaCorreo(tipo: TipoCorreo, ctx: { nombre: string; url?: s
     // conoce. Se le dice quién lo invitó (la empresa), qué es esto y qué hacer.
     case "invitacion":
       return {
-        asunto: `Te invitaron a ${nombre} en Automata`,
-        texto: `Te invitaron a trabajar en “${nombre}” dentro de Automata, donde el equipo automatiza tareas repetitivas (reportes, conciliaciones) sin programar.\n\nPara entrar, regístrate con ESTE mismo correo — es con el que te invitaron.${cta}\n\nSi no esperabas esta invitación, ignora este mensaje: no se creó ninguna cuenta a tu nombre.`,
-        html: `<h2 style="font-weight:800">Te invitaron a ${n}</h2><p>Te invitaron a trabajar en “${n}” dentro de Automata, donde el equipo automatiza tareas repetitivas (reportes, conciliaciones) sin programar.</p><p>Para entrar, regístrate con <strong>este mismo correo</strong> — es con el que te invitaron.</p>${ctaHtml}<p style="margin-top:24px;font-size:13px;color:#6B5D4A">Si no esperabas esta invitación, ignora este mensaje: no se creó ninguna cuenta a tu nombre.</p>`,
+        asunto: `Te invitaron a ${nombre} en ${MARCA}`,
+        texto: `Te invitaron a trabajar en “${nombre}” dentro de ${MARCA}, donde el equipo automatiza tareas repetitivas (reportes, conciliaciones) sin programar.\n\nPara entrar, regístrate con ESTE mismo correo — es con el que te invitaron.${cta}\n\nSi no esperabas esta invitación, ignora este mensaje: no se creó ninguna cuenta a tu nombre.`,
+        html: `<h2 style="font-weight:800">Te invitaron a ${n}</h2><p>Te invitaron a trabajar en “${n}” dentro de ${MARCA}, donde el equipo automatiza tareas repetitivas (reportes, conciliaciones) sin programar.</p><p>Para entrar, regístrate con <strong>este mismo correo</strong> — es con el que te invitaron.</p>${ctaHtml}<p style="margin-top:24px;font-size:13px;color:#6B5D4A">Si no esperabas esta invitación, ignora este mensaje: no se creó ninguna cuenta a tu nombre.</p>`,
       };
     case "revision":
       return {

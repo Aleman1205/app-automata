@@ -1,4 +1,4 @@
-# Sistema de diseño — prototipo Automata
+# Sistema de diseño — prototipo Nokron
 
 Referencias del cliente: foto vintage sepia (paleta), SYMBOLSTUDIO (layout de
 landing, texto gigante), topbar de píldora oscura con resaltado deslizante,
