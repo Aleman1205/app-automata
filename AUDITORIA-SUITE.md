@@ -23,6 +23,9 @@ vigilar?"**. Método y reglas en `NIGHT-RUN.md`. Arnés: `core/scripts/mutar.ts`
 | **Desactivar el tope de zip-bomb** (`maxEntradas`, `maxDescomprimido`) | (nadie) | `entrada`, `entrada:gate` | **Alta** ✅ arreglado |
 | **Desactivar el tope de tamaño** de archivo y de lote | (nadie) | `entrada`, `entrada:gate` | **Alta** ✅ arreglado |
 | Desactivar el tope de pixel-flood | `verify:entrada` | — | — cubierto |
+| **`permitirEnProduccion: false` → `true`** (código de IA sin jaula en producción) | (nadie) | toda la suite | **Crítica** ✅ arreglado |
+| **Ventana de step-up 5 min → 1 año** (cookie robada privilegiada 12 meses) | (nadie) | `verify:http` | **Alta** ✅ arreglado |
+| Límites por defecto del Run (`timeoutMs`, `outMaxFiles`) sin tope | (nadie) | `verify:sandbox` | Media ✅ arreglado |
 
 ## Hallazgo 1 — `verify:pg` probaba el aislamiento de UNA tabla de ocho ✅ ARREGLADO
 
@@ -93,6 +96,38 @@ con `maxEntradas + 1` entradas y un lote con `maxArchivos + 1` archivos deben re
 configuración real. La (b) es la que demuestra que el número no es decorativo.
 
 Verificado: las cinco mutaciones que antes sobrevivían ahora **MATAN**.
+
+## Hallazgo 5 — se podía habilitar la ejecución SIN JAULA en producción y nadie se enteraba ✅ ARREGLADO
+
+`LocalPythonExecutor` no aísla red, FS ni kernel: es el puente de desarrollo. Lo único que impide
+que corra en producción es `permitirEnProduccion: false` por defecto más el chequeo de `NODE_ENV`.
+
+Cambiando ese default a `true`, **la suite entera seguía en verde**. O sea: se podía habilitar la
+ejecución sin jaula de código generado por IA, en producción y multi-tenant, sin que un solo test
+se quejara. Es el riesgo #1 del threat model del propio proyecto (docs/11, escape de contenedor) y
+no tenía ni una línea de test.
+
+**Arreglo** (`verify:sandbox` §6): con `NODE_ENV=production`, construirlo sin la bandera debe lanzar;
+la bandera explícita sigue siendo la única salida; y el default es `false`. Más §7 con los límites
+por defecto del Run —mismo patrón del hallazgo 4: los casos existentes inyectan límites chicos para
+poder cortar en segundos, así que los valores reales nunca se ejercitaban.
+
+Nota: para poder afirmar los defaults hubo que **exportar `LIMITES_DEFAULT`** (antes era privado del
+módulo). Es el único cambio a código de producción de toda la auditoría, y es de una palabra.
+
+## Hallazgo 6 — la ventana de step-up MFA no estaba pinchada por ningún test ✅ ARREGLADO
+
+`VENTANA_STEPUP_MS = 5 min` decide cuánto vale una re-verificación de MFA. Ensanchándola a **un
+año**, `verify:http` seguía en verde: una cookie robada seguiría siendo privilegiada 12 meses para
+invitar gente, quitar admins o tocar facturación.
+
+**Por qué no se veía:** los tres casos que había eran MFA *ausente*, MFA *fresco* y MFA *en el
+futuro*. Ninguno compara realmente contra la ventana — ausencia y futuro fallan antes de llegar ahí.
+Faltaba el caso obvio: **presente pero viejo**.
+
+**Arreglo:** dos identidades nuevas que fijan los dos bordes — 6 min (fuera, debe dar 403) y 4 min
+(dentro, debe pasar). Así se caza tanto ensanchar como encoger la ventana. Verificado con las dos
+mutaciones.
 
 ## Notas de método
 

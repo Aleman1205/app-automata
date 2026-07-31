@@ -12,7 +12,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { LocalPythonExecutor } from "../src/run/executor.ts";
+import { LocalPythonExecutor, LIMITES_DEFAULT } from "../src/run/executor.ts";
 import type { Artefacto } from "../src/types.ts";
 
 let ok = true;
@@ -89,6 +89,40 @@ async function main() {
     if (prev.d === undefined) delete process.env.DATABASE_URL;
     await fs.rm(path.dirname(dummy), { recursive: true, force: true }).catch(() => {});
   }
+
+    // ── El guard que impide correr código de IA SIN JAULA en producción ──────
+    // LocalPythonExecutor no aísla red, FS ni kernel: es el puente de desarrollo. Lo único que
+    // impide que corra en producción es `permitirEnProduccion: false` por defecto + el chequeo de
+    // NODE_ENV. Una auditoría por mutación lo destapó: cambiando ese default a `true`, TODA la
+    // suite seguía en verde — o sea que se podía habilitar la ejecución sin jaula de código
+    // generado por IA, en producción y multi-tenant, sin que un solo test se quejara. Es el riesgo
+    // #1 del threat model (docs/11: escape de contenedor).
+    console.log("\n6. Guard anti-producción (correr sin jaula es el riesgo #1 del threat model):");
+    const prevNodeEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = "production";
+      check("en producción, construirlo SIN la bandera explícita LANZA",
+        (() => { try { new LocalPythonExecutor(); return false; } catch { return true; } })());
+      check("la bandera explícita sigue siendo la ÚNICA salida (para dev/pruebas)",
+        (() => { try { new LocalPythonExecutor({ permitirEnProduccion: true }); return true; } catch { return false; } })());
+      check("el DEFAULT de permitirEnProduccion es false (si fuera true, el guard sería decorativo)",
+        LIMITES_DEFAULT.permitirEnProduccion === false);
+    } finally {
+      process.env.NODE_ENV = prevNodeEnv;
+      if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+    }
+    check("fuera de producción no estorba", (() => { try { new LocalPythonExecutor(); return true; } catch { return false; } })());
+
+    // Los casos de arriba INYECTAN límites chicos para poder disparar el corte en segundos, así que
+    // no ejercitan los valores por defecto — que son los que corren de verdad. Probarlos por
+    // comportamiento costaría 5 minutos de reloj (el timeout real), así que se afirman como números.
+    console.log("\n7. Los límites POR DEFECTO del Run (los que corren de verdad):");
+    check(`timeoutMs sensato (${LIMITES_DEFAULT.timeoutMs / 1000}s)`, LIMITES_DEFAULT.timeoutMs > 0 && LIMITES_DEFAULT.timeoutMs <= 600_000);
+    check(`outMaxFiles sensato (${LIMITES_DEFAULT.outMaxFiles})`, LIMITES_DEFAULT.outMaxFiles > 0 && LIMITES_DEFAULT.outMaxFiles <= 1000);
+    check(`outMaxBytes sensato (${LIMITES_DEFAULT.outMaxBytes / 1024 / 1024} MB)`, LIMITES_DEFAULT.outMaxBytes > 0 && LIMITES_DEFAULT.outMaxBytes <= 512 * 1024 * 1024);
+    check(`resultMaxBytes sensato (${LIMITES_DEFAULT.resultMaxBytes / 1024 / 1024} MB)`, LIMITES_DEFAULT.resultMaxBytes > 0 && LIMITES_DEFAULT.resultMaxBytes <= 64 * 1024 * 1024);
+    check(`cpuMaxS sensato (${LIMITES_DEFAULT.cpuMaxS}s)`, LIMITES_DEFAULT.cpuMaxS > 0 && LIMITES_DEFAULT.cpuMaxS <= 600);
+    check(`fsizeMaxKb sensato (${LIMITES_DEFAULT.fsizeMaxKb / 1024} MB)`, LIMITES_DEFAULT.fsizeMaxKb > 0 && LIMITES_DEFAULT.fsizeMaxKb <= 512 * 1024);
 
   console.log(`\n${ok ? "✓ SANDBOX PUENTE PROBADO" : "✗ FALLÓ"} — el código de IA no hereda secretos, el resultado está acotado, el Run normal sigue vivo y el timeout mata el grupo. (Red/aislamiento real = Fase 1/2.)`);
   process.exit(ok ? 0 : 1);

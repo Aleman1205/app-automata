@@ -35,7 +35,7 @@ export interface LimitesRun {
   resultMaxBytes: number; // cota del resultado.json ANTES de JSON.parse (anti-OOM)
   permitirEnProduccion: boolean; // guard: este executor NO es de producción multi-tenant
 }
-const LIMITES_DEFAULT: LimitesRun = {
+export const LIMITES_DEFAULT: LimitesRun = {
   timeoutMs: 300_000,
   cpuMaxS: 300,
   fsizeMaxKb: 100 * 1024, // 100 MB/archivo (docs/02 §6)
