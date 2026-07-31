@@ -403,6 +403,21 @@ que solo servía si la persona nunca se había registrado; el downgrade que no l
 la falta de pantalla de registro (los 6 CTA de venta iban a una ruta privada); /cuenta con tarjeta
 y cargos ajenos; /panel demo en el nav; y el "Reintentar gratis" que era un toast.
 
+### 🔴 EL AJUSTE NO PLANEA VISTA — lo encontró el primer ajuste real (2026-07-30)
+
+Un ajuste construye el código nuevo pero la versión queda **sin vista**, así que al ejecutarla
+revienta con `TypeError: Cannot read properties of undefined (reading bloques)` → 500.
+Confirmado: v1 tiene vista, v2 la tiene en NULL, y `core/src/pipeline/ajuste.ts` **nunca llama al
+planner** (0 menciones). El build de CMA sí corre y cuesta ~$1.8; lo que falta es la vista.
+
+**No sirve copiar la vista de la versión anterior**: el cliente pidió columnas nuevas
+("promedio por venta y cuántas ventas hizo"), así que la forma del resultado CAMBIÓ y la vista
+tiene que reflejarlo. El arreglo es correr el planner en `drenarAjustes` —igual que hace
+`disparo.ts`— con el spec + la petición, y pasar `plan.vista` a `iniciarAjuste`.
+
+Es el bloqueador #1 de la posventa: hoy pedir un cambio cobra el build y entrega una
+automatización que no se puede ejecutar.
+
 ### Lo que queda (2, ambos necesitan código nuevo, no copy)
 
 | # | Qué | Por qué importa | Evidencia |
