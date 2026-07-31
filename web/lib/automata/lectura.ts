@@ -1,5 +1,6 @@
 import { intakeSpecABuildSpec } from "automata-core/intake/adapter";
 import type { IntakeSpec } from "automata-core/intake/schema";
+import { isReverificationCancelledError } from "@clerk/nextjs/errors";
 import type { DatosTarjeta } from "@/app/portafolio/_componentes/tarjeta-automatizacion";
 import type {
   Automatizacion,
@@ -351,11 +352,10 @@ export async function invitarMiembro(correo: string, rol: "admin" | "operador"):
     const err = (await r.json().catch(() => ({}))) as { error?: string };
     const msg =
       err.error === "cuota_excedida" ? "Alcanzaste el límite de personas de tu plan."
-      // La verificación de Clerk (claim `fva`) CADUCA a los 5 minutos. Decir solo "verifica tu
-      // identidad" dejaba al admin en un callejón sin salida: el 403 no trae forma de re-verificar
-      // y no hay botón que lo haga. Volver a entrar SÍ refresca el claim, así que se le dice eso
-      // —es una salida real— hasta que se cablee la re-verificación en el propio flujo.
-      : err.error === "step_up_requerido" ? "Por seguridad esto pide verificar tu identidad otra vez. Cierra sesión y vuelve a entrar para continuar."
+      // Normalmente este mensaje NO se ve: el 403 de step-up trae la pista de Clerk y
+      // `ProveedorReverificacion` abre el modal y reintenta solo. Queda para cuando eso no aplica
+      // (modo dev sin Clerk) o cuando la re-verificación no bastó.
+      : err.error === "step_up_requerido" ? "Necesitamos verificar tu identidad para esto. Vuelve a intentarlo."
       : r.status === 400 ? "Revisa el correo: no parece válido."
       : "No se pudo invitar (¿ya está en el equipo?).";
     throw new Error(msg);
@@ -438,10 +438,35 @@ function nombreDesdeObjetivo(objetivo: string): string {
 
 /** Envuelve un fetch para que una red caída no llegue crudo y en inglés ("Failed to fetch") a una
  *  UI en español. Los errores de protocolo (status) los traduce cada llamador. */
+// ── Transporte (para la re-verificación de MFA) ──────────────────────────────
+// Las acciones peligrosas (invitar, quitar gente, pagar) exigen que el MFA se haya verificado hace
+// ≤5 min. Cuando caduca, el backend responde 403 y ANTES el cliente se quedaba sin salida: el
+// mensaje le decía "cierra sesión y vuelve a entrar".
+//
+// Ahora `ProveedorReverificacion` (componente cliente) registra aquí el envío ENVUELTO por
+// `useReverification` de Clerk: si la respuesta trae la pista de re-verificación, Clerk abre su
+// modal, el usuario se re-verifica y la MISMA petición se reintenta sola.
+//
+// Es un singleton de módulo a propósito: `useReverification` es un hook y `lectura.ts` son
+// funciones sueltas que llaman los componentes. Threading un parámetro por las ~15 funciones para
+// que 4 lo usen sería peor. El valor por defecto (llamar y ya) mantiene todo funcionando sin Clerk
+// —modo dev, prototipo— y en SSR.
+export type Transporte = (peticion: () => Promise<Response>) => Promise<Response>;
+let transporte: Transporte = (peticion) => peticion();
+export function registrarTransporte(t: Transporte): void {
+  transporte = t;
+}
+
 async function pedir(url: string, init: RequestInit): Promise<Response> {
   try {
-    return await fetch(url, init);
-  } catch {
+    // La petición se pasa como THUNK, no como promesa ya empezada: Clerk tiene que poder
+    // ejecutarla OTRA VEZ después de la re-verificación, y una promesa solo se resuelve una vez.
+    return await transporte(() => fetch(url, init));
+  } catch (e) {
+    // Cerrar el modal de re-verificación es una decisión del usuario, no una falla: Clerk RECHAZA
+    // la promesa y sin esto salía "No pudimos conectar", que además de falso lo mandaría a revisar
+    // su internet.
+    if (isReverificationCancelledError(e)) throw new Error("No se hizo el cambio: hace falta verificar tu identidad.");
     throw new Error("No pudimos conectar. Revisa tu conexión e intenta de nuevo.");
   }
 }
@@ -510,7 +535,7 @@ export async function construirDesdeSpec(spec: SpecIntake, file: File): Promise<
     // invitamos a reintentar (eso mandaba al cliente a un bucle).
     const msg =
       err.error === "cuota_excedida" ? "Alcanzaste el límite de automatizaciones de tu plan."
-      : err.error === "step_up_requerido" ? "Por seguridad esto pide verificar tu identidad otra vez. Cierra sesión y vuelve a entrar para continuar."
+      : err.error === "step_up_requerido" ? "Necesitamos verificar tu identidad para esto. Vuelve a intentarlo."
       : r.status === 400 ? "No pudimos armar el pedido con lo que entendimos. Corrige tus respuestas y vuelve a aprobar."
       : "No se pudo iniciar la construcción. Intenta de nuevo.";
     throw new Error(msg);
@@ -565,11 +590,10 @@ export async function pedirAjuste(id: string, peticion: string): Promise<void> {
       err.error === "cambio_en_curso" ? "Ya estamos preparando un cambio de esta automatización. Espera a que quede lista."
       : err.error === "inactiva" ? "Esta automatización quedó en solo lectura (tu plan bajó de nivel)."
       : err.error === "no_encontrada" ? "No encontramos esta automatización."
-      // La verificación de Clerk (claim `fva`) CADUCA a los 5 minutos. Decir solo "verifica tu
-      // identidad" dejaba al admin en un callejón sin salida: el 403 no trae forma de re-verificar
-      // y no hay botón que lo haga. Volver a entrar SÍ refresca el claim, así que se le dice eso
-      // —es una salida real— hasta que se cablee la re-verificación en el propio flujo.
-      : err.error === "step_up_requerido" ? "Por seguridad esto pide verificar tu identidad otra vez. Cierra sesión y vuelve a entrar para continuar."
+      // Normalmente este mensaje NO se ve: el 403 de step-up trae la pista de Clerk y
+      // `ProveedorReverificacion` abre el modal y reintenta solo. Queda para cuando eso no aplica
+      // (modo dev sin Clerk) o cuando la re-verificación no bastó.
+      : err.error === "step_up_requerido" ? "Necesitamos verificar tu identidad para esto. Vuelve a intentarlo."
       : "No se pudo enviar el cambio. Intenta de nuevo.";
     throw new Error(msg);
   }
@@ -590,7 +614,7 @@ const mensajePago = (error?: string): string =>
   : error === "pagos_no_configurados" ? "El cobro todavía no está disponible. Escríbenos y lo resolvemos."
   : error === "sin_suscripcion" ? "Todavía no tienes una suscripción activa. Elige un plan para empezar."
   : error === "pago_no_disponible" ? "No pudimos conectar con el cobro. Vuelve a intentar en un momento."
-  : error === "step_up_requerido" ? "Por seguridad esto pide verificar tu identidad otra vez. Cierra sesión y vuelve a entrar para continuar."
+  : error === "step_up_requerido" ? "Necesitamos verificar tu identidad para esto. Vuelve a intentarlo."
   : error === "prohibido" ? "Solo un administrador puede cambiar el plan."
   : "No se pudo abrir el pago. Intenta de nuevo.";
 
@@ -674,7 +698,7 @@ export async function reintentarBuild(id: string): Promise<void> {
         ? "Esta no se puede rehacer sola. Escríbenos y la reponemos."
       : err.error === "inactiva" ? "Esta automatización quedó en solo lectura (tu plan bajó de nivel)."
       : err.error === "no_encontrada" ? "No encontramos esta automatización."
-      : err.error === "step_up_requerido" ? "Por seguridad esto pide verificar tu identidad otra vez. Cierra sesión y vuelve a entrar para continuar."
+      : err.error === "step_up_requerido" ? "Necesitamos verificar tu identidad para esto. Vuelve a intentarlo."
       : "No se pudo reintentar. Intenta de nuevo.";
     throw new Error(msg);
   }

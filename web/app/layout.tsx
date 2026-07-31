@@ -5,6 +5,7 @@ import "./globals.css";
 import { Topbar } from "@/components/topbar";
 import { Pie } from "@/components/pie";
 import { ScrollSuave } from "@/components/scroll-suave";
+import { ProveedorReverificacion } from "@/components/reverificacion";
 import { DEV } from "@/lib/automata/dev";
 import { MARCA, ESLOGAN } from "@/lib/marca";
 
@@ -49,6 +50,9 @@ export default function RootLayout({
     <html lang="es" className={`${archivo.variable} ${plex.variable}`}>
       <body className="grano bg-crema font-sans text-tinta antialiased">
         <ScrollSuave />
+        {/* Registra el transporte que reintenta una acción tras re-verificar el MFA.
+            Va DENTRO del ClerkProvider (abajo) porque el hook lo necesita; en dev no monta nada. */}
+        <ProveedorReverificacion />
         <Topbar />
         <main className="min-h-screen">{children}</main>
         <Pie />

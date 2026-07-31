@@ -30,6 +30,7 @@ import { recibir, type Evento } from "automata-core/webhooks/receptor";
 import { aplicarDowngrade } from "automata-core/billing/plan";
 import Stripe from "stripe";
 import { ServicioSuspendido } from "automata-core/ops/killswitch";
+import { reverificationError } from "@clerk/nextjs/server";
 import {
   iniciarCheckout, abrirPortalCliente, esPlanPagable,
   PagosNoConfigurados, SinSuscripcion, YaTieneSuscripcion, PasarelaCaida, type Pasarela,
@@ -147,8 +148,33 @@ type CtxRuta = { params: Promise<Record<string, string>> };
 export function ruta<T>(ep: Endpoint<T>): (req: Request, ctx: CtxRuta) => Promise<Response> {
   return async (req, ctx) => {
     const { orgId } = await ctx.params; // orgId de la RUTA (nunca del cuerpo)
-    return adaptar(ep, await getDeps(), getCfg())(req, orgId);
+    return conPistaDeReverificacion(await adaptar(ep, await getDeps(), getCfg())(req, orgId));
   };
+}
+
+/**
+ * Traduce NUESTRO 403 de step-up a la PISTA que el front (Clerk) sabe leer, para que pueda abrir el
+ * modal de re-verificación y reintentar solo. Sin esto el cliente se quedaba atorado: el claim `fva`
+ * caduca a los 5 minutos y no había forma de refrescarlo sin cerrar sesión.
+ *
+ * Vive AQUÍ y no en core a propósito: `core` es framework- y vendor-agnóstico y no debe saber que
+ * el proveedor de identidad es Clerk. Core dice "step_up_requerido"; el wiring lo traduce.
+ *
+ * El cuerpo lleva LAS DOS cosas: la pista de Clerk y nuestro `error`, porque el 403 también lo puede
+ * leer un cliente que no es este front (o el propio front sin Clerk, en dev).
+ *
+ * `level: "first_factor"` NO es un detalle: nuestro pipeline acepta la edad del PRIMER factor
+ * (`mfaDesdeClaims` cae a `fva[0]` cuando no hay segundo). Pedir "second_factor" abriría un modal
+ * exigiendo un 2FA que muchos no tienen configurado — imposible de satisfacer.
+ */
+async function conPistaDeReverificacion(res: Response): Promise<Response> {
+  if (res.status !== 403) return res;
+  const cuerpo = (await res.clone().json().catch(() => null)) as { error?: string } | null;
+  if (cuerpo?.error !== "step_up_requerido") return res;
+  return Response.json(
+    { ...reverificationError({ level: "first_factor", afterMinutes: 5 }), error: "step_up_requerido" },
+    { status: 403 },
+  );
 }
 
 // ── Webhooks (CMA / Stripe): OTRO camino — cuerpo CRUDO + firma HMAC ──
@@ -550,7 +576,7 @@ export async function crearCheckoutPago(req: Request, orgId: string): Promise<Re
       return errorDePago(e, "checkout");
     }
   });
-  return handler(req, orgId);
+  return conPistaDeReverificacion(await handler(req, orgId));
 }
 
 /** POST /api/orgs/:orgId/portal-pago — abre el portal de cliente de Stripe (tarjeta, facturas,
@@ -563,7 +589,9 @@ export async function abrirPortalPago(req: Request, orgId: string): Promise<Resp
       return errorDePago(e, "portal");
     }
   });
-  return handler(req, orgId);
+  // Como el checkout: `facturacion` exige step-up, así que el 403 tiene que llevar la pista o el
+  // cliente se queda sin poder tocar su propia suscripción.
+  return conPistaDeReverificacion(await handler(req, orgId));
 }
 
 /** Traduce los fallos de cobro a algo accionable. Se distingue "no está configurado" de "Stripe

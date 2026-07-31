@@ -36,6 +36,7 @@ serie de agentes piensa, planea, programa, ejecuta".
 | Observabilidad / incidentes (docs/05) | **Construido** | `core/src/ops/incidentes.ts` (append-only, SD, reaper emite incidentes) | `verify:incidentes:pg` |
 | Data plane: storage + CMA | **Construido** | `core/src/storage/r2.ts` (R2/S3-compat, `existe()`), `core/src/cma/build.ts` (arrancar/cosechar + clasificarSesion) | `verify:storage`, `verify:cma` |
 | Runner sandbox (docs/02, 11) | **Fase 0 probada; gVisor cableado** | `core/src/run/executor.ts` (`LocalPythonExecutor` endurecido: env allowlist, ulimit, kill de grupo) probado; `core/src/run/container-executor.ts:12-97` (jaula gVisor `runsc`, `--network none`, `--read-only`, `--cap-drop ALL`, `--pids-limit`) **cableado, se prueba al desplegar** | `verify:sandbox` |
+| **Re-verificación de MFA** (2026-07-31) | **Construido** — sin ejercer contra Clerk real | El claim `fva` caduca a los 5 min y el 403 de step-up era un callejón sin salida. Ahora el wiring traduce ese 403 a la PISTA de Clerk (`reverificationError`, `level: first_factor` porque `mfaDesdeClaims` cae a `fva[0]`) y `ProveedorReverificacion` (`web/components/reverificacion.tsx`) registra un transporte envuelto en `useReverification`: Clerk abre su modal y **reintenta la misma petición**. `core` NO conoce a Clerk: sigue diciendo `step_up_requerido` y la traducción vive en `web/` | `verify:reverificacion` (contrasta contra el detector REAL `isReverificationHint`, no contra una copia del JSON) |
 | **Formula injection / CSV** (2026-07-31) | **Cerrado** | `core/src/salida/csv.ts` (`neutralizarCelda` + `aCsv`) y **descarga real de la tabla en `.csv`** en el detalle — sin una salida que exportar, neutralizar habría sido código muerto. Comprobado con datos hostiles REALES: una celda `=cmd|'/c calc'!A1` en el archivo del cliente viaja intacta por el script hasta la tabla, y la exportación la deja como texto. NO se escapa lo que ya es número (-500 sigue siendo -500) | `verify:csv` (28 checks) |
 | **Renombrar el equipo** (2026-07-30) | **Construido** | `renombrarOrgEP` (`POST /orgs/:orgId/nombre`, acción nueva `renombrar_org` = admin **sin** step-up) + campo editable en `/cuenta` (solo admin). El esquema **SANEA**, no solo valida largo: quita `\p{C}` (controles y formato invisible) y colapsa espacios — ese nombre viaja en el ASUNTO del correo de invitación, y un salto de línea ahí es inyección de cabeceras. No re-escapa HTML: eso lo hace la plantilla, y hacerlo dos veces guardaría `&amp;` literal en la BD | `verify:http` §6bis (11 checks) |
 | **Selector multi-org** (2026-07-30) | **Construido** | `web/components/selector-org.tsx` (topbar, solo con >1 equipo; variante móvil) + `misOrgs`/`orgActualVista`/`elegirOrg` en `lectura.ts`. La elegida vive en localStorage y se **valida contra la membresía en cada carga** (un id huérfano cae al primero, no cosecha 403); cambiar de equipo **recarga** a propósito — refrescar solo algunas pantallas dejaría dos negocios mezclados. `/cuenta` y `/equipo` ya muestran el nombre REAL del equipo | probado en vivo (2 orgs sembradas: cambia el portafolio, y un id ajeno da 403 en el backend) |
@@ -49,7 +50,7 @@ serie de agentes piensa, planea, programa, ejecuta".
 | **Stripe: checkout + portal** (2026-07-30) | **Construido** — sin ejercer contra Stripe real | `core/src/billing/pasarela.ts` (puerto `Pasarela` inyectado + `iniciarCheckout`/`abrirPortalCliente`), wiring con el SDK en `web/lib/automata/wiring.ts`, rutas `POST /pagar` y `POST /portal-pago` (`accion: facturacion` = admin + step-up), front en `/cuenta`. **El checkout SOLO contrata** (`pendiente`/`cancelada`): con una suscripción viva lanza `YaTieneSuscripcion` y el front reencamina al PORTAL — Stripe Checkout en `mode:"subscription"` **no cambia** la suscripción, crea otra, o sea DOS cargos al mes. Kill-switch de cobros frena el checkout pero **no** el portal (es la única puerta para arreglar tarjeta o cancelar) | `verify:pasarela:pg` (22 checks, con pasarela FALSA) |
 | **Stripe: enganche** (2026-07-30) | **Construido** | SD `app_stripe_vincular` (write-once; el eslabón que faltaba: `stripe_customer_id` no tenía escritor, así que TODO evento de Stripe era no-op silencioso); el receptor extrae `price` + `client_reference_id`; `planDePrecio()` mapea desde `STRIPE_PRICE_*`; el handler **devuelve** el cambio de plan y el wiring lo aplica TRAS el commit (hacerlo dentro deadlockeaba con `aplicarDowngrade`) | `verify:stripe:pg` (17 checks) |
 
-**Marco de pruebas:** **37** scripts `verify:*` en `core/package.json` (unit +
+**Marco de pruebas:** **38** scripts `verify:*` en `core/package.json` (unit +
 contra Postgres real, sufijo `:pg` — 20 de ellos). Corren **en verde en secuencia**;
 `tsc --noEmit` (core y web) y `next build` OK. La BD de pruebas es un Postgres temporal
 en el puerto **55432**.
@@ -116,7 +117,7 @@ en el índice, abajo).
 | Planeación de arquitectura | **Completa** — 13 documentos, 2 curtidos con crítica adversarial |
 | Front | **Ya NO es solo apariencia.** Portafolio, cuenta, equipo, detalle, Ejecutar, `/nueva` (intake→build) y `/ajustar` (posventa) consumen el backend REAL, con fallback a `lib/datos.ts` cuando no hay backend. Lo que sigue falso: precio y método de pago en `/cuenta` (viven en Stripe, sin cablear) |
 | Spike (prueba técnica) | **Corrido ✓ — 3/3 casos, ~$1.8/build real** (ver `spike/RESULTADO.md`) |
-| Backend / producto real | **Actualización (2026-07-30): el ciclo COMPLETO del cliente existe en código** — describir → construir → ejecutar → **pedir un cambio** (posventa), con equipo compartido real y el enganche de Stripe. `core/` (TS+tsx) + `web/` (wiring Next 16); **37 `verify:*` en verde**, typecheck + `next build` OK. Falta: activar infra (Upstash/R2/crons/gVisor) y el checkout de Stripe. Detalle en "Estado de implementación" |
+| Backend / producto real | **Actualización (2026-07-30): el ciclo COMPLETO del cliente existe en código** — describir → construir → ejecutar → **pedir un cambio** (posventa), con equipo compartido real y el enganche de Stripe. `core/` (TS+tsx) + `web/` (wiring Next 16); **38 `verify:*` en verde**, typecheck + `next build` OK. Falta: activar infra (Upstash/R2/crons/gVisor) y el checkout de Stripe. Detalle en "Estado de implementación" |
 | Primer build real de punta a punta | **NO corrido todavía.** La llave ya sirve y el camino está cableado y probado por partes; falta lanzarlo (cuesta ~$1.8 y confirma si Managed Agents está habilitado) |
 
 ## Los riesgos abiertos (no se resuelven con más papel)
@@ -195,7 +196,7 @@ ARQUITECTURA.md    resumen técnico
 docs/              detalle por pieza (índice abajo) — 21 archivos, va DETRÁS del código
 core/              EL MOTOR — framework-agnóstico, TS+tsx, npm. 17 módulos en src/,
                    db/schema.sql (~1,070 líneas: RLS, SD, triggers de cuota y ciclo),
-                   37 scripts verify:* en scripts/. Es la pieza más grande del repo.
+                   38 scripts verify:* en scripts/. Es la pieza más grande del repo.
 web/               front + WIRING de producción — Next.js 16 + pnpm. 20 rutas en app/api
                    (endpoints, 3 webhooks, 4 crons); lib/automata/{wiring,lectura}.ts
                    cablean el motor. Ya NO es prototipo (ver web/CLAUDE.md, web/DESIGN.md)
@@ -219,7 +220,7 @@ spike/             prueba técnica — Node + npm (raíz)
 | 11 | Threat model | ejecutar código de IA es el producto; escape de contenedor = riesgo #1 |
 | 13 | Auth y webhooks | **IMPLEMENTADO**: pipeline de 8 capas (`core/src/http/pipeline.ts:43-51`), firma de webhooks (`core/src/webhooks/`). **Actualización (2026-07-26):** los nombres de evento de CMA que este doc daba por buenos (`session.completed`, etc.) eran **inventados**; los `data.type` reales accionables son `session.status_idled` / `session.status_terminated` (el resto, `session.outcome_evaluation_ended` etc., es informativo) y el ÉXITO sólo se sabe re-consultando la sesión (webhook *thin*). |
 | 14 | Controles de seguridad | **matriz de casos comunes** (65, 5 dominios) estilo OWASP: caso → postura → capa → milestone → estado; une docs/13+11+04 |
-| 15 | **Motor implementado** | **NUEVO (2026-07-26):** catálogo maestro de lo construido en Fase 1 — módulos de `core/`, modelo de seguridad en la BD, loop async de build de punta a punta, la suite de `verify:*` (dice 31; hoy son 37), rutas/crons y el checklist para activar en producción |
+| 15 | **Motor implementado** | **NUEVO (2026-07-26):** catálogo maestro de lo construido en Fase 1 — módulos de `core/`, modelo de seguridad en la BD, loop async de build de punta a punta, la suite de `verify:*` (dice 31; hoy son 38), rutas/crons y el checklist para activar en producción |
 | 16 | **Modo dev local** | **NUEVO (2026-07-27):** runbook para correr el producto **real** (front → backend real: RLS, cuota, Run que ejecuta código) en la máquina **sin credenciales** — bypass de auth doble-gated a no-producción, siembra con `seed:dev`, qué es real vs. falso, y el Run local de punta a punta |
 
 (No hay docs/12; el 13 se numeró así a propósito.)
@@ -318,7 +319,7 @@ npm run verify:ejecutar:pg                 # Run de punta a punta (Python real)
 npm run verify:onboarding:pg               # alta + INVITACIONES (el invitado entra al equipo)
 npm run verify:ajuste:pg                   # POSVENTA: construye la versión 2 + cola + drainer
 npm run verify:stripe:pg                   # STRIPE: vincula customer, price→plan, downgrade
-# ...son 37 scripts `verify:*` en core/package.json (sufijo :pg = con BD; 20 lo llevan)
+# ...son 38 scripts `verify:*` en core/package.json (sufijo :pg = con BD; 20 lo llevan)
 # Al aplicar el esquema usa SIEMPRE -v ON_ERROR_STOP=1 (sin él deja la BD a medias).
 
 # Modo DEV LOCAL — el producto REAL corriendo local, SIN credenciales (runbook: docs/16)
@@ -495,5 +496,4 @@ que ahora prueba **las dos** — antes ninguna.
 | # | Qué | Por qué importa |
 |---|---|---|
 | 1 | **Probar Stripe de verdad**: crear los 3 productos en test, pegar `STRIPE_SECRET_KEY` + los 3 `price_…`, y hacer un pago con la tarjeta `4242…`. | El código está y probado con dobles, pero **ninguna llamada real al SDK se ha ejercido**. Es lo único entre esto y cobrar. Dar de alta también el webhook (`checkout.session.completed`, `customer.subscription.*`, `invoice.*`) → su `whsec_`. |
-| 2 | **Re-verificación de MFA en el front** cuando el `fva` envejece. | Mitigado (el mensaje ya da salida: volver a entrar), no resuelto. Afecta invitar/quitar gente **y ahora también pagar** (`facturacion` pide step-up). |
-| 3 | **`correrRegresion()` devuelve `"indeterminado"`** hasta que exista el runner. | Nada se clasifica como reparación gratis automáticamente. La UI lo dice de frente y el ajuste exige `confirmado:true`. |
+| 2 | **`correrRegresion()` devuelve `"indeterminado"`** hasta que exista el runner. | Nada se clasifica como reparación gratis automáticamente. La UI lo dice de frente y el ajuste exige `confirmado:true`. |
