@@ -55,6 +55,10 @@ en el puerto **55432**.
 > (`build_pendiente`, `ajuste_pendiente`), así que una fila de otro test —o encolada a
 > mano en dev— desvía los conteos. `verify:disparo:pg` y `verify:ajuste:pg` vacían su
 > cola al arrancar por eso.
+>
+> ⚠️ **Y por lo mismo, correr la suite BORRA lo que tengas encolado a mano en dev.** Si dejaste un
+> build/ajuste esperando el cron y luego corres los `verify:*`, desaparece sin aviso — no es que el
+> encolado haya fallado. Encola DESPUÉS de correr la suite.
 
 **Hallazgo que corrige el diseño previo:** el webhook de CMA es *thin* — sus
 `data.type` reales **accionables** son `session.status_idled` (→ encola cosecha) y
@@ -475,9 +479,11 @@ que ahora prueba **las dos** — antes ninguna.
 > rama propia (`reconstruccion`, derivada de que no haya versión vigente): decirle "parte del código
 > de abajo" sobre un código inexistente son instrucciones contradictorias. Verify:
 > `verify:ajuste:pg` §8 y `verify:lectura:pg` §7.
-> **Falta:** correr un reintento real (~$1.8) — la rama `reconstruccion` del prompt es lo único que
-> no se ha ejercido con el modelo. Hay uno **ya encolado** en la BD local: disparar
-> `POST /api/cron/ajustes` lo construye y gasta.
+> **PROBADO CON DINERO REAL (2026-07-30).** Una automatización con la v1 `failed` se reintentó por
+> el endpoint: v2 nació `building` **tipo `reparacion`** con vista, la cosecha la dejó `lista` con
+> artefacto, y al **ejecutarla dio HTTP 200** con resultado real. `uso_periodo.generaciones` quedó en
+> **8 antes y 8 después**: el reintento NO cobró. El cliente pasó de "pagué y no recibí nada" a tener
+> su automatización funcionando, sin un peso extra.
 
 **Los dos que listaba esta tabla (reintentar y el portafolio vacío) quedaron construidos**, igual que
 `/panel` (borrado). Lo que queda de código, por orden de lo que bloquea COBRAR:
