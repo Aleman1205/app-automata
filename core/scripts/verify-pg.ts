@@ -176,6 +176,52 @@ async function main() {
     const m2 = await conOrg(app, A, (c) => leerMembresia(c, "u_ana"));
     check("tras expulsión, leerMembresia(u_ana) devuelve undefined", m2 === undefined);
     check("assertCan tras expulsión deniega (403 al instante)", deniega(() => assertCan(m2, A, "ejecutar")));
+
+    // ── LAS 8 TABLAS, no solo `automatizaciones` ──────────────────────────────
+    // Este test se llama "aislamiento" y probaba cross-org sobre UNA tabla. Una auditoría por
+    // mutación lo demostró: poniendo `USING (true)` en la política de `subscriptions` (que lleva el
+    // stripe_customer_id) o de `uso_periodo`, este verify seguía en VERDE. Lo cazaba
+    // verify:cuenta:pg de rebote — o sea que el aislamiento de media BD dependía de un test que
+    // mira otra cosa, y nadie lo sabría.
+    //
+    // Se recorre la lista de tablas con RLS y se afirma que desde la org B no se ve NADA de A. La
+    // lista se lee de la BD, no se escribe a mano: una tabla nueva con RLS entra sola, y si alguien
+    // le pone RLS sin política, `sin_politica` lo caza.
+    console.log("\n5. Aislamiento en TODAS las tablas con RLS (no solo automatizaciones):");
+    await admin.query("INSERT INTO orgs (id, nombre) VALUES ($1,'M2 A'), ($2,'M2 B') ON CONFLICT DO NOTHING", [A, B]);
+    await admin.query("INSERT INTO memberships (org_id,user_id,rol) VALUES ($1,'u_ana','admin'),($2,'u_beto','admin') ON CONFLICT DO NOTHING", [A, B]);
+    await admin.query("INSERT INTO automatizaciones (id,org_id,nombre) VALUES ($1,$2,'A1') ON CONFLICT DO NOTHING", [A1, A]);
+    // Una fila de A en CADA tabla: sin fila que ocultar, un `USING (true)` no se distinguiría de
+    // uno correcto (0 filas visibles por vacío, no por aislamiento).
+    await admin.query("INSERT INTO invitaciones (org_id,correo,rol) VALUES ($1,'colada@a.mx','operador') ON CONFLICT DO NOTHING", [A]);
+    await admin.query("INSERT INTO versiones (automatizacion_id,org_id,numero,estado) VALUES ($1,$2,90,'lista') ON CONFLICT DO NOTHING", [A1, A]);
+    const vA = (await admin.query<{ id: string }>("SELECT id FROM versiones WHERE automatizacion_id=$1 AND numero=90", [A1])).rows[0]!.id;
+    await admin.query("INSERT INTO ejecuciones (version_id,org_id,estado,ms) VALUES ($1,$2,'ok',1)", [vA, A]);
+    await admin.query("INSERT INTO subscriptions (org_id,plan,estado,stripe_customer_id) VALUES ($1,'equipo','activa','cus_secreto_de_A') ON CONFLICT (org_id) DO UPDATE SET stripe_customer_id='cus_secreto_de_A'", [A]);
+    await admin.query("INSERT INTO uso_periodo (org_id,periodo,generaciones) VALUES ($1,'2099-01',7) ON CONFLICT DO NOTHING", [A]);
+
+    const conRls = await admin.query<{ tabla: string; politicas: number }>(
+      `SELECT c.relname AS tabla, count(p.polname)::int AS politicas
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         LEFT JOIN pg_policy p ON p.polrelid = c.oid
+        WHERE n.nspname = 'public' AND c.relrowsecurity
+        GROUP BY c.relname ORDER BY c.relname`,
+    );
+    check(`hay RLS en varias tablas (${conRls.rows.length})`, conRls.rows.length >= 8);
+    const sinPolitica = conRls.rows.filter((r) => r.politicas === 0).map((r) => r.tabla);
+    check(`toda tabla con RLS tiene política${sinPolitica.length ? ` (sin política: ${sinPolitica.join(", ")})` : ""}`, sinPolitica.length === 0);
+
+    for (const { tabla } of conRls.rows) {
+      // `orgs` se filtra por `id`, el resto por `org_id`.
+      const col = tabla === "orgs" ? "id" : "org_id";
+      const vistasDesdeB = await conOrg(app, B, (c) =>
+        c.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${tabla} WHERE ${col} = $1`, [A]),
+      );
+      check(`${tabla}: desde B NO se ve ninguna fila de A`, vistasDesdeB.rows[0]!.n === 0);
+    }
+    // El dato más sensible de todos: el customer de Stripe de otro cliente.
+    const cust = await conOrg(app, B, (c) => c.query<{ n: number }>("SELECT count(*)::int AS n FROM subscriptions WHERE stripe_customer_id = 'cus_secreto_de_A'"));
+    check("el stripe_customer_id de A es invisible desde B", cust.rows[0]!.n === 0);
   } finally {
     await admin.query("DELETE FROM orgs WHERE id = ANY($1)", [[A, B]]).catch(() => {});
     await admin.end();
