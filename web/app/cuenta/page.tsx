@@ -18,7 +18,7 @@ import {
   usuarioActual,
 } from "@/lib/datos";
 import {
-  verCuenta, irAlCheckout, irAlPortalDePago, orgActualVista,
+  verCuenta, irAlCheckout, irAlPortalDePago, orgActualVista, renombrarOrg,
   type CuentaVista, type PlanPagable, type OrgVista,
 } from "@/lib/automata/lectura";
 
@@ -60,6 +60,87 @@ function BarraUso({
         />
       </div>
     </div>
+  );
+}
+
+// Nombre del equipo, editable en sitio. Es lo que ve el cliente y lo que sale en los correos —
+// incluida la invitación que le llega a gente de fuera—, así que la org autogenerada ("Mi negocio")
+// dejaba una primera impresión que nadie podía arreglar.
+function NombreEquipo({
+  nombre,
+  alGuardar,
+  alAvisar,
+}: {
+  nombre: string;
+  alGuardar: (n: string) => void;
+  alAvisar: (t: string) => void;
+}) {
+  const [editando, setEditando] = useState(false);
+  const [texto, setTexto] = useState(nombre);
+  const [guardando, setGuardando] = useState(false);
+
+  const guardar = async () => {
+    const limpio = texto.trim();
+    if (!limpio || limpio === nombre) { setEditando(false); setTexto(nombre); return; }
+    setGuardando(true);
+    try {
+      // Se pinta lo que DEVUELVE el backend, no lo que se escribió: allá se sanea (controles,
+      // espacios de más), y mostrar el texto crudo dejaría la pantalla diciendo algo distinto de
+      // lo que quedó guardado.
+      const guardado = await renombrarOrg(limpio);
+      alGuardar(guardado);
+      setTexto(guardado);
+      setEditando(false);
+      alAvisar("Listo, así se llama tu equipo.");
+    } catch (e) {
+      alAvisar(e instanceof Error ? e.message : "No se pudo cambiar el nombre.");
+      setTexto(nombre);
+    } finally {
+      setGuardando(false);
+    }
+  };
+
+  if (!editando) {
+    return (
+      <span className="inline-flex items-center gap-2">
+        <Etiqueta punto>{nombre}</Etiqueta>
+        <button
+          type="button"
+          onClick={() => { setTexto(nombre); setEditando(true); }}
+          className="font-mono text-[10px] uppercase tracking-[0.14em] text-sepia underline-offset-4 transition-colors hover:text-tinta hover:underline"
+        >
+          Cambiar nombre
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <input
+        autoFocus
+        value={texto}
+        maxLength={80}
+        disabled={guardando}
+        onChange={(e) => setTexto(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") void guardar();
+          if (e.key === "Escape") { setTexto(nombre); setEditando(false); }
+        }}
+        aria-label="Nombre del equipo"
+        className="rounded-full border border-linea bg-papel px-3.5 py-1.5 text-sm font-semibold outline-none focus:border-tinta"
+      />
+      <Boton variante="fantasma" tamano="sm" deshabilitado={guardando} onClick={() => void guardar()}>
+        {guardando ? "Guardando…" : "Guardar"}
+      </Boton>
+      <button
+        type="button"
+        onClick={() => { setTexto(nombre); setEditando(false); }}
+        className="font-mono text-[10px] uppercase tracking-[0.14em] text-sepia hover:text-tinta"
+      >
+        Cancelar
+      </button>
+    </span>
   );
 }
 
@@ -113,8 +194,18 @@ export default function Cuenta() {
     <div className="mx-auto max-w-4xl px-6 pt-36 pb-24 md:pt-44">
       <Reveal desenfoque={false} y={12}>
         {/* El nombre REAL del equipo que estás viendo. Con el falso, alguien con dos equipos veía
-            "Hotel Vitrales" en los dos y no había forma de saber de cuál eran los números. */}
-        <Etiqueta punto>{orgVista?.nombre ?? organizacion.nombre}</Etiqueta>
+            "Hotel Vitrales" en los dos y no había forma de saber de cuál eran los números.
+            Editable solo para ADMIN: el operador lo ve, no lo cambia (el backend lo rechazaría
+            igual, pero ofrecer un campo que va a dar 403 es prometer algo que no pasa). */}
+        {orgVista?.rol === "admin" ? (
+          <NombreEquipo
+            nombre={orgVista.nombre}
+            alGuardar={(n) => setOrgVista((v) => (v ? { ...v, nombre: n } : v))}
+            alAvisar={avisar}
+          />
+        ) : (
+          <Etiqueta punto>{orgVista?.nombre ?? organizacion.nombre}</Etiqueta>
+        )}
       </Reveal>
       <TextoRevelado
         como="h1"

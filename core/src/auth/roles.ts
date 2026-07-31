@@ -20,7 +20,8 @@ export type Accion =
   | "facturacion"
   | "exportar_codigo"
   | "gestionar_espacios"
-  | "borrar_org";
+  | "borrar_org"
+  | "renombrar_org";
 
 // Política por acción: quién puede + si exige step-up MFA. UN SOLO lugar, como
 // Record EXHAUSTIVO: agregar una Accion nueva NO compila hasta clasificar su rol Y su
@@ -48,6 +49,10 @@ const POLITICA: Record<Accion, Politica> = {
   exportar_codigo: { roles: ["admin"], stepup: true },
   gestionar_espacios: { roles: ["admin"], stepup: false }, // reactivar/desactivar tras downgrade (docs/06 §9)
   borrar_org: { roles: ["admin"], stepup: true },
+  // Renombrar NO pide step-up: no da acceso a nada, no destruye nada y se deshace escribiendo
+  // otro nombre. Lo que sí puede hacer un nombre es viajar en el ASUNTO de un correo nuestro a
+  // terceros (la invitación), y ese camino ya está gateado por `invitar`, que sí pide step-up.
+  renombrar_org: { roles: ["admin"], stepup: false },
 };
 
 export interface Membresia {

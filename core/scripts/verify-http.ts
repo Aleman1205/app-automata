@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { crearPool } from "../src/db/pg.ts";
 import { withEfecto, type Deps } from "../src/http/pipeline.ts";
-import { crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, ENDPOINTS } from "../src/http/endpoints.ts";
+import { crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, renombrarOrgEP, ENDPOINTS } from "../src/http/endpoints.ts";
 import { type Identidad, type RateLimiter, type Sesion, type Solicitud } from "../src/http/tipos.ts";
 
 const ADMIN_URL = process.env.ADMIN_URL ?? "postgres://postgres@127.0.0.1:55432/postgres";
@@ -97,10 +97,34 @@ async function main() {
     check("quitar al ÚNICO admin de la org → 403 no_puede_quedar_sin_admin", err(await quitar({ orgId: Q, cuerpo: { userId: "u_ana" } })) === "no_puede_quedar_sin_admin");
     check("quitar a un no-miembro → 400", (await quitar({ cuerpo: { userId: "u_fantasma" } })).status === 400);
 
+    console.log("\n6bis. Renombrar el equipo (admin, sin step-up) y SANEO del nombre:");
+    const renombrar = (over: Partial<Solicitud>) => withEfecto(renombrarOrgEP, deps())(req(over));
+    const nombreDe = async (org: string) => (await admin.query<{ nombre: string }>("SELECT nombre FROM orgs WHERE id=$1", [org])).rows[0]?.nombre;
+    const r1 = await renombrar({ cuerpo: { nombre: "  Hotel   Vitrales  " } });
+    check("admin renombra → 200", r1.status === 200);
+    check("normaliza espacios (no guarda el texto crudo)", (await nombreDe(A)) === "Hotel Vitrales");
+    // El nombre viaja en el ASUNTO del correo de invitación: un salto de línea ahí es inyección de
+    // cabeceras de correo, y además rompe la UI. Se sanea en el ESQUEMA, antes de tocar la BD.
+    const r2 = await renombrar({ cuerpo: { nombre: "Malo\r\nBcc: victima@ejemplo.mx" } });
+    check("quita saltos de línea (asunto de correo = inyección de cabeceras)",
+      r2.status === 200 && !/[\r\n]/.test((await nombreDe(A)) ?? "x"));
+    check("y el resto del texto se conserva en una sola línea", (await nombreDe(A)) === "Malo Bcc: victima@ejemplo.mx");
+    check("nombre de 1 letra → 400", (await renombrar({ cuerpo: { nombre: "x" } })).status === 400);
+    check("solo espacios → 400 (no deja el equipo sin nombre)", (await renombrar({ cuerpo: { nombre: "     " } })).status === 400);
+    check("más de 80 caracteres → 400", (await renombrar({ cuerpo: { nombre: "a".repeat(81) } })).status === 400);
+    check("operador NO puede renombrar → 403", (await renombrar({ sesionToken: "tok_luis", cuerpo: { nombre: "Suyo" } })).status === 403);
+    // Renombrar NO es peligrosa: pedir MFA cada vez sería fricción sin ganancia (no da acceso ni
+    // destruye nada, y se deshace escribiendo otro nombre).
+    check("NO exige step-up (con MFA viejo funciona igual)", (await renombrar({ sesionToken: "tok_ana_stale", cuerpo: { nombre: "Sin MFA" } })).status === 200);
+    // El cross-org es lo caro: renombrarle el equipo a otro tenant.
+    check("renombrar la org de OTRO → 403 (no es miembro)", (await renombrar({ orgId: B, cuerpo: { nombre: "Robada" } })).status === 403);
+    check("y la de B quedó intacta", (await nombreDe(B)) === B.slice(0, 4));
+    await admin.query("UPDATE orgs SET nombre=$2 WHERE id=$1", [A, A.slice(0, 4)]);
+
     console.log("\n7. Cobertura de registro:");
-    const acciones = new Set(["ver", "crear_build", "invitar", "quitar_gente", "ejecutar", "descargar", "ajustar", "facturacion", "exportar_codigo", "gestionar_espacios", "borrar_org"]);
+    const acciones = new Set(["ver", "crear_build", "invitar", "quitar_gente", "ejecutar", "descargar", "ajustar", "facturacion", "exportar_codigo", "gestionar_espacios", "borrar_org", "renombrar_org"]);
     check("todo endpoint declara método + acción válida", ENDPOINTS.every((e) => acciones.has(e.accion) && !!e.metodo));
-    check("los 14 endpoints están registrados (9 con efecto + 5 de lectura)", ENDPOINTS.length === 14 && ENDPOINTS.includes(invitarEP));
+    check("los 15 endpoints están registrados (10 con efecto + 5 de lectura)", ENDPOINTS.length === 15 && ENDPOINTS.includes(invitarEP));
   } finally {
     await admin.query("DELETE FROM orgs WHERE id = ANY($1)", [[A, B, Q]]).catch(() => {});
     await admin.end();

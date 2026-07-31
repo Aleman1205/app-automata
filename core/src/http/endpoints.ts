@@ -386,6 +386,43 @@ export const pedirAjusteEP: Endpoint<PedirAjuste> = {
   },
 };
 
+// ── Renombrar el equipo (POST) ───────────────────────────────────────────────
+// La org nace autogenerada ("Mi negocio" / el nombre que trajo Clerk) y no había forma de
+// cambiarla, aunque ese nombre sale en la UI, en los correos del ciclo y —lo importante— en el
+// ASUNTO de la invitación que le mandamos a gente que ni siquiera es cliente todavía.
+//
+// SANEO, no solo validación de longitud: se quitan los caracteres de CONTROL (incluidos \r y \n).
+// Un salto de línea en el nombre acabaría dentro de un asunto de correo, que es la receta clásica
+// de inyección de cabeceras; y aunque el proveedor lo rechazara, un nombre con saltos rompe la UI.
+// El escape de HTML ya lo hace la plantilla (notificaciones.ts), así que aquí NO se re-escapa:
+// hacerlo dos veces guardaría "&amp;" literal en la BD y el cliente vería su propio nombre roto.
+const esquemaNombreOrg: Esquema<{ nombre: string }> = {
+  analizar(x) {
+    if (!esObjeto(x)) return { ok: false, problemas: ["cuerpo no es objeto"] };
+    const bruto = x["nombre"];
+    if (typeof bruto !== "string") return { ok: false, problemas: ["nombre requerido"] };
+    // \p{C} = controles + formato (incluye los invisibles tipo RLO, que sirven para disfrazar texto).
+    const nombre = bruto.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim();
+    if (nombre.length < 2) return { ok: false, problemas: ["el nombre necesita al menos 2 letras"] };
+    if (nombre.length > 80) return { ok: false, problemas: ["el nombre no puede pasar de 80 caracteres"] };
+    return { ok: true, valor: { nombre } };
+  },
+};
+export const renombrarOrgEP: Endpoint<{ nombre: string }> = {
+  nombre: "POST /orgs/:orgId/nombre",
+  metodo: "POST",
+  accion: "renombrar_org",
+  esquema: esquemaNombreOrg,
+  handler: async ({ cliente, input }) => {
+    // Sin WHERE por org: RLS ya acota `orgs` a la del contexto. El app tiene UPDATE pero NO
+    // INSERT/DELETE (crear y purgar un tenant son owner-only), así que esto solo puede renombrar
+    // la propia.
+    const r = await cliente.query("UPDATE orgs SET nombre = $1", [input.nombre]);
+    if (r.rowCount === 0) return { status: 404, cuerpo: { error: "no_encontrada" } };
+    return R.ok({ nombre: input.nombre });
+  },
+};
+
 // ── Reintentar un build que falló (POST) ─────────────────────────────────────
 // Sin esto, un build fallido dejaba la generación COBRADA y el espacio ocupado para siempre: el
 // cliente pagaba por algo que nunca recibió y su única salida era escribirnos. Reusa la cola de
@@ -527,4 +564,4 @@ export const congelarEP: Endpoint<{ id: string }> = {
 // Registro central. NOTA (revisión): esto NO es la garantía anti-olvido completa —
 // en Next hace falta un test que ESCANEE app/api/**/route.ts y falle si algún handler
 // con efecto no delega en withEfecto. Aquí registrarse es la convención.
-export const ENDPOINTS = [crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, solicitarBuildEP, intakeEP, pedirAjusteEP, reintentarEP, listarAutomatizacionesEP, verAutomatizacionEP, listarEquipoEP, verCuentaEP, listarEjecucionesEP, congelarEP] as const;
+export const ENDPOINTS = [crearAutomatizacionEP, invitarEP, quitarMiembroEP, renombrarOrgEP, ejecutarEP, solicitarBuildEP, intakeEP, pedirAjusteEP, reintentarEP, listarAutomatizacionesEP, verAutomatizacionEP, listarEquipoEP, verCuentaEP, listarEjecucionesEP, congelarEP] as const;

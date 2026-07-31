@@ -631,6 +631,31 @@ export async function irAlPortalDePago(): Promise<void> {
   window.location.href = await urlDePago("portal-pago", {});
 }
 
+/**
+ * Renombra el equipo. Devuelve el nombre SANEADO por el backend (no el que se escribió): ahí se
+ * quitan controles y espacios de más, así que la pantalla debe pintar lo que quedó guardado — si
+ * no, el cliente ve un nombre y la BD tiene otro.
+ */
+export async function renombrarOrg(nombre: string): Promise<string> {
+  const org = await orgActual();
+  if (!org) throw new Error("No hay backend configurado.");
+  const r = await pedir(`/api/orgs/${org}/nombre`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ nombre }),
+  });
+  const cuerpo = (await r.json().catch(() => ({}))) as { nombre?: string; error?: string };
+  if (!r.ok || !cuerpo.nombre) {
+    throw new Error(
+      cuerpo.error === "prohibido" ? "Solo un administrador puede cambiar el nombre del equipo."
+      : cuerpo.error?.startsWith("entrada_invalida") ? "Ese nombre no se puede usar. Prueba entre 2 y 80 caracteres."
+      : "No se pudo cambiar el nombre. Intenta de nuevo.",
+    );
+  }
+  orgsPromesa = undefined; // la lista cacheada trae el nombre viejo
+  return cuerpo.nombre;
+}
+
 /** Rehace un build que FALLÓ, sin volver a cobrar. Lanza con mensaje de cliente si no se puede. */
 export async function reintentarBuild(id: string): Promise<void> {
   const org = await orgActual();
