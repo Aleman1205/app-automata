@@ -231,19 +231,32 @@ registrado).
 `"  Mayus.Prueba@Ejemplo.MX  "` — debe entrar igual, con su rol, consumiendo la invitación y sin
 recibir org propia. Verificado: la mutación ahora MATA.
 
-## Observación — `verify:plan:pg` detecta el fallo, pero COLGÁNDOSE
+## Observación — `verify:plan:pg` se colgaba en vez de fallar ✅ ARREGLADO
 
-Dos mutaciones del downgrade (no desactivar el excedente; conservar las automatizaciones más nuevas
-en vez de las más antiguas) **no hacen fallar** a `verify:plan:pg`: lo dejan colgado para siempre.
-El test tiene casos de concurrencia con advisory locks, y al romper el downgrade una transacción se
-queda esperando a otra que nunca cierra.
+Dos mutaciones del downgrade (no desactivar el excedente; conservar las más nuevas en vez de las más
+antiguas) **no hacían fallar** a `verify:plan:pg`: lo dejaban colgado para siempre. En CI eso es
+peor que un fallo — bloquea el pipeline en vez de reportar, y se llevó por delante dos tandas de
+esta auditoría.
 
-No es un punto ciego —el cambio se detecta— pero **en CI es peor que un fallo**: bloquea el pipeline
-en vez de reportar, y sin tope se lleva la corrida entera por delante (se llevó dos de esta
-auditoría). Vale la pena ponerle un `statement_timeout` a las transacciones de ese test para que
-falle rápido y con mensaje.
+**La causa NO era un lock**, aunque lo parecía. El primer intento de arreglo fue poner
+`lock_timeout`/`statement_timeout`… y las mutaciones siguieron colgándose. Instrumentando dónde se
+quedaba, salió lo de verdad: al romper el downgrade sobran automatizaciones activas, así que
+`reactivar(t1, …)` lanza `CuotaExcedida` **con la transacción abierta**. Ese cliente nunca vuelve al
+pool, y `pool.end()` en el `finally` espera a que TODOS vuelvan: se queda esperando para siempre.
+Nadie estaba esperando un lock; el proceso estaba esperando a cerrar el pool.
 
-`mutar.ts` ahora corta a los 180 s y lo reporta como `SE CUELGA`, su propia categoría.
+**Arreglo:** `try/finally` alrededor de las transacciones de las secciones 5 y 6 (se cierran pase lo
+que pase, con `ROLLBACK` idempotente tras un `COMMIT` ya hecho) y un `Promise.race` con tope de 3 s
+en el cierre de pools. Se conservan además `lock_timeout = 5s` y `statement_timeout = 20s` en cada
+conexión: no eran la causa de ESTE cuelgue, pero sí cubren el caso de una espera real por lock, que
+en un test que toma advisory locks a propósito es un riesgo verosímil.
+
+Verificado: las dos mutaciones ahora **MATAN en ~1 s** en vez de colgar 180.
+
+Lección: **un timeout que no ataca la causa da la falsa sensación de haber arreglado.** Si el primer
+intento no cambia el síntoma, hay que instrumentar dónde se cuelga en vez de subir el tope.
+
+`mutar.ts` corta a los 180 s y reporta `SE CUELGA` como categoría propia — ni MATA ni SOBREVIVE.
 
 ## Notas de método
 
@@ -267,14 +280,12 @@ falle rápido y con mensaje.
 
 ## Qué queda (nada bloqueante)
 
-1. **`statement_timeout` en `verify:plan:pg`** para que falle rápido en vez de colgarse. Ver la
-   observación de arriba. Es lo único con impacto real (en CI bloquea el pipeline).
-2. **14 de los 38 verify sin auditar a fondo** — los de menor valor: `incidentes:pg`, `storage`,
+1. **14 de los 38 verify sin auditar a fondo** — los de menor valor: `incidentes:pg`, `storage`,
    `pgstate:pg`, `adaptador:pg`, `entrada:gate`, `webhooks:handlers:pg`, `ejecutar:pg`, `rutas`,
    `notificaciones`, `cuenta:pg`, `lectura:pg` (parcial), `cma`, y los unit de `ciclo`/`cuota`.
    El arnés queda listo para retomarlos: `npx tsx scripts/mutar.ts [--sql] <archivo> <buscar>
    <reemplazar> <verify>`.
-3. **Nada que decidir.** Los 9 hallazgos están cerrados y verificados; no hay preguntas abiertas.
+2. **Nada que decidir.** Los 9 hallazgos están cerrados y verificados; no hay preguntas abiertas.
 
 ## Cómo revisar esto
 

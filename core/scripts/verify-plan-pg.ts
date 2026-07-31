@@ -31,8 +31,33 @@ async function abrirTx(pool: Pool, org: string): Promise<PoolClient> {
 const cerrar = async (c: PoolClient, cmd: "COMMIT" | "ROLLBACK") => { await c.query(cmd).catch(() => {}); c.release(); };
 
 async function main() {
-  const admin = crearPool(ADMIN_URL);
-  const app = crearPool(APP_URL);
+  // ── Por qué estos timeouts ────────────────────────────────────────────────
+  // Este test BLOQUEA a propósito: comprueba que un reactivar/crear concurrente espera al advisory
+  // lock del otro. Si el downgrade se rompe, ese "espera" se vuelve "espera para siempre" y el
+  // test NO falla: se cuelga. Una auditoría por mutación lo destapó — dos mutaciones del downgrade
+  // dejaron la corrida colgada y se llevaron por delante dos tandas enteras. En CI es peor que un
+  // fallo: bloquea el pipeline en vez de reportar.
+  //
+  // `lock_timeout` es el que ataca el caso exacto (esperar un lock); `statement_timeout` es la red
+  // por si el cuelgue viene de otro lado. Los valores son holgadísimos para lo que hace este test
+  // —bloqueos de ~150 ms sobre puñados de filas locales—, así que no pueden volverlo inestable:
+  // si alguno salta, es que algo está de verdad mal.
+  //
+  // Va en `pool.on("connect")` y NO en abrirTx: `aplicarDowngrade` abre su propia conexión por
+  // dentro (es código de producción), y es justo la que se quedaba esperando. El hook cubre TODA
+  // conexión que salga del pool, la abra quien la abra.
+  const conTimeouts = (pool: Pool): Pool => {
+    pool.on("connect", (c) => { void c.query("SET lock_timeout = '5s'; SET statement_timeout = '20s'"); });
+    return pool;
+  };
+  // Y el cierre con tope. `pool.end()` espera a que TODO cliente vuelva al pool: si una aserción
+  // revienta con una transacción abierta, el cliente queda filtrado y `end()` no vuelve NUNCA — el
+  // test no falla, se cuelga, y en CI bloquea el pipeline en vez de reportar. Con `Promise.race` el
+  // proceso termina igual y el `process.exit` de abajo se lleva las conexiones por delante.
+  const cerrarPool = (pool: Pool) =>
+    Promise.race([pool.end(), new Promise<void>((r) => setTimeout(r, 3000))]).catch(() => {});
+  const admin = conTimeouts(crearPool(ADMIN_URL));
+  const app = conTimeouts(crearPool(APP_URL));
   const activas = () => conOrg(app, A, (c) => c.query<{ n: number }>("SELECT count(*)::int AS n FROM automatizaciones WHERE activa").then((r) => r.rows[0]?.n ?? 0));
   const estaActiva = (n: number) => admin.query<{ activa: boolean }>("SELECT activa FROM automatizaciones WHERE id=$1", [au(n)]).then((r) => r.rows[0]?.activa === true);
   try {
@@ -75,14 +100,25 @@ async function main() {
     // Volver a base (3), dejar 2 activas → 1 espacio libre; auto1 y auto5 inactivas.
     await aplicarDowngrade(admin, A, "base"); // 3 activas (auto2,3,4)
     await conOrg(app, A, (c) => desactivar(c, au(2))); // 2 activas (auto3,4); auto1,2,5 inactivas
+    // try/finally alrededor de las transacciones: si `reactivar(t1)` lanza —y lanza en cuanto el
+    // downgrade deja de recortar, porque entonces sobran activas— el cliente se quedaba sin
+    // devolver al pool y el `finally` de abajo colgaba en `pool.end()`. Ese fue el cuelgue real que
+    // destapó la auditoría por mutación: el test detectaba el fallo, pero se colgaba en vez de
+    // reportarlo. Cerrar siempre convierte el cuelgue en un ✗ con mensaje.
     const t1 = await abrirTx(app, A);
-    await reactivar(t1, au(1)); // toma el advisory lock, activa (sin commit) → 3
-    const t2 = await abrirTx(app, A);
-    const p2 = reactivar(t2, au(5)).then(() => "ok").catch((e) => e); // BLOQUEA en el advisory lock
-    const pend5 = await Promise.race([p2.then(() => false), new Promise<boolean>((r) => setTimeout(() => r(true), 150))]);
-    await cerrar(t1, "COMMIT"); // libera → p2 ve 3 >= 3
-    const r2 = await p2;
-    await cerrar(t2, "ROLLBACK");
+    let t2: PoolClient | undefined;
+    let pend5 = false, r2: unknown;
+    try {
+      await reactivar(t1, au(1)); // toma el advisory lock, activa (sin commit) → 3
+      t2 = await abrirTx(app, A);
+      const p2 = reactivar(t2, au(5)).then(() => "ok").catch((e) => e); // BLOQUEA en el advisory lock
+      pend5 = await Promise.race([p2.then(() => false), new Promise<boolean>((r) => setTimeout(() => r(true), 150))]);
+      await cerrar(t1, "COMMIT"); // libera → p2 ve 3 >= 3
+      r2 = await p2;
+    } finally {
+      await cerrar(t1, "ROLLBACK").catch(() => {}); // no-op si ya se hizo COMMIT
+      if (t2) await cerrar(t2, "ROLLBACK").catch(() => {});
+    }
     check("el 2º reactivar BLOQUEA hasta el commit del 1º", pend5 === true);
     check("el 2º concurrente es cortado (CuotaExcedida)", r2 instanceof CuotaExcedida);
     check("final: exactamente 3 activas, sin oversell a 4", (await activas()) === 3);
@@ -93,11 +129,16 @@ async function main() {
     await admin.query("UPDATE subscriptions SET plan='equipo' WHERE org_id=$1", [A]);
     for (let n = 1; n <= 3; n++) await admin.query("INSERT INTO automatizaciones (id,org_id,nombre,creada) VALUES ($1,$2,$3,$4)", [au(n), A, `a${n}`, `2026-01-0${n} 00:00:00+00`]);
     const tCrea = await abrirTx(app, A);
-    await crearAutomatizacion(tCrea, "nueva"); // trigger: plan equipo(10), 3<10 OK; toma el advisory lock (sin commit)
-    const pDG = aplicarDowngrade(admin, A, "base").then((d) => d).catch((e) => e); // debe BLOQUEAR en el mismo lock
-    const pendDG = await Promise.race([pDG.then(() => false), new Promise<boolean>((r) => setTimeout(() => r(true), 150))]);
-    await cerrar(tCrea, "COMMIT"); // libera → el downgrade sigue y ve la 4ª activa
-    await pDG;
+    let pendDG = false;
+    try {
+      await crearAutomatizacion(tCrea, "nueva"); // trigger: plan equipo(10), 3<10 OK; toma el lock (sin commit)
+      const pDG = aplicarDowngrade(admin, A, "base").then((d) => d).catch((e) => e); // debe BLOQUEAR
+      pendDG = await Promise.race([pDG.then(() => false), new Promise<boolean>((r) => setTimeout(() => r(true), 150))]);
+      await cerrar(tCrea, "COMMIT"); // libera → el downgrade sigue y ve la 4ª activa
+      await pDG;
+    } finally {
+      await cerrar(tCrea, "ROLLBACK").catch(() => {}); // no-op si ya se hizo COMMIT
+    }
     check("aplicarDowngrade BLOQUEA mientras un create concurrente tiene el lock", pendDG === true);
     check("tras el downgrade concurrente: activas ≤ espacios del plan nuevo (sin oversell)", (await activas()) <= 3);
 
@@ -116,8 +157,8 @@ async function main() {
     check("con creada empatada, desactiva de forma determinista (id ASC) → au(4)", dTie.desactivadas.length === 1 && dTie.desactivadas[0] === au(4));
   } finally {
     await admin.query("DELETE FROM orgs WHERE id = ANY($1)", [[A, OTRA]]).catch(() => {});
-    await admin.end();
-    await app.end();
+    await cerrarPool(admin);
+    await cerrarPool(app);
   }
 
   console.log(`\n${ok ? "✓ CAMBIO DE PLAN / DOWNGRADE PROBADO" : "✗ FALLÓ"} — excedente en solo lectura atómico, reactivación trigger-enforced sin oversell.`);
