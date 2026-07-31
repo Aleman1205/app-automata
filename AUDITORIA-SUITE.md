@@ -1,6 +1,6 @@
 # Auditoría de la suite por MUTACIÓN — en curso
 
-**Estado:** ~62 corridas de mutación sobre 19 de los 38 verify. **7 hallazgos, 7 arreglados y
+**Estado:** ~68 corridas de mutación sobre 20 de los 38 verify. **8 hallazgos, 8 arreglados y
 verificados** (la mutación que sobrevivía ahora MATA), más **1 observación** sobre cómo falla
 `verify:plan:pg`. Ningún hallazgo abierto.
 
@@ -35,6 +35,8 @@ vigilar?"**. Método y reglas en `NIGHT-RUN.md`. Arnés: `core/scripts/mutar.ts`
 | Arrendamiento de la cola 15 min → 0 (doble cobro del mismo build) | `verify:disparo:pg` | — | — cubierto |
 | **Quitar el write-once de `app_stripe_vincular`** (la org cambia de customer) | (nadie) | `verify:stripe:pg` | **Alta** ✅ arreglado |
 | Downgrade: no desactivar el excedente / conservar las más nuevas | `verify:plan:pg` **pero COLGÁNDOSE** | — | ver observación |
+| **`verificar_freno` fail-OPEN** sin fila de `interruptores` (kill-switch inerte) | (nadie) | `verify:killswitch:pg` | **Alta** ✅ arreglado |
+| Kill-switch: fail-open del TRIGGER / suspensión por-org desactivada | `verify:killswitch:pg` | — | — cubierto |
 
 ## Hallazgo 1 — `verify:pg` probaba el aislamiento de UNA tabla de ocho ✅ ARREGLADO
 
@@ -158,6 +160,31 @@ eventos del viejo —pagos, fallos, cancelaciones— pasan a ser no-op silencios
 debe fallar, la org debe seguir con el original, el customer nuevo no debe quedar mapeado a nadie —
 y re-vincular el MISMO customer debe seguir siendo idempotente (un webhook duplicado no puede
 romper). Verificado: la mutación ahora MATA.
+
+## Hallazgo 8 — el kill-switch quedaba FAIL-OPEN por el camino de la app ✅ ARREGLADO
+
+`interruptores` es una tabla de UNA fila. Si falta (BD a medias, alguien la borra durante un
+incidente), `verificar_freno` debe considerar el servicio FRENADO — `coalesce(v_congelado, true)`.
+Cambiando ese `true` por `false`, `verify:killswitch:pg` seguía en verde.
+
+**Por qué no se veía:** el test SÍ tenía una sección de fail-closed, pero la probaba disparando un
+build y un run, que pasan por el **TRIGGER** de la BD. La función `verificar_freno` es el OTRO
+camino — el guard temprano del Run (`ejecutarEP`) y el checkout de Stripe
+(`exigirCobrosActivos`) — y ese nunca se ejercitaba sin la fila. Peor: la palanca **`cobros` solo
+existe en esa función**; el trigger no la cubre en absoluto.
+
+Un kill-switch que se vuelve inerte justo cuando la BD está a medias es lo contrario de un
+kill-switch.
+
+**Arreglo** (`verify:killswitch:pg` §6): sin la fila, `verificar_freno` debe bloquear las tres
+palancas, y `exigirCobrosActivos` también. Se afirma sobre el error **traducido**
+(`ServicioSuspendido` + motivo), que es el contrato del que dependen los llamadores, no sobre el
+texto crudo de Postgres.
+
+Nota de método: al escribir este check falló SIN mutación, y la regla del brief es no "arreglarlo"
+cambiando el test. Al investigar resultó ser **mi aserción** (esperaba el mensaje crudo de SQL, pero
+`verificarFreno` lo convierte con `comoSuspension()`), no un bug del producto. Comprobado antes de
+concluir, en ambas direcciones.
 
 ## Observación — `verify:plan:pg` detecta el fallo, pero COLGÁNDOSE
 
