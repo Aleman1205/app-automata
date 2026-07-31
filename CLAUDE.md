@@ -403,20 +403,34 @@ que solo servía si la persona nunca se había registrado; el downgrade que no l
 la falta de pantalla de registro (los 6 CTA de venta iban a una ruta privada); /cuenta con tarjeta
 y cargos ajenos; /panel demo en el nav; y el "Reintentar gratis" que era un toast.
 
-### 🔴 EL AJUSTE NO PLANEA VISTA — lo encontró el primer ajuste real (2026-07-30)
+### ✅ EL AJUSTE YA PLANEA VISTA — arreglado (2026-07-30)
 
-Un ajuste construye el código nuevo pero la versión queda **sin vista**, así que al ejecutarla
-revienta con `TypeError: Cannot read properties of undefined (reading bloques)` → 500.
-Confirmado: v1 tiene vista, v2 la tiene en NULL, y `core/src/pipeline/ajuste.ts` **nunca llama al
-planner** (0 menciones). El build de CMA sí corre y cuesta ~$1.8; lo que falta es la vista.
+Lo encontró el primer ajuste real: `drenarAjustes` **nunca llamaba al planner**, así que la v2
+nacía con `vista` en NULL (y sin `contratoTexto`, o sea que el agente tampoco sabía qué forma debía
+tener el `resultado.json`). Se entregaba `lista`, ya cobrada, y al ejecutarla reventaba con
+`TypeError: Cannot read properties of undefined (reading bloques)`.
 
-**No sirve copiar la vista de la versión anterior**: el cliente pidió columnas nuevas
-("promedio por venta y cuántas ventas hizo"), así que la forma del resultado CAMBIÓ y la vista
-tiene que reflejarlo. El arreglo es correr el planner en `drenarAjustes` —igual que hace
-`disparo.ts`— con el spec + la petición, y pasar `plan.vista` a `iniciarAjuste`.
+Arreglo: el drainer corre el planner —igual que `disparo.ts`— y le pasa la **petición del cliente**
+más la **vista vigente** (`AjustePlan` en `core/src/planner/schema.ts`). No servía copiar la vista
+anterior: el cliente pidió columnas nuevas, así que la forma del resultado cambió. Se planea ANTES
+de reservar, porque `iniciarAjuste` es lo que cobra: si el planner truena después, el cliente ya
+pagó un build que no existe. `AjusteArgs.vista` es **obligatoria en el tipo** para que no se vuelva
+a olvidar. Verify: `verify:ajuste:pg` §6bis.
 
-Es el bloqueador #1 de la posventa: hoy pedir un cambio cobra el build y entrega una
-automatización que no se puede ejecutar.
+**Lo que este arreglo NO cubre:** falta correr un ajuste real de punta a punta con el planner ya
+cableado (~$1.8). La automatización que quedó rota en dev (v2 sin vista) sigue rota — su v2 se
+construyó sin contrato, así que lo honesto es rehacer el ajuste, no parchear la vista a mano.
+
+### El Run entendía UNA sola convención, y el primer parche rompió la otra (2026-07-30)
+
+Vale como lección de método. El primer build real escribió un archivo llamado literalmente
+`--salida` (leía `argv[2]` como ruta de resultado) y se perdió. El arreglo pasó **las dos**
+convenciones en la misma invocación (`<entrada> <ruta> --salida <dir>`) — y eso rompe a cualquier
+script con `argparse`, o sea al bien portado, el que el prompt pide: aborta con "unrecognized
+arguments". Tiró el `verify` base y **nadie lo notó porque no se volvió a correr la suite completa
+tras el arreglo**. Hoy es una **escalera**: se prueba el contrato del prompt y, si no aterriza un
+resultado, se reintenta con la posicional (local, sub-segundo, $0). Verify: `verify:sandbox` §5,
+que ahora prueba **las dos** — antes ninguna.
 
 ### Lo que queda (2, ambos necesitan código nuevo, no copy)
 

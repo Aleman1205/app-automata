@@ -452,6 +452,10 @@ async function getAjusteDeps(): Promise<DrenarAjustesDeps> {
   return {
     pool: await getPool(),
     poolOwner: getPoolOwner(), // la cola tiene REVOKE ALL para el app: reclamarla es del dueño
+    // El planner también aquí, no solo en el disparo: la versión de un ajuste necesita SU vista
+    // (la petición del cliente cambia la forma del resultado). Sin esto la v2 se entregaba sin
+    // vista y reventaba al ejecutarla.
+    planeador: new PlannerAgent(),
     cosechador: new CmaBuildClient(),
     storage: almacen(),
     ahora: () => new Date().toISOString(),

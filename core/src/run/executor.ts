@@ -120,6 +120,18 @@ async function leerAcotado(ruta: string, maxBytes: number): Promise<string> {
   }
 }
 
+/** Dónde quedó el resultado. El agente es ESTOCÁSTICO: aunque el prompt fija el contrato
+ *  (`--salida <dir>`, resultado.json dentro), puede escribirlo en el directorio de trabajo. Se
+ *  buscan los dos únicos lugares bajo nuestro control (ambos temporales y acotados, así que esto no
+ *  amplía la superficie). Un contrato rígido tiraría un build que YA COSTÓ ~$1.8 y funciona. */
+async function ubicarResultado(outDir: string, dir: string, salidas: string[]): Promise<{ base: string; nombre: string } | undefined> {
+  const enSalida = NOMBRES_RESULTADO.find((n) => salidas.includes(n));
+  if (enSalida) return { base: outDir, nombre: enSalida };
+  const enTrabajo = await fs.readdir(dir).catch(() => [] as string[]);
+  const nombre = NOMBRES_RESULTADO.find((n) => enTrabajo.includes(n));
+  return nombre ? { base: dir, nombre } : undefined;
+}
+
 export class LocalPythonExecutor implements RunExecutor {
   private lim: LimitesRun;
   constructor(opts: Partial<LimitesRun> = {}) {
@@ -147,53 +159,54 @@ export class LocalPythonExecutor implements RunExecutor {
       if (!primerInput) throw new Error("El Run necesita al menos un archivo de entrada.");
 
       const inicio = Date.now();
-      // Se pasa la salida por las DOS convenciones que un agente puede elegir: posicional
-      // (<entrada> <ruta_resultado>) y bandera (--salida <dir>). El primer build real escribió un
-      // archivo llamado literalmente "--salida" porque su script leía argv[2] como ruta de salida:
-      // el resultado era correcto y se perdía por una diferencia de convención, tirando un build de
-      // ~$1.8. Con ambas, cualquiera de las dos lecturas aterriza dentro de outDir. El prompt ya fija
-      // el contrato (cma/build.ts); esto es la red por si el agente elige otra cosa — son
-      // estocásticos, y aquí lo barato es tolerar, no fallar.
+      // ESCALERA de convenciones, no una invocación con todo amontonado. El agente es estocástico
+      // y puede leer la salida de dos formas; el primer build real escribió un archivo llamado
+      // literalmente "--salida" porque leía argv[2] como ruta de resultado, y se perdió un build de
+      // ~$1.8 por una diferencia de convención. El primer intento de arreglo pasó AMBAS a la vez
+      // (`<entrada> <ruta> --salida <dir>`) y eso es peor: cualquier script con argparse —o sea, el
+      // bien portado, el que el prompt pide— aborta con "unrecognized arguments" ante el positional
+      // de más. Rompía el artefacto del spike, que es una salida REAL del agente.
+      // Se intentan en orden y se acepta la primera que termine bien Y deje un resultado. Cada
+      // intento es local, sub-segundo y $0: reintentar sale infinitamente más barato que descartar
+      // un build ya pagado.
       const rutaResultado = path.join(outDir, "resultado.json");
-      const { code, stderr } = await correrPython(
-        scriptPath,
-        [primerInput, rutaResultado, "--salida", outDir],
-        dir,
-        this.lim,
-      );
+      const convenciones: string[][] = [
+        [primerInput, "--salida", outDir], // el contrato que fija el prompt (cma/build.ts)
+        [primerInput, rutaResultado], // argv[2] = ruta del resultado (lo que eligió el 1er build real)
+      ];
+
+      let code = -1, stderr = "", salidas: string[] = [];
+      let encontrado: { base: string; nombre: string } | undefined;
+      for (const [i, argv] of convenciones.entries()) {
+        if (i > 0) {
+          // Limpiar entre intentos: si no, la basura del intento fallido se cuenta como salida.
+          await fs.rm(outDir, { recursive: true, force: true }).catch(() => {});
+          await fs.mkdir(outDir, { recursive: true });
+        }
+        ({ code, stderr } = await correrPython(scriptPath, argv, dir, this.lim));
+        salidas = await fs.readdir(outDir).catch(() => [] as string[]);
+        // Cota del directorio de salida (nº y bytes) ANTES de leer nada, y por CADA intento: una
+        // bomba de salida tiene que reventar en el primero, no acumularse hasta el final.
+        if (salidas.length > this.lim.outMaxFiles) {
+          throw new Error(`El artefacto produjo demasiados archivos (${salidas.length} > ${this.lim.outMaxFiles}).`);
+        }
+        let totalBytes = 0;
+        for (const f of salidas) {
+          totalBytes += (await fs.stat(path.join(outDir, f))).size;
+          if (totalBytes > this.lim.outMaxBytes) throw new Error(`La salida excede ${this.lim.outMaxBytes} bytes.`);
+        }
+        if (code !== 0) continue;
+        encontrado = await ubicarResultado(outDir, dir, salidas);
+        if (encontrado) break;
+      }
       const ms = Date.now() - inicio;
-      if (code !== 0) {
+      if (!encontrado && code !== 0) {
         throw new Error(`El artefacto falló (exit ${code}):\n${stderr.slice(0, 2000)}`);
       }
-
-      const salidas = await fs.readdir(outDir);
-      // Cota del directorio de salida (nº y bytes) ANTES de leer nada (anti agotamiento).
-      if (salidas.length > this.lim.outMaxFiles) {
-        throw new Error(`El artefacto produjo demasiados archivos (${salidas.length} > ${this.lim.outMaxFiles}).`);
-      }
-      let totalBytes = 0;
-      for (const f of salidas) {
-        totalBytes += (await fs.stat(path.join(outDir, f))).size;
-        if (totalBytes > this.lim.outMaxBytes) throw new Error(`La salida excede ${this.lim.outMaxBytes} bytes.`);
-      }
-
-      // El agente es ESTOCÁSTICO: aunque el prompt ahora fija el contrato (`--salida <dir>` y
-      // resultado.json dentro), puede escribirlo junto al script o en el directorio de trabajo. Un
-      // contrato rígido tiraría un build que YA COSTÓ ~$1.8 y que por lo demás funciona — el primer
-      // build real cayó exactamente aquí. Se busca en el directorio de salida y, si no está, en el
-      // de trabajo, que son los dos únicos lugares bajo nuestro control (ambos temporales y
-      // acotados, así que no amplía la superficie).
-      let base = outDir;
-      let nombreResultado = NOMBRES_RESULTADO.find((n) => salidas.includes(n));
-      if (!nombreResultado) {
-        const enTrabajo = await fs.readdir(dir).catch(() => [] as string[]);
-        nombreResultado = NOMBRES_RESULTADO.find((n) => enTrabajo.includes(n));
-        if (nombreResultado) base = dir;
-      }
-      if (!nombreResultado) {
+      if (!encontrado) {
         throw new Error(`El artefacto no produjo un resultado JSON (${NOMBRES_RESULTADO.join(" / ")}). Produjo: ${salidas.join(", ") || "(nada)"}`);
       }
-      const resultado = JSON.parse(await leerAcotado(path.join(base, nombreResultado), this.lim.resultMaxBytes));
+      const resultado = JSON.parse(await leerAcotado(path.join(encontrado.base, encontrado.nombre), this.lim.resultMaxBytes));
 
       // Local = $0. session-hours equivalente en CMA se calcula donde se reporta.
       return { resultado, ms, costoUsd: 0, salidas };

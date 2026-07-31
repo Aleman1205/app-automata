@@ -1,5 +1,5 @@
 import { type Pool, type PoolClient } from "pg";
-import { type EstadoBuild } from "../types.ts";
+import { type EstadoBuild, type Vista } from "../types.ts";
 import { type Ciclo, type CicloEstado, type ResultadoRegresion, type TipoAjuste, ajustesRestantes, clasificar, puedeAjustar } from "./estados.ts";
 import { comoCuota } from "../billing/cuota.ts";
 import { comoSuspension } from "../ops/killswitch.ts";
@@ -118,7 +118,7 @@ export interface Iniciado {
  * llamador. Guarda: automatización activa, sin otra versión 'building', y —para un
  * cambio— ready con ajustes disponibles. Crea la versión 'building' sin consumir.
  */
-export async function iniciarAjuste(c: PoolClient, autoId: string, regresion: ResultadoRegresion, opts?: { staleMin?: number }): Promise<Iniciado> {
+export async function iniciarAjuste(c: PoolClient, autoId: string, regresion: ResultadoRegresion, opts?: { staleMin?: number; vista?: Vista }): Promise<Iniciado> {
   // Solo automatizaciones ACTIVAS y de ESTA org (RLS). activa=false = solo lectura (docs/06 §9).
   const r = await c.query<FilaCiclo & { org_id: string }>(
     `SELECT ciclo_estado, ajustes_usados, org_id, en_ventana_gratis(id) AS gratis,
@@ -161,8 +161,14 @@ export async function iniciarAjuste(c: PoolClient, autoId: string, regresion: Re
       // de creerle al llamador (antes bastaba decir 'reparacion' para no pagar nada).
       // Este INSERT es además donde se cobra la generación (trigger trg_presupuesto_build):
       // el build no arranca sin presupuesto, ni si la suscripción no está activa.
-      "INSERT INTO versiones (automatizacion_id, org_id, numero, estado, tipo) VALUES ($1, $2, $3, 'building', $4) RETURNING id",
-      [autoId, f.org_id, numero, tipo],
+      // La VISTA se graba AQUÍ, al nacer la versión, igual que hace crearVersion para la v1. No es
+      // opcional en la práctica: la cosecha ensambla el Artefacto con `version.vista`, y el Run la
+      // lee para pintar el resultado. Una versión sin vista se entrega 'lista' y revienta al
+      // ejecutarla ("Cannot read properties of undefined (reading 'bloques')") — cobrada y sin
+      // servir. Sigue siendo opcional en el tipo solo porque el ciclo no debe saber de planners;
+      // quien reserva es responsable de traerla (ver arrancarAjuste).
+      "INSERT INTO versiones (automatizacion_id, org_id, numero, estado, tipo, vista) VALUES ($1, $2, $3, 'building', $4, $5) RETURNING id",
+      [autoId, f.org_id, numero, tipo, opts?.vista ? JSON.stringify(opts.vista) : null],
     )
     .catch((e) => comoCuota(e)) // CUOTA_EXCEDIDA (generación al arrancar) → CuotaExcedida
     .catch((e) => comoAjuste(e)) // circuit breaker de reparaciones → AjusteNoPermitido('en_revision')

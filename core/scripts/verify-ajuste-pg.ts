@@ -11,7 +11,8 @@
 import { crearPool, conOrg } from "../src/db/pg.ts";
 import { arrancarAjuste, drenarAjustes, type AjusteDeps } from "../src/pipeline/ajuste.ts";
 import { estadoDelCiclo, AjusteNoPermitido } from "../src/ciclo/servicio.ts";
-import type { ArranqueBuild, BuildClientAsync, PeticionAjuste, ResultadoCosecha, Spec, Storage } from "../src/types.ts";
+import type { ArranqueBuild, BuildClientAsync, PeticionAjuste, ResultadoCosecha, Spec, Storage, Vista } from "../src/types.ts";
+import type { AjustePlan, PlanResultado } from "../src/planner/schema.ts";
 
 const ADMIN_URL = process.env.ADMIN_URL ?? "postgres://postgres@127.0.0.1:55432/postgres";
 const APP_URL = process.env.DATABASE_URL ?? "postgres://automata_app@127.0.0.1:55432/postgres";
@@ -29,6 +30,30 @@ const spec: Spec = {
   entradas: [{ tipo: "archivo", formato: "csv", descripcion: "CSV vendedor,monto" }],
 };
 
+const VISTA_V1: Vista = {
+  version_vista: 1, titulo: "Ventas por vendedor", archivoSalida: "reporte.xlsx",
+  bloques: [{ tipo: "resumen", texto: "Así van las ventas" }],
+};
+const VISTA_V2: Vista = {
+  version_vista: 1, titulo: "Ventas por vendedor", archivoSalida: "reporte.xlsx",
+  bloques: [{ tipo: "resumen", texto: "Así van las ventas, ahora con promedio" }],
+};
+
+// El planner FALSO (sin modelo). Captura lo que se le pide: es la prueba de que el ajuste SÍ
+// replanea con la petición del cliente, en vez de entregar una versión sin vista (que se cobraba
+// y luego reventaba al ejecutarse) o con la vista vieja (el cliente pide columnas nuevas y recibe
+// el reporte de antes).
+class FakePlaneador {
+  visto?: AjustePlan;
+  async planear(_spec: Spec, ajuste?: AjustePlan): Promise<PlanResultado> {
+    this.visto = ajuste;
+    return {
+      vista: ajuste ? VISTA_V2 : VISTA_V1,
+      resultado_contrato: { campos: [{ ruta: "total", tipo: "numero", descripcion: "total" }] },
+    };
+  }
+}
+
 class FakeStorage implements Storage {
   async put() {}
   async existe() { return true; }
@@ -41,11 +66,13 @@ class FakeStorage implements Storage {
 class FakeCosechador implements BuildClientAsync {
   n = 0;
   ultimoAjuste?: PeticionAjuste;
+  ultimoContrato?: string;
   fallar = false;
   async build(): Promise<never> { throw new Error("no usado"); }
   async cosechar(): Promise<ResultadoCosecha> { return { estado: "en_curso" }; }
-  async arrancar(_s: Spec, _p: string, _c?: string, ajuste?: PeticionAjuste): Promise<ArranqueBuild> {
+  async arrancar(_s: Spec, _p: string, contrato?: string, ajuste?: PeticionAjuste): Promise<ArranqueBuild> {
     this.ultimoAjuste = ajuste;
+    this.ultimoContrato = contrato;
     if (this.fallar) throw new Error("CMA caído");
     return { sessionId: `sess_ajuste_${++this.n}` };
   }
@@ -56,17 +83,20 @@ async function main() {
   const app = crearPool(APP_URL);
   const uno = (sql: string, p: unknown[] = []) => admin.query<Record<string, unknown>>(sql, p).then((r) => r.rows[0]);
   const cosechador = new FakeCosechador();
+  const planeador = new FakePlaneador();
   const deps: AjusteDeps = { pool: app, cosechador, storage: new FakeStorage(), ahora: () => new Date().toISOString() };
 
   // Automatización ENTREGADA (v1 'lista'): el punto de partida de cualquier ajuste.
   const sembrar = async (): Promise<string> => {
     const a = await uno("INSERT INTO automatizaciones (org_id, nombre) VALUES ($1,'Reporte de ventas') RETURNING id", [O]);
     const id = a!["id"] as string;
-    await admin.query("INSERT INTO versiones (automatizacion_id, org_id, numero, estado) VALUES ($1,$2,1,'lista')", [id, O]);
+    // La v1 se siembra CON vista, como la crea el build real: es lo que el planner del ajuste
+    // recibe para evolucionarla en vez de reinventar el reporte que el cliente ya reconoce.
+    await admin.query("INSERT INTO versiones (automatizacion_id, org_id, numero, estado, vista) VALUES ($1,$2,1,'lista',$3)", [id, O, JSON.stringify(VISTA_V1)]);
     return id;
   };
   const args = (id: string, peticion: string, regresion: "pasa" | "falla" | "indeterminado") => ({
-    orgId: O, automatizacionId: id, peticion, spec, ejemploKey: EJEMPLO, regresion,
+    orgId: O, automatizacionId: id, peticion, spec, ejemploKey: EJEMPLO, regresion, vista: VISTA_V2,
   });
 
   try {
@@ -83,9 +113,12 @@ async function main() {
     const r1 = await arrancarAjuste(deps, args(id1, "Además quiero el promedio por venta", "pasa"));
     check("el tipo lo derivó la regresión: 'pasa' → cambio", r1.tipo === "cambio");
     check(`creó la versión 2 (numero=${r1.numero})`, r1.numero === 2);
-    const v2 = await uno("SELECT estado, cma_session_id AS sid, tipo FROM versiones WHERE id=$1", [r1.versionId]);
+    const v2 = await uno("SELECT estado, cma_session_id AS sid, tipo, vista FROM versiones WHERE id=$1", [r1.versionId]);
     check("quedó 'building' con su cma_session_id (el webhook la encontrará)", v2?.["estado"] === "building" && !!v2?.["sid"]);
     check("persistió tipo='cambio' (la BD decide el cobro con eso)", v2?.["tipo"] === "cambio");
+    // El bug que encontró el primer ajuste real: la versión nacía SIN vista, se entregaba 'lista'
+    // (cobrada) y al ejecutarla tronaba con "Cannot read properties of undefined (reading 'bloques')".
+    check("nació CON vista (sin ella la versión se cobra y no se puede ejecutar)", !!v2?.["vista"]);
     check("NO creó otra automatización", (await uno("SELECT count(*)::int AS n FROM automatizaciones WHERE org_id=$1", [O]))?.["n"] === 1);
     check("resolver_sesion_cma la mapea", !!(await uno("SELECT version_id FROM resolver_sesion_cma($1)", [r1.sessionId])));
 
@@ -139,17 +172,35 @@ async function main() {
     })());
     check("dos clics no encolan dos veces (UNIQUE por automatización)",
       (await conOrg(app, O, (c) => c.query<{ id: string }>("SELECT app_solicitar_ajuste($1,$2) AS id", [id6, "otra vez"]))).rows[0]?.id === enc.rows[0]?.id);
-    const dr = await drenarAjustes({ ...deps, poolOwner: admin, notificador: { async notificar() {} } });
+    const dr = await drenarAjustes({ ...deps, poolOwner: admin, planeador, notificador: { async notificar() {} } });
     check(`el drainer lo arrancó (arrancados=${dr.arrancados})`, dr.arrancados === 1);
     check("y lo sacó de la cola", (await uno("SELECT count(*)::int AS n FROM ajuste_pendiente WHERE automatizacion_id=$1", [id6]))?.["n"] === 0);
     check("dejó la versión 2 building con sesión de CMA", !!(await uno("SELECT cma_session_id FROM versiones WHERE automatizacion_id=$1 AND numero=2", [id6]))?.["cma_session_id"]);
+
+    // ── El agujero que encontró el PRIMER AJUSTE REAL (con dinero) ──
+    // El drainer construía el código pero NUNCA llamaba al planner, así que la v2 quedaba sin vista
+    // ni contrato: se entregaba 'lista', ya cobrada, y al ejecutarla tronaba. El test no lo veía
+    // porque solo miraba estado y sesión — las dos cosas que sí estaban bien.
+    console.log("\n6bis. El ajuste REPLANEA la vista (el cliente pide otra cosa, no lo mismo):");
+    check("el drainer llamó al planner con la petición del cliente", planeador.visto?.peticion === "Agrega el promedio");
+    check("y le pasó la vista VIGENTE (la evoluciona, no reinventa el reporte)",
+      (planeador.visto?.vistaAnterior as Vista | undefined)?.titulo === VISTA_V1.titulo);
+    const v2r = await uno("SELECT vista FROM versiones WHERE automatizacion_id=$1 AND numero=2", [id6]);
+    check("la versión nueva quedó CON vista", !!v2r?.["vista"]);
+    // Se compara el CONTENIDO que distingue a las dos vistas, no el JSON completo: jsonb normaliza
+    // el orden de las llaves, así que stringify() nunca coincide aunque la vista sea la correcta.
+    const bloqueV2 = (v2r?.["vista"] as Vista | null)?.bloques?.[0];
+    check("y es la NUEVA, no la copia de la v1 (si no, el cambio pedido no se vería)",
+      bloqueV2?.tipo === "resumen" && bloqueV2.texto === (VISTA_V2.bloques[0] as { texto: string }).texto);
+    check("al agente le llegó el CONTRATO del resultado (sin él, las refs @resultado.* no resuelven)",
+      !!cosechador.ultimoContrato && cosechador.ultimoContrato.includes("campos"));
 
     console.log("\n7. Una automatización SIN spec/ejemplo guardados no se puede ajustar (se avisa, no se finge):");
     const id7 = await sembrar(); // sin spec ni ejemplo_key
     await conOrg(app, O, (c) => c.query("SELECT app_solicitar_ajuste($1,$2) AS id", [id7, "cambio"]));
     const avisos: string[] = [];
     let r7 = { arrancados: 0, fallidos: 0, pendientes: 0 };
-    for (let i = 0; i < 3; i++) r7 = await drenarAjustes({ ...deps, poolOwner: admin, notificador: { async notificar(e) { avisos.push(e.tipo); } } });
+    for (let i = 0; i < 3; i++) r7 = await drenarAjustes({ ...deps, poolOwner: admin, planeador, notificador: { async notificar(e) { avisos.push(e.tipo); } } });
     check("se descarta tras los intentos", r7.fallidos === 1);
     check("y se le avisa al cliente (no se queda esperando)", avisos.length === 1 && avisos[0] === "fallo");
   } finally {

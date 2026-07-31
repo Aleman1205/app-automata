@@ -1,6 +1,8 @@
 // System prompt del planner. Elige y compone la vista de un catálogo cerrado
 // (docs/09) y declara el contrato del resultado que la respalda.
 
+import type { AjustePlan } from "./schema.ts";
+
 export const SISTEMA_PLANNER = `
 Eres el planner. Recibes un spec (qué produce una automatización) y produces DOS
 cosas acopladas, con la tool "planear":
@@ -37,19 +39,45 @@ resumen + metricas + una gráfica + una tabla. Un proceso de limpieza/conciliaci
 suele llevar comparacion + callout + tabla "a revisar".
 `.trim();
 
-export function mensajePlanner(spec: {
-  objetivo: string;
-  reglas: string[];
-  criterios_exito: string[];
-  entradas: { tipo: string; formato: string; descripcion: string }[];
-}): string {
+export function mensajePlanner(
+  spec: {
+    objetivo: string;
+    reglas: string[];
+    criterios_exito: string[];
+    entradas: { tipo: string; formato: string; descripcion: string }[];
+  },
+  ajuste?: AjustePlan,
+): string {
   return [
     "SPEC de la automatización:",
     `Objetivo: ${spec.objetivo}`,
     `Entradas: ${spec.entradas.map((e) => `${e.tipo}/${e.formato}: ${e.descripcion}`).join(" | ")}`,
     spec.reglas.length ? `Reglas:\n${spec.reglas.map((r) => `- ${r}`).join("\n")}` : "",
     `Criterios de éxito:\n${spec.criterios_exito.map((c) => `- ${c}`).join("\n")}`,
+    // El spec NO cambia cuando el cliente pide un ajuste (es el mismo objetivo); lo que cambia es
+    // esta petición. Sin ella el planner replanea lo mismo y la versión nueva sale idéntica.
+    ajuste ? ajusteATexto(ajuste) : "",
     "\nProduce el resultado_contrato y la vista con la tool 'planear'.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function ajusteATexto(ajuste: AjustePlan): string {
+  return [
+    "\nESTA ES UNA VERSIÓN NUEVA de una automatización que el cliente YA usa.",
+    `Pidió este cambio, textual: "${ajuste.peticion}"`,
+    ajuste.vistaAnterior
+      ? [
+          "\nLa vista VIGENTE (la que ve hoy) es:",
+          JSON.stringify(ajuste.vistaAnterior),
+          "\nPARTE DE ELLA y aplícale el cambio: conserva los bloques, títulos y nombres de campo que",
+          "el cliente NO pidió tocar (los reconoce, no debe sentir que le cambiaron el reporte) y",
+          "refleja lo que sí pidió. No reinventes la presentación.",
+        ].join("\n")
+      : "",
+    "\nEl resultado_contrato debe cubrir lo que la vista nueva necesita: si el cambio pide datos que",
+    "antes no se calculaban, declara esos campos — el Builder los va a implementar.",
   ]
     .filter(Boolean)
     .join("\n");

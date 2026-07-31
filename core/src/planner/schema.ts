@@ -27,6 +27,17 @@ export interface PlanResultado {
   resultado_contrato: ResultadoContrato;
 }
 
+/** Contexto extra cuando lo que se planea es una VERSIÓN > 1 (un ajuste), no una automatización
+ *  nueva. Sin esto el planner solo ve el spec —que NO cambia con la petición del cliente— y
+ *  devolvería exactamente la misma vista de la versión vigente: el cliente pide dos columnas
+ *  nuevas y recibe el reporte de antes. Y tampoco sirve REUSAR la vista anterior tal cual: la
+ *  petición cambia la FORMA del resultado, así que vista y contrato tienen que re-planearse
+ *  juntos (el acoplamiento @resultado.* es el invariante de todo el sistema). */
+export interface AjustePlan {
+  peticion: string; // lo que el cliente escribió, literal
+  vistaAnterior?: Vista; // la vista vigente: se EVOLUCIONA, no se reinventa
+}
+
 // ── Tool para la salida estructurada del planner ──
 // La vista se describe suelta (tipo + campos posibles); la CORRECTITUD la imponen
 // la puerta de coherencia (coherencia.ts) y el resolver (tipos), no este schema.

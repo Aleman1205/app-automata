@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { type Pool } from "pg";
 import type { BuildClientAsync, Spec, Storage } from "../types.ts";
-import type { PlanResultado } from "../planner/schema.ts";
+import type { AjustePlan, PlanResultado } from "../planner/schema.ts";
 import { PgStateRepo } from "../state/pg.ts";
 import { arrancarConstruccion } from "./build-pipeline.ts";
 import { registrarIncidente } from "../ops/incidentes.ts";
@@ -18,7 +18,9 @@ import type { Notificador } from "../ops/notificaciones.ts";
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface Planeador {
-  planear(spec: Spec): Promise<PlanResultado>;
+  // `ajuste` lo usa el drainer de AJUSTES (pipeline/ajuste.ts) para planear una versión > 1: sin
+  // él la v2 salía con la vista de la v1 —o con ninguna, que era el bug real.
+  planear(spec: Spec, ajuste?: AjustePlan): Promise<PlanResultado>;
 }
 export interface DisparoDeps {
   pool: Pool; // DUEÑO

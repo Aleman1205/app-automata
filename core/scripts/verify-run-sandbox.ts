@@ -57,6 +57,32 @@ async function main() {
     const t0 = Date.now();
     const murio = await exTimeout.run(arte(`${PREAMBULO}\nwhile True: pass\n`), inputs).then(() => false).catch((e) => /excedió/.test(String(e)));
     check("un bucle infinito se mata por timeout (~2s)", murio && Date.now() - t0 < 15_000);
+
+    // ── El agente es ESTOCÁSTICO y elige cómo leer sus argumentos ──
+    // Un build cuesta ~$1.8 y no se puede pedir "otra vez pero con mi convención": el Run tiene que
+    // aterrizar las dos. Ninguna de las dos estaba probada, y por eso pasaron desapercibidos dos
+    // errores seguidos: primero el Run solo entendía --salida (el 1er build real escribió un archivo
+    // llamado literalmente "--salida" y se perdió); luego el arreglo pasó AMBAS convenciones en la
+    // misma invocación y rompió a los scripts con argparse, que son los que el prompt pide.
+    console.log("\n5. Las DOS convenciones de invocación aterrizan (escalera, no todo junto):");
+    const argparsePy = [
+      "import argparse, json, os",
+      "p = argparse.ArgumentParser()",
+      "p.add_argument('entrada')",
+      "p.add_argument('--salida', default='.')",
+      "a = p.parse_args()",
+      "json.dump({'via': 'argparse'}, open(os.path.join(a.salida, 'resultado.json'), 'w'))",
+    ].join("\n");
+    const r5a = await ex.run(arte(argparsePy), inputs);
+    check("argparse estricto: un positional de más lo abortaría con 'unrecognized arguments'",
+      (r5a.resultado as { via: string }).via === "argparse");
+
+    // Lo que hizo el primer build real: argv[2] como RUTA del resultado. Con --salida escribe un
+    // archivo llamado "--salida" y termina en 0, así que el fallo es silencioso: hay que reintentar.
+    const posicionalPy = "import sys, json\njson.dump({'via': 'posicional'}, open(sys.argv[2], 'w'))\n";
+    const r5b = await ex.run(arte(posicionalPy), inputs);
+    check("argv[2] = ruta del resultado (lo que eligió el 1er build real, hoy se rescata)",
+      (r5b.resultado as { via: string }).via === "posicional");
   } finally {
     process.env.SECRET_PROBE = prev.s; process.env.DATABASE_URL = prev.d;
     if (prev.s === undefined) delete process.env.SECRET_PROBE;

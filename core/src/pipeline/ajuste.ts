@@ -5,9 +5,10 @@ import { type Pool } from "pg";
 import { conOrg } from "../db/pg.ts";
 import { iniciarAjuste, fallarAjuste } from "../ciclo/servicio.ts";
 import { PgStateRepo } from "../state/pg.ts";
-import type { Artefacto, BuildClientAsync, PeticionAjuste, Spec, Storage } from "../types.ts";
+import type { Artefacto, BuildClientAsync, PeticionAjuste, Spec, Storage, Vista } from "../types.ts";
 import type { ResultadoRegresion, TipoAjuste } from "../ciclo/estados.ts";
 import type { Notificador } from "../ops/notificaciones.ts";
+import type { Planeador } from "./disparo.ts";
 import { artefactoKey } from "./build-pipeline.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -46,6 +47,11 @@ export interface AjusteArgs {
   spec: Spec; // el spec vigente de la automatización
   ejemploKey: string; // el ejemplo con el que se construyó (CMA lo necesita para probar)
   regresion: ResultadoRegresion; // "falla" → reparación gratis; "pasa"/"indeterminado" → cambio
+  // OBLIGATORIA a propósito: una versión sin vista se entrega 'lista' y truena al ejecutarla. El
+  // tipo es lo que impide que vuelva a olvidarse — antes `vista` ni existía aquí y el drainer
+  // llamaba feliz sin ella. Va JUNTO con contratoTexto: los dos salen del MISMO plan y la vista
+  // referencia @resultado.* del contrato; mandar uno sin el otro rompe el acoplamiento.
+  vista: Vista;
   contratoTexto?: string;
 }
 
@@ -88,7 +94,7 @@ export async function arrancarAjuste(deps: AjusteDeps, args: AjusteArgs): Promis
   // 1. RESERVA en una tx corta. iniciarAjuste valida guardas (activa, sin build en vuelo, ajustes
   //    disponibles si es cambio) y persiste el tipo; la BD cobra la generación si es cambio.
   const iniciado = await conOrg(deps.pool, args.orgId, (c) =>
-    iniciarAjuste(c, args.automatizacionId, args.regresion),
+    iniciarAjuste(c, args.automatizacionId, args.regresion, { vista: args.vista }),
   );
 
   try {
@@ -138,6 +144,10 @@ export interface DrenarAjustesDeps extends AjusteDeps {
   // escribe por app_solicitar_ajuste, que valida), así que reclamarla exige el DUEÑO; el ciclo en
   // cambio vive bajo RLS y va con el pool de app (deps.pool).
   poolOwner: Pool;
+  // El PLANNER, igual que en el disparo de builds. Faltaba, y ese era el bug: el ajuste construía
+  // el código pero la versión nueva nacía sin vista ni contrato, así que se entregaba 'lista' y
+  // reventaba al ejecutarla. El cliente pagaba el build y recibía algo inservible.
+  planeador: Planeador;
   notificador?: Notificador; // avisa al cliente si su ajuste se descarta (best-effort)
 }
 
@@ -155,7 +165,7 @@ export async function drenarAjustes(
     // incrementaría `intentos` sin procesar y el presupuesto de reintentos se gastaría al doble.
     const claim = await deps.poolOwner.query<{
       id: string; org_id: string; automatizacion_id: string; peticion: string; intentos: number;
-      nombre: string; spec: Spec | null; ejemplo_key: string | null;
+      nombre: string; spec: Spec | null; ejemplo_key: string | null; vista_anterior: Vista | null;
     }>(
       // Mismo ARRENDAMIENTO que el disparo de builds, por la misma razón: el lock del claim no
       // sobrevive al trabajo caro, así que sin `tomada_en` dos crons solapados arrancarían dos
@@ -168,7 +178,14 @@ export async function drenarAjustes(
        RETURNING id, org_id, automatizacion_id, peticion, intentos,
                  (SELECT nombre      FROM automatizaciones a WHERE a.id = automatizacion_id) AS nombre,
                  (SELECT spec        FROM automatizaciones a WHERE a.id = automatizacion_id) AS spec,
-                 (SELECT ejemplo_key FROM automatizaciones a WHERE a.id = automatizacion_id) AS ejemplo_key`,
+                 (SELECT ejemplo_key FROM automatizaciones a WHERE a.id = automatizacion_id) AS ejemplo_key,
+                 -- La vista VIGENTE, para que el planner la EVOLUCIONE en vez de reinventar el
+                 -- reporte que el cliente ya reconoce. Se califica con el nombre de la tabla: aquí
+                 -- un automatizacion_id a secas resolvería a la columna de versiones (v.automatizacion_id
+                 -- = v.automatizacion_id, tautología que traería la vista de CUALQUIER org).
+                 (SELECT v.vista FROM versiones v
+                   WHERE v.automatizacion_id = ajuste_pendiente.automatizacion_id AND v.estado = 'lista'
+                   ORDER BY v.numero DESC LIMIT 1) AS vista_anterior`,
       [vistos],
     );
     const row = claim.rows[0];
@@ -182,6 +199,14 @@ export async function drenarAjustes(
         throw new Error("la automatización no guardó su spec/ejemplo (se construyó antes de que se persistieran): no se puede ajustar");
       }
       const regresion = await correrRegresion();
+      // PLANEAR ANTES DE RESERVAR (mismo orden que drenarBuilds). iniciarAjuste es lo que COBRA la
+      // generación: si el planner truena después de reservar, el cliente ya pagó un build que no
+      // existe. Planeando primero, un fallo del planner solo deja el ajuste en la cola para el
+      // siguiente intento y nadie paga nada.
+      const plan = await deps.planeador.planear(row.spec, {
+        peticion: row.peticion,
+        vistaAnterior: row.vista_anterior ?? undefined,
+      });
       await arrancarAjuste(deps, {
         orgId: row.org_id,
         automatizacionId: row.automatizacion_id,
@@ -189,6 +214,11 @@ export async function drenarAjustes(
         spec: row.spec,
         ejemploKey: row.ejemplo_key,
         regresion,
+        vista: plan.vista,
+        // El contrato tampoco viajaba: el agente construía la v2 sin saber qué forma debía tener el
+        // resultado.json, así que aunque la vista hubiera existido, sus refs @resultado.* podían no
+        // resolver. Los dos salen del mismo plan justamente para que cuadren.
+        contratoTexto: JSON.stringify(plan.resultado_contrato),
       });
       await deps.poolOwner.query("DELETE FROM ajuste_pendiente WHERE id = $1", [row.id]);
       arrancados++;

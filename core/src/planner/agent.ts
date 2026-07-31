@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Spec } from "../types.ts";
 import { SISTEMA_PLANNER, mensajePlanner } from "./prompt.ts";
 import { validarCoherencia } from "./coherencia.ts";
-import { TOOL_PLANEAR, type PlanResultado } from "./schema.ts";
+import { TOOL_PLANEAR, type AjustePlan, type PlanResultado } from "./schema.ts";
 
 // El planner (docs/03/09). Modelo Opus. Produce vista + contrato de resultado,
 // y NO devuelve un plan hasta que la puerta de coherencia pasa (toda ref
@@ -18,7 +18,9 @@ export class PlannerError extends Error {}
 export class PlannerAgent {
   private client = new Anthropic();
 
-  async planear(spec: Spec): Promise<PlanResultado> {
+  /** `ajuste` presente = se planea una versión > 1: el spec es el mismo, lo que cambió es la
+   *  petición del cliente. Ver AjustePlan (schema.ts) para por qué no basta con el spec. */
+  async planear(spec: Spec, ajuste?: AjustePlan): Promise<PlanResultado> {
     let feedback = "";
     for (let intento = 0; intento <= REINTENTOS; intento++) {
       const ultimo = intento >= REINTENTOS;
@@ -26,7 +28,7 @@ export class PlannerAgent {
         model: MODELO,
         max_tokens: MAX_TOKENS,
         system: SISTEMA_PLANNER,
-        messages: [{ role: "user", content: mensajePlanner(spec) + feedback }],
+        messages: [{ role: "user", content: mensajePlanner(spec, ajuste) + feedback }],
         tools: [TOOL_PLANEAR] as any,
         tool_choice: { type: "tool", name: "planear" },
       });
