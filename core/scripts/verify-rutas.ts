@@ -52,7 +52,18 @@ function main() {
         check(`${rel}: ${m} (${esWebhook ? "webhook" : "cron"}) NO usa ruta() — camino sancionado aparte`, !new RegExp(`${m}\\s*=\\s*ruta`).test(src));
         continue;
       }
-      const viaRuta = new RegExp(`${m}\\s*=[^\\n]*\\bruta\\s*\\(`).test(src);
+      const viaRutaDirecta = new RegExp(`${m}\\s*=[^\\n]*\\bruta\\s*\\(`).test(src);
+      // ENVUELTO: `const invitar = ruta(ep)` + un `export async function POST` que lo llama. Se usa
+      // cuando hace falta un efecto POSTERIOR al endpoint (el correo de invitación) sin abrir un
+      // segundo camino de escritura. Se verifica que el handler EXPORTADO llame de verdad al
+      // identificador ligado a ruta(), no solo que la palabra aparezca suelta en el archivo.
+      // TODOS los ligados, no el primero: el mismo archivo suele tener `export const GET = ruta(…)`
+      // antes, y quedarse con ese hacía que la comprobación buscara una llamada a `GET(` que nunca
+      // existe — el check fallaba con el código correcto.
+      const ligados = [...src.matchAll(/const\s+(\w+)\s*=\s*ruta\s*\(/g)].map((x) => x[1]!);
+      const cuerpo = new RegExp(`export\\s+(?:async\\s+)?function\\s+${m}\\b[\\s\\S]*`).exec(src)?.[0] ?? "";
+      const viaRutaEnvuelta = ligados.some((id) => new RegExp(`\\b${id}\\s*\\(`).test(cuerpo));
+      const viaRuta = viaRutaDirecta || viaRutaEnvuelta;
       // El upload (subirEjemplo) y el Run (correrAutomatizacion) pasan por las MISMAS 8 capas
       // (autorizar, vía adaptarUpload) con cuerpo binario/multipart; sancionados aunque no usen
       // ruta() (el pipeline JSON no maneja multipart). Delegan en una de esas entradas.

@@ -400,6 +400,20 @@ let notificadorInst: Notificador | undefined;
 function getNotificador(): Notificador {
   return (notificadorInst ??= {
     async notificar(evento: EventoCorreo) {
+      // LA INVITACIÓN VA APARTE: es el único aviso cuyo destinatario NO son los admins de la org,
+      // sino alguien que todavía no tiene cuenta (por eso no hay a quién resolver por Clerk). Sale
+      // primero para que no pueda caer por accidente en el camino de abajo y terminar avisándole al
+      // que invita en vez de al invitado. El link va a /registrarse, que es público: mandarlo al
+      // portafolio lo estrellaría contra el default-deny del middleware.
+      if (evento.tipo === "invitacion") {
+        if (!evento.destinatario) return; // sin a quién escribirle no se inventa un destinatario
+        const o = await getPoolOwner().query<{ nombre: string }>("SELECT nombre FROM orgs WHERE id = $1", [evento.orgId]);
+        await enviarResend([evento.destinatario], plantillaCorreo("invitacion", {
+          nombre: o.rows[0]?.nombre ?? "tu equipo",
+          url: `${env("APP_ORIGIN")}/registrarse`,
+        }));
+        return;
+      }
       // Sin automatizacionId el aviso es de un build descartado antes de existir: el nombre viene
       // en el evento (de la solicitud encolada) y el link va al portafolio, no a un detalle que
       // no existe.
@@ -413,6 +427,23 @@ function getNotificador(): Notificador {
       await enviarResend(await correosAdmins(evento.orgId), plantillaCorreo(evento.tipo, { nombre, url }));
     },
   });
+}
+
+/**
+ * Le avisa por correo a alguien que lo invitaron. BEST-EFFORT y SIEMPRE después de que la
+ * invitación quedó guardada: si el correo falla, la invitación sigue siendo válida (la persona
+ * entra al registrarse con ese correo) — al revés sí sería un problema, avisarle de algo que no
+ * existe. Por eso nunca se lanza desde aquí.
+ *
+ * Se AWAITEA en vez de dispararlo y olvidarlo: en serverless la función se congela al responder y
+ * un envío en vuelo se pierde en silencio, que es justo el bug que este correo venía a arreglar.
+ */
+export async function avisarInvitacion(orgId: string, correo: string): Promise<void> {
+  try {
+    await getNotificador().notificar({ tipo: "invitacion", orgId, destinatario: correo });
+  } catch (e) {
+    console.error(`[invitacion] no se pudo avisar a ${correo} (la invitación SÍ quedó):`, (e as { message?: string })?.message ?? e);
+  }
 }
 
 /** Envío de PRUEBA (lo usa la ruta dev): manda un correo de muestra a `a` para confirmar que

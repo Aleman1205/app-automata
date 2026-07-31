@@ -9,11 +9,15 @@
 // falla, el build YA quedó — nunca se tumba por un correo.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type TipoCorreo = "lista" | "fallo" | "revision";
+export type TipoCorreo = "lista" | "fallo" | "revision" | "invitacion";
 
 export interface EventoCorreo {
   tipo: TipoCorreo;
   orgId: string;
+  // SOLO para 'invitacion': a quién se le escribe. Es el único aviso cuyo destinatario NO son los
+  // admins de la org — es alguien que todavía no tiene cuenta, así que no hay a quién resolver por
+  // Clerk. Sin esto la invitación le llegaría a quien invita, no al invitado.
+  destinatario?: string;
   // Ausente cuando el aviso es de un build que se descartó ANTES de existir: si el disparo agota
   // sus intentos, nunca se creó la automatización (la crea arrancarConstruccion), así que no hay
   // id que resolver ni detalle al que linkear. En ese caso el evento carga el `nombre` que venía
@@ -42,9 +46,13 @@ const escapar = (s: string): string =>
 export function plantillaCorreo(tipo: TipoCorreo, ctx: { nombre: string; url?: string }): Correo {
   const nombre = ctx.nombre;
   const link = ctx.url;
-  const cta = link ? `\n\nÁbrela aquí: ${link}` : "";
+  // El botón NO puede decir siempre "Abrir mi portafolio": en la invitación quien lee todavía no
+  // tiene portafolio (ni cuenta), y mandarlo ahí lo estrella contra el default-deny del middleware.
+  const invita = tipo === "invitacion";
+  const etiquetaCta = invita ? "Entrar al equipo" : "Abrir mi portafolio";
+  const cta = link ? (invita ? `\n\nEntra aquí: ${link}` : `\n\nÁbrela aquí: ${link}`) : "";
   const ctaHtml = link
-    ? `<p style="margin-top:20px"><a href="${escapar(link)}" style="display:inline-block;background:#1D1710;color:#F4EEDF;padding:12px 22px;border-radius:9999px;text-decoration:none;font-weight:600">Abrir mi portafolio</a></p>`
+    ? `<p style="margin-top:20px"><a href="${escapar(link)}" style="display:inline-block;background:#1D1710;color:#F4EEDF;padding:12px 22px;border-radius:9999px;text-decoration:none;font-weight:600">${etiquetaCta}</a></p>`
     : "";
   const n = escapar(nombre);
 
@@ -60,6 +68,16 @@ export function plantillaCorreo(tipo: TipoCorreo, ctx: { nombre: string; url?: s
         asunto: `“${nombre}” necesita una revisión`,
         texto: `Tu automatización “${nombre}” no quedó a la primera. Nuestro equipo la revisa — no se te cobró — y te avisamos en cuanto esté.${cta}`,
         html: `<h2 style="font-weight:800">“${n}” necesita una revisión</h2><p>No quedó a la primera. Nuestro equipo la revisa — no se te cobró — y te avisamos en cuanto esté.</p>${ctaHtml}`,
+      };
+    // Aquí `nombre` es el del NEGOCIO que invita, no el de una automatización: es el único correo
+    // que no habla de una automatización. Y NO se nombra a quien invitó ni se promete nada del
+    // plan: el remitente es la app, no una persona, y el correo llega a alguien que quizá no nos
+    // conoce. Se le dice quién lo invitó (la empresa), qué es esto y qué hacer.
+    case "invitacion":
+      return {
+        asunto: `Te invitaron a ${nombre} en Automata`,
+        texto: `Te invitaron a trabajar en “${nombre}” dentro de Automata, donde el equipo automatiza tareas repetitivas (reportes, conciliaciones) sin programar.\n\nPara entrar, regístrate con ESTE mismo correo — es con el que te invitaron.${cta}\n\nSi no esperabas esta invitación, ignora este mensaje: no se creó ninguna cuenta a tu nombre.`,
+        html: `<h2 style="font-weight:800">Te invitaron a ${n}</h2><p>Te invitaron a trabajar en “${n}” dentro de Automata, donde el equipo automatiza tareas repetitivas (reportes, conciliaciones) sin programar.</p><p>Para entrar, regístrate con <strong>este mismo correo</strong> — es con el que te invitaron.</p>${ctaHtml}<p style="margin-top:24px;font-size:13px;color:#6B5D4A">Si no esperabas esta invitación, ignora este mensaje: no se creó ninguna cuenta a tu nombre.</p>`,
       };
     case "revision":
       return {
