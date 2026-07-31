@@ -23,11 +23,17 @@ import { promises as fsp } from "node:fs";
 import os from "node:os";
 import { R } from "automata-core/http/tipos";
 import { type Deps, type Endpoint } from "automata-core/http/pipeline";
-import { type Sesion, type RateLimiter, type Solicitud } from "automata-core/http/tipos";
+import { type Sesion, type RateLimiter, type Solicitud, type Respuesta } from "automata-core/http/tipos";
 import { plantillaCorreo, type Notificador, type EventoCorreo, type Correo } from "automata-core/ops/notificaciones";
 import { orgsDeUsuario, provisionarUsuario } from "automata-core/ops/onboarding";
 import { recibir, type Evento } from "automata-core/webhooks/receptor";
 import { aplicarDowngrade } from "automata-core/billing/plan";
+import Stripe from "stripe";
+import { ServicioSuspendido } from "automata-core/ops/killswitch";
+import {
+  iniciarCheckout, abrirPortalCliente, esPlanPagable,
+  PagosNoConfigurados, SinSuscripcion, YaTieneSuscripcion, PasarelaCaida, type Pasarela,
+} from "automata-core/billing/pasarela";
 import { verificarStandardWebhook, verificarStripe, type Verificador } from "automata-core/webhooks/firma";
 import { procesarCma, procesarStripe, type CambioPlan } from "automata-core/webhooks/handlers";
 import { DEV, DEV_USER } from "./dev";
@@ -461,6 +467,89 @@ async function getAjusteDeps(): Promise<DrenarAjustesDeps> {
     ahora: () => new Date().toISOString(),
     notificador: getNotificador(), // si el ajuste se descarta tras 3 intentos, avisarle al cliente
   };
+}
+
+// ── Pasarela de pagos (Stripe): checkout + portal de cliente ──
+// El SDK se construye EN CADA LLAMADA leyendo la env ahí mismo, no al importar: si se leyera arriba,
+// `next build` y todo el modo dev tronarían por no tener llave de Stripe — el resto del wiring sigue
+// esta misma regla. `apiVersion` NO se fija a propósito: el SDK usa la que le corresponde a su
+// versión, y clavar una cadena aquí es la típica que se queda vieja y rompe en producción.
+function pasarelaStripe(): Pasarela {
+  const cliente = () => new Stripe(env("STRIPE_SECRET_KEY"), { maxNetworkRetries: 2, timeout: 10_000 });
+  // Todo error del SDK se envuelve en PasarelaCaida. Crudo subiría como 500 'error_interno' y quien
+  // intentó pagar se quedaría sin saber si le cobraron o no.
+  const caida = (e: unknown): never => { throw new PasarelaCaida((e as { message?: string })?.message ?? String(e)); };
+  const puerto: Pasarela = {
+    async crearCheckout(a) {
+      const s = await cliente().checkout.sessions.create({
+        mode: "subscription",
+        line_items: [{ price: a.priceId, quantity: 1 }],
+        // client_reference_id es lo ÚNICO con que el webhook vincula el pago a una org
+        // (`procesarStripe` → `app_stripe_vincular`). Sin esto Stripe cobra y el producto no se
+        // entera: la org se queda en 'pendiente' y el cliente paga sin poder construir nada.
+        client_reference_id: a.orgId,
+        // Reusar el customer cuando ya existe evita duplicarlo en Stripe; app_stripe_vincular es
+        // write-once y rechazaría un segundo customer para la misma org.
+        ...(a.clienteId ? { customer: a.clienteId } : {}),
+        success_url: a.exitoUrl,
+        cancel_url: a.cancelUrl,
+      }).catch(caida);
+      if (!s.url) throw new PasarelaCaida("Stripe no devolvió URL de checkout");
+      return s.url;
+    },
+    async abrirPortal(a) {
+      const s = await cliente().billingPortal.sessions
+        .create({ customer: a.clienteId, return_url: a.volverUrl })
+        .catch(caida);
+      return s.url;
+    },
+  };
+  return puerto;
+}
+
+/** POST /api/orgs/:orgId/pagar — abre el checkout de Stripe para contratar un plan. Devuelve la URL
+ *  a la que el front redirige. NO cambia el plan: eso lo hace el webhook cuando Stripe confirma. */
+export async function crearCheckoutPago(req: Request, orgId: string): Promise<Response> {
+  const handler = adaptarUpload(await getDeps(), getCfg(), { metodo: "POST", accion: "facturacion" }, async (r, org, cliente) => {
+    const plan = ((await r.json().catch(() => ({}))) as { plan?: unknown }).plan;
+    if (!esPlanPagable(plan)) return R.malParametro("plan debe ser base, pro o equipo");
+    try {
+      return R.ok(await iniciarCheckout(cliente, pasarelaStripe(), { orgId: org, plan, origen: getCfg().appOrigin }));
+    } catch (e) {
+      return errorDePago(e, "checkout");
+    }
+  });
+  return handler(req, orgId);
+}
+
+/** POST /api/orgs/:orgId/portal-pago — abre el portal de cliente de Stripe (tarjeta, facturas,
+ *  cancelar). Solo si la org YA tiene suscripción; si no, lo que necesita es el checkout. */
+export async function abrirPortalPago(req: Request, orgId: string): Promise<Response> {
+  const handler = adaptarUpload(await getDeps(), getCfg(), { metodo: "POST", accion: "facturacion" }, async (_r, _org, cliente) => {
+    try {
+      return R.ok(await abrirPortalCliente(cliente, pasarelaStripe(), { origen: getCfg().appOrigin }));
+    } catch (e) {
+      return errorDePago(e, "portal");
+    }
+  });
+  return handler(req, orgId);
+}
+
+/** Traduce los fallos de cobro a algo accionable. Se distingue "no está configurado" de "Stripe
+ *  falló": lo primero es un despliegue a medias (falta una env) y decirle "algo salió mal" a alguien
+ *  que intentó pagar esconde justo el dato que arregla el problema. Nada de esto llega con detalle
+ *  al cliente —podría traer identificadores de Stripe—, pero sí queda entero en el log. */
+function errorDePago(e: unknown, donde: string): Respuesta {
+  if (e instanceof SinSuscripcion) return { status: 409, cuerpo: { error: "sin_suscripcion" } };
+  // El front lo usa para reencaminar al PORTAL, que es donde Stripe sí cambia de plan prorrateando.
+  if (e instanceof YaTieneSuscripcion) return { status: 409, cuerpo: { error: "ya_tiene_suscripcion" } };
+  if (e instanceof ServicioSuspendido) return { status: 503, cuerpo: { error: "cobros_suspendidos" } };
+  if (e instanceof PagosNoConfigurados) {
+    console.error(`[pagos] ${donde}: ${e.message} — falta configurar Stripe (envs STRIPE_*).`);
+    return { status: 503, cuerpo: { error: "pagos_no_configurados" } };
+  }
+  console.error(`[pagos] ${donde} falló:`, (e as { message?: string })?.message ?? e);
+  return { status: 502, cuerpo: { error: "pago_no_disponible" } };
 }
 
 /** Ruta de cron: drena ajuste_pendiente → regresión → arrancarAjuste (sesión de CMA para la

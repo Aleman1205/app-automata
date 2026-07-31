@@ -531,6 +531,62 @@ export async function pedirAjuste(id: string, peticion: string): Promise<void> {
   }
 }
 
+// ── Pagos (Stripe) ───────────────────────────────────────────────────────────
+// Las dos devuelven una URL de Stripe a la que hay que MANDAR al cliente. No se abre en pestaña
+// nueva a propósito: los navegadores bloquean `window.open` que no nace de un clic directo, y el
+// checkout debe volver a /cuenta al terminar (Stripe ya trae su propio "regresar").
+export type PlanPagable = "base" | "pro" | "equipo";
+
+// Señal interna, no copy: `irAlCheckout` la reconoce para mandar al portal en vez de fallar.
+const REENCAMINAR_AL_PORTAL = "__portal__";
+
+const mensajePago = (error?: string): string =>
+  error === "ya_tiene_suscripcion" ? REENCAMINAR_AL_PORTAL
+  : error === "cobros_suspendidos" ? "Los pagos están en pausa por mantenimiento. Vuelve a intentar en un rato."
+  : error === "pagos_no_configurados" ? "El cobro todavía no está disponible. Escríbenos y lo resolvemos."
+  : error === "sin_suscripcion" ? "Todavía no tienes una suscripción activa. Elige un plan para empezar."
+  : error === "pago_no_disponible" ? "No pudimos conectar con el cobro. Vuelve a intentar en un momento."
+  : error === "step_up_requerido" ? "Por seguridad esto pide verificar tu identidad otra vez. Cierra sesión y vuelve a entrar para continuar."
+  : error === "prohibido" ? "Solo un administrador puede cambiar el plan."
+  : "No se pudo abrir el pago. Intenta de nuevo.";
+
+async function urlDePago(ruta: string, cuerpo: unknown): Promise<string> {
+  const org = await orgActual();
+  if (!org) throw new Error("No hay backend configurado.");
+  const r = await pedir(`/api/orgs/${org}/${ruta}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(cuerpo),
+  });
+  const cuerpoR = (await r.json().catch(() => ({}))) as { url?: string; error?: string };
+  if (!r.ok || !cuerpoR.url) throw new Error(mensajePago(cuerpoR.error));
+  return cuerpoR.url;
+}
+
+/**
+ * Lleva al cliente a pagar el `plan` elegido. El plan NO cambia aquí: lo aplica el webhook cuando
+ * Stripe confirma (Stripe es la fuente de verdad de lo que el cliente paga).
+ *
+ * Si YA tiene una suscripción viva, el checkout se niega (crearía una SEGUNDA suscripción y un
+ * segundo cargo mensual) y se reencamina al PORTAL, que es donde Stripe cambia de plan prorrateando.
+ * Se hace aquí y no en la pantalla para que ningún botón termine en un callejón sin salida.
+ */
+export async function irAlCheckout(plan: PlanPagable): Promise<void> {
+  let url: string;
+  try {
+    url = await urlDePago("pagar", { plan });
+  } catch (e) {
+    if (e instanceof Error && e.message === REENCAMINAR_AL_PORTAL) return irAlPortalDePago();
+    throw e;
+  }
+  window.location.href = url;
+}
+
+/** Abre el portal de cliente de Stripe (tarjeta, facturas, cancelar). */
+export async function irAlPortalDePago(): Promise<void> {
+  window.location.href = await urlDePago("portal-pago", {});
+}
+
 /** Rehace un build que FALLÓ, sin volver a cobrar. Lanza con mensaje de cliente si no se puede. */
 export async function reintentarBuild(id: string): Promise<void> {
   const org = await orgActual();

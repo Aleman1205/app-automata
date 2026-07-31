@@ -17,7 +17,19 @@ import {
   pagos,
   usuarioActual,
 } from "@/lib/datos";
-import { verCuenta, type CuentaVista } from "@/lib/automata/lectura";
+import {
+  verCuenta, irAlCheckout, irAlPortalDePago,
+  type CuentaVista, type PlanPagable,
+} from "@/lib/automata/lectura";
+
+// Los precios de docs/06 (MXN provisionales). Se muestran para que el cliente sepa qué va a pagar
+// ANTES de ir al checkout; el importe REAL lo cobra Stripe desde su price, y si algún día no
+// coinciden manda Stripe — por eso el backend rechaza un price que no mapee a su plan.
+const PLANES: { id: PlanPagable; titulo: string; precio: number }[] = [
+  { id: "base", titulo: "Base", precio: 499 },
+  { id: "pro", titulo: "Pro", precio: 999 },
+  { id: "equipo", titulo: "Equipo", precio: 1999 },
+];
 
 // Barra de uso: llenado animado con etiqueta "X de Y".
 function BarraUso({
@@ -58,9 +70,31 @@ export default function Cuenta() {
   // Plan + uso REALES (fallback a datos falsos si no hay backend). El precio/método de pago/
   // historial/perfil siguen siendo demo (eso vive en Stripe/Clerk, no en nuestro backend).
   const [real, setReal] = useState<CuentaVista | null>(null);
+  const [eligiendoPlan, setEligiendoPlan] = useState(false);
+  const [yendoAPagar, setYendoAPagar] = useState<PlanPagable | null>(null);
+  const [abriendoPortal, setAbriendoPortal] = useState(false);
   useEffect(() => {
     verCuenta().then(setReal).catch(() => setReal(null));
   }, []);
+
+  // Vuelta desde Stripe. El plan lo aplica el WEBHOOK, que puede tardar unos segundos en llegar, así
+  // que al volver el plan de arriba todavía puede ser el viejo. Decirlo es mejor que un "¡Listo!"
+  // que la pantalla contradice — o peor, que el cliente crea que no se aplicó y vuelva a pagar.
+  useEffect(() => {
+    const pago = new URLSearchParams(window.location.search).get("pago");
+    if (!pago) return;
+    if (pago === "listo") {
+      avisar("Pago recibido. Tu plan nuevo se activa en unos segundos.");
+      // Se relee un momento después: si el webhook ya llegó, la pantalla se corrige sola.
+      const t = setTimeout(() => { verCuenta().then(setReal).catch(() => {}); }, 4000);
+      window.history.replaceState({}, "", "/cuenta"); // que un refresh no repita el aviso
+      return () => clearTimeout(t);
+    }
+    if (pago === "cancelado") {
+      avisar("No se hizo ningún cargo. Sigues en tu plan de siempre.");
+      window.history.replaceState({}, "", "/cuenta");
+    }
+  }, [avisar]);
   const c: CuentaVista = real ?? {
     plan: cuenta.plan,
     precioMes: cuenta.precioMes,
@@ -126,11 +160,51 @@ export default function Cuenta() {
               <Boton
                 variante="fantasma"
                 tamano="sm"
-                onClick={() => avisar("Cambio de plan (demo)")}
+                deshabilitado={yendoAPagar !== null}
+                onClick={() => setEligiendoPlan((v) => !v)}
               >
-                Cambiar de plan
+                {eligiendoPlan ? "Cancelar" : "Cambiar de plan"}
               </Boton>
             </div>
+
+            {/* El cambio de plan lo cobra STRIPE, no nosotros: este botón solo abre su checkout y el
+                plan se aplica cuando Stripe confirma el pago (el webhook lo deriva del price). Por
+                eso aquí no se toca nada del plan ni se muestra un "listo" optimista. */}
+            {eligiendoPlan && (
+              <div className="mt-5 flex flex-col gap-3 border-t border-linea pt-5">
+                <p className="text-sm text-sepia">
+                  Elige tu plan. Te llevamos al pago seguro y cobramos solo la diferencia del mes.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {PLANES.map((p) => {
+                    const actual = p.id === c.plan;
+                    return (
+                      <Boton
+                        key={p.id}
+                        variante="fantasma"
+                        tamano="sm"
+                        deshabilitado={actual || yendoAPagar !== null}
+                        onClick={async () => {
+                          setYendoAPagar(p.id);
+                          try {
+                            await irAlCheckout(p.id);
+                          } catch (e) {
+                            avisar(e instanceof Error ? e.message : "No se pudo abrir el pago.");
+                            setYendoAPagar(null);
+                          }
+                        }}
+                      >
+                        {actual
+                          ? `${p.titulo} · tu plan`
+                          : yendoAPagar === p.id
+                            ? "Abriendo el pago…"
+                            : `${p.titulo} · $${p.precio.toLocaleString("es-MX")}/mes`}
+                      </Boton>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="mt-8 flex flex-col gap-5 border-t border-linea pt-6">
               <BarraUso
@@ -177,12 +251,25 @@ export default function Cuenta() {
                 </p>
               </div>
             </div>
+            {/* Antes era un toast ("Actualizar pago (demo)"). Ahora abre el portal REAL de Stripe,
+                que es donde de verdad vive la tarjeta: nosotros nunca vemos ni guardamos datos de
+                pago. Si la org todavía no tiene suscripción, el backend responde 409 y el mensaje
+                la manda a elegir plan, que es lo que necesita. */}
             <Boton
               variante="fantasma"
               tamano="sm"
-              onClick={() => avisar("Actualizar pago (demo)")}
+              deshabilitado={abriendoPortal}
+              onClick={async () => {
+                setAbriendoPortal(true);
+                try {
+                  await irAlPortalDePago();
+                } catch (e) {
+                  avisar(e instanceof Error ? e.message : "No se pudo abrir el pago.");
+                  setAbriendoPortal(false);
+                }
+              }}
             >
-              Actualizar
+              {abriendoPortal ? "Abriendo…" : "Actualizar"}
             </Boton>
           </Tarjeta>
         </Reveal>

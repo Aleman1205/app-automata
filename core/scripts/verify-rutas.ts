@@ -56,7 +56,12 @@ function main() {
       // El upload (subirEjemplo) y el Run (correrAutomatizacion) pasan por las MISMAS 8 capas
       // (autorizar, vía adaptarUpload) con cuerpo binario/multipart; sancionados aunque no usen
       // ruta() (el pipeline JSON no maneja multipart). Delegan en una de esas entradas.
-      const viaUpload = /(subirEjemplo|correrAutomatizacion)\s*\(/.test(src);
+      // crearCheckoutPago/abrirPortalPago van por adaptarUpload igual que los anteriores: necesitan
+      // el PoolClient del pipeline (para leer la suscripción bajo RLS) y un puerto externo (Stripe),
+      // y ni Contexto ni Deps tienen dónde meter eso. Mismas 8 capas, con accion 'facturacion'
+      // (admin + step-up). La lista es explícita a propósito: que añadir un camino nuevo obligue a
+      // pasar por aquí es justamente el punto de este verify.
+      const viaUpload = /(subirEjemplo|correrAutomatizacion|crearCheckoutPago|abrirPortalPago)\s*\(/.test(src);
       check(`${rel}: ${m} pasa por un camino sancionado (ruta/upload → autorizar)`, viaRuta || viaUpload);
     }
   }

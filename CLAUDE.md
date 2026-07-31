@@ -43,9 +43,10 @@ serie de agentes piensa, planea, programa, ejecuta".
 | **Equipo compartido / invitaciones** (2026-07-29) | **Construido** | Tabla `invitaciones` (por CORREO, con RLS y contando contra la cuota) + SD `app_aceptar_invitaciones`; `app_provisionar_usuario` gana `p_correo` → un invitado entra al equipo que lo invitó en vez de recibir org propia. Antes se inventaba el `user_id` del local-part del correo y la fila quedaba huérfana | `verify:onboarding:pg` (secciones 7-8), `verify:cuota:pg` |
 | **Posventa / ajustes** (2026-07-30) | **Construido** | `core/src/pipeline/ajuste.ts` (`arrancarAjuste` construye la versión **>1** — antes NADIE abría sesión de CMA para una v2 — y `drenarAjustes`); tabla `ajuste_pendiente` + SD `app_solicitar_ajuste`; `pedirAjusteEP` (`POST /orgs/:orgId/ajustar`, exige `confirmado:true`); cron `/api/cron/ajustes`; `automatizaciones.spec`/`ejemplo_key` persistidos (sin ellos un ajuste no tiene con qué construir); front `/ajustar` real | `verify:ajuste:pg` (25 checks) |
 | Notificaciones por correo (docs/05) | **Construido** | `core/src/ops/notificaciones.ts` (puerto + plantillas puras, `TipoCorreo` = lista/fallo/revision) + el notificador real con Resend en `web/lib/automata/wiring.ts` (resuelve los correos de los admins por Clerk), inyectado en los **tres** drainers (cosecha, disparo, ajustes) | `verify:notificaciones` |
-| **Stripe: enganche** (2026-07-30) | **Parcial** — falta checkout/portal | SD `app_stripe_vincular` (write-once; el eslabón que faltaba: `stripe_customer_id` no tenía escritor, así que TODO evento de Stripe era no-op silencioso); el receptor extrae `price` + `client_reference_id`; `planDePrecio()` mapea desde `STRIPE_PRICE_*`; el handler **devuelve** el cambio de plan y el wiring lo aplica TRAS el commit (hacerlo dentro deadlockeaba con `aplicarDowngrade`) | `verify:stripe:pg` (17 checks) |
+| **Stripe: checkout + portal** (2026-07-30) | **Construido** — sin ejercer contra Stripe real | `core/src/billing/pasarela.ts` (puerto `Pasarela` inyectado + `iniciarCheckout`/`abrirPortalCliente`), wiring con el SDK en `web/lib/automata/wiring.ts`, rutas `POST /pagar` y `POST /portal-pago` (`accion: facturacion` = admin + step-up), front en `/cuenta`. **El checkout SOLO contrata** (`pendiente`/`cancelada`): con una suscripción viva lanza `YaTieneSuscripcion` y el front reencamina al PORTAL — Stripe Checkout en `mode:"subscription"` **no cambia** la suscripción, crea otra, o sea DOS cargos al mes. Kill-switch de cobros frena el checkout pero **no** el portal (es la única puerta para arreglar tarjeta o cancelar) | `verify:pasarela:pg` (22 checks, con pasarela FALSA) |
+| **Stripe: enganche** (2026-07-30) | **Construido** | SD `app_stripe_vincular` (write-once; el eslabón que faltaba: `stripe_customer_id` no tenía escritor, así que TODO evento de Stripe era no-op silencioso); el receptor extrae `price` + `client_reference_id`; `planDePrecio()` mapea desde `STRIPE_PRICE_*`; el handler **devuelve** el cambio de plan y el wiring lo aplica TRAS el commit (hacerlo dentro deadlockeaba con `aplicarDowngrade`) | `verify:stripe:pg` (17 checks) |
 
-**Marco de pruebas:** **35** scripts `verify:*` en `core/package.json` (unit +
+**Marco de pruebas:** **36** scripts `verify:*` en `core/package.json` (unit +
 contra Postgres real, sufijo `:pg` — 20 de ellos). Corren **en verde en secuencia**;
 `tsc --noEmit` (core y web) y `next build` OK. La BD de pruebas es un Postgres temporal
 en el puerto **55432**.
@@ -112,7 +113,7 @@ en el índice, abajo).
 | Planeación de arquitectura | **Completa** — 13 documentos, 2 curtidos con crítica adversarial |
 | Front | **Ya NO es solo apariencia.** Portafolio, cuenta, equipo, detalle, Ejecutar, `/nueva` (intake→build) y `/ajustar` (posventa) consumen el backend REAL, con fallback a `lib/datos.ts` cuando no hay backend. Lo que sigue falso: precio y método de pago en `/cuenta` (viven en Stripe, sin cablear) |
 | Spike (prueba técnica) | **Corrido ✓ — 3/3 casos, ~$1.8/build real** (ver `spike/RESULTADO.md`) |
-| Backend / producto real | **Actualización (2026-07-30): el ciclo COMPLETO del cliente existe en código** — describir → construir → ejecutar → **pedir un cambio** (posventa), con equipo compartido real y el enganche de Stripe. `core/` (TS+tsx) + `web/` (wiring Next 16); **35 `verify:*` en verde**, typecheck + `next build` OK. Falta: activar infra (Upstash/R2/crons/gVisor) y el checkout de Stripe. Detalle en "Estado de implementación" |
+| Backend / producto real | **Actualización (2026-07-30): el ciclo COMPLETO del cliente existe en código** — describir → construir → ejecutar → **pedir un cambio** (posventa), con equipo compartido real y el enganche de Stripe. `core/` (TS+tsx) + `web/` (wiring Next 16); **36 `verify:*` en verde**, typecheck + `next build` OK. Falta: activar infra (Upstash/R2/crons/gVisor) y el checkout de Stripe. Detalle en "Estado de implementación" |
 | Primer build real de punta a punta | **NO corrido todavía.** La llave ya sirve y el camino está cableado y probado por partes; falta lanzarlo (cuesta ~$1.8 y confirma si Managed Agents está habilitado) |
 
 ## Los riesgos abiertos (no se resuelven con más papel)
@@ -191,7 +192,7 @@ ARQUITECTURA.md    resumen técnico
 docs/              detalle por pieza (índice abajo) — 21 archivos, va DETRÁS del código
 core/              EL MOTOR — framework-agnóstico, TS+tsx, npm. 17 módulos en src/,
                    db/schema.sql (~1,070 líneas: RLS, SD, triggers de cuota y ciclo),
-                   35 scripts verify:* en scripts/. Es la pieza más grande del repo.
+                   36 scripts verify:* en scripts/. Es la pieza más grande del repo.
 web/               front + WIRING de producción — Next.js 16 + pnpm. 20 rutas en app/api
                    (endpoints, 3 webhooks, 4 crons); lib/automata/{wiring,lectura}.ts
                    cablean el motor. Ya NO es prototipo (ver web/CLAUDE.md, web/DESIGN.md)
@@ -215,7 +216,7 @@ spike/             prueba técnica — Node + npm (raíz)
 | 11 | Threat model | ejecutar código de IA es el producto; escape de contenedor = riesgo #1 |
 | 13 | Auth y webhooks | **IMPLEMENTADO**: pipeline de 8 capas (`core/src/http/pipeline.ts:43-51`), firma de webhooks (`core/src/webhooks/`). **Actualización (2026-07-26):** los nombres de evento de CMA que este doc daba por buenos (`session.completed`, etc.) eran **inventados**; los `data.type` reales accionables son `session.status_idled` / `session.status_terminated` (el resto, `session.outcome_evaluation_ended` etc., es informativo) y el ÉXITO sólo se sabe re-consultando la sesión (webhook *thin*). |
 | 14 | Controles de seguridad | **matriz de casos comunes** (65, 5 dominios) estilo OWASP: caso → postura → capa → milestone → estado; une docs/13+11+04 |
-| 15 | **Motor implementado** | **NUEVO (2026-07-26):** catálogo maestro de lo construido en Fase 1 — módulos de `core/`, modelo de seguridad en la BD, loop async de build de punta a punta, la suite de `verify:*` (dice 31; hoy son 35), rutas/crons y el checklist para activar en producción |
+| 15 | **Motor implementado** | **NUEVO (2026-07-26):** catálogo maestro de lo construido en Fase 1 — módulos de `core/`, modelo de seguridad en la BD, loop async de build de punta a punta, la suite de `verify:*` (dice 31; hoy son 36), rutas/crons y el checklist para activar en producción |
 | 16 | **Modo dev local** | **NUEVO (2026-07-27):** runbook para correr el producto **real** (front → backend real: RLS, cuota, Run que ejecuta código) en la máquina **sin credenciales** — bypass de auth doble-gated a no-producción, siembra con `seed:dev`, qué es real vs. falso, y el Run local de punta a punta |
 
 (No hay docs/12; el 13 se numeró así a propósito.)
@@ -314,7 +315,7 @@ npm run verify:ejecutar:pg                 # Run de punta a punta (Python real)
 npm run verify:onboarding:pg               # alta + INVITACIONES (el invitado entra al equipo)
 npm run verify:ajuste:pg                   # POSVENTA: construye la versión 2 + cola + drainer
 npm run verify:stripe:pg                   # STRIPE: vincula customer, price→plan, downgrade
-# ...son 35 scripts `verify:*` en core/package.json (sufijo :pg = con BD; 20 lo llevan)
+# ...son 36 scripts `verify:*` en core/package.json (sufijo :pg = con BD; 20 lo llevan)
 # Al aplicar el esquema usa SIEMPRE -v ON_ERROR_STOP=1 (sin él deja la BD a medias).
 
 # Modo DEV LOCAL — el producto REAL corriendo local, SIN credenciales (runbook: docs/16)
@@ -490,10 +491,10 @@ que ahora prueba **las dos** — antes ninguna.
 
 | # | Qué | Por qué importa |
 |---|---|---|
-| 1 | **Stripe: checkout + portal de cliente.** | Es lo único que falta para cobrar. Necesita `STRIPE_SECRET_KEY` y los 3 `price_…` reales: decisión deliberada de no escribir código de cobro que no se pueda ejecutar. El resto de Stripe (webhook, `price`→plan, downgrade) ya está y probado. |
+| 1 | **Probar Stripe de verdad**: crear los 3 productos en test, pegar `STRIPE_SECRET_KEY` + los 3 `price_…`, y hacer un pago con la tarjeta `4242…`. | El código está y probado con dobles, pero **ninguna llamada real al SDK se ha ejercido**. Es lo único entre esto y cobrar. Dar de alta también el webhook (`checkout.session.completed`, `customer.subscription.*`, `invoice.*`) → su `whsec_`. |
 | 2 | **Correo de invitación.** | La invitación existe y ocupa lugar del plan, pero nadie le avisa a la persona: se entera si por su cuenta se registra. `TipoCorreo` no tiene `'invitacion'`. |
 | 3 | **Selector multi-org** (`orgActual()` toma `orgs[0]` fijo). | Quien pertenezca a dos equipos ve SOLO el primero, sin señal de que hay otro. |
 | 4 | **Renombrar la org** autogenerada ("Mi negocio"). | No hay endpoint; el nombre sale en la UI y en los correos. |
-| 5 | **Re-verificación de MFA en el front** cuando el `fva` envejece. | Mitigado (el mensaje ya da salida: volver a entrar), no resuelto. Solo afecta invitar/quitar gente/facturación. |
+| 5 | **Re-verificación de MFA en el front** cuando el `fva` envejece. | Mitigado (el mensaje ya da salida: volver a entrar), no resuelto. Afecta invitar/quitar gente **y ahora también pagar** (`facturacion` pide step-up). |
 | 6 | **Formula injection** en salidas xlsx/csv (`=`,`+`,`@`) sin neutralizar. | Exposición baja hoy porque lo que se sirve es JSON; cerrar antes de servir hojas de cálculo. |
 | 7 | **`correrRegresion()` devuelve `"indeterminado"`** hasta que exista el runner. | Nada se clasifica como reparación gratis automáticamente. La UI lo dice de frente y el ajuste exige `confirmado:true`. |

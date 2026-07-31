@@ -29,7 +29,9 @@
     "./webhooks/firma": "./src/webhooks/firma.ts",
     "./webhooks/handlers": "./src/webhooks/handlers.ts",
     "./pipeline/ajuste": "./src/pipeline/ajuste.ts",
-    "./billing/plan": "./src/billing/plan.ts"
+    "./billing/plan": "./src/billing/plan.ts",
+    "./billing/pasarela": "./src/billing/pasarela.ts",
+    "./ops/killswitch": "./src/ops/killswitch.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -71,7 +73,8 @@
     "intake:live": "tsx scripts/intake.ts",
     "planner:live": "tsx scripts/planner.ts",
     "verify:ajuste:pg": "tsx scripts/verify-ajuste-pg.ts",
-    "verify:stripe:pg": "tsx scripts/verify-stripe-pg.ts"
+    "verify:stripe:pg": "tsx scripts/verify-stripe-pg.ts",
+    "verify:pasarela:pg": "tsx scripts/verify-pasarela-pg.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",
