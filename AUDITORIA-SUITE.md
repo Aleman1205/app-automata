@@ -1,5 +1,8 @@
 # Auditoría de la suite por MUTACIÓN — en curso
 
+**Estado:** ~55 corridas de mutación sobre 17 de los 38 verify. **6 hallazgos, 6 arreglados y
+verificados** (la mutación que sobrevivía ahora MATA). Ningún hallazgo abierto.
+
 **Pregunta:** no "¿pasa el producto?" sino **"¿este test fallaría si se rompiera lo que dice
 vigilar?"**. Método y reglas en `NIGHT-RUN.md`. Arnés: `core/scripts/mutar.ts`.
 
@@ -26,6 +29,9 @@ vigilar?"**. Método y reglas en `NIGHT-RUN.md`. Arnés: `core/scripts/mutar.ts`
 | **`permitirEnProduccion: false` → `true`** (código de IA sin jaula en producción) | (nadie) | toda la suite | **Crítica** ✅ arreglado |
 | **Ventana de step-up 5 min → 1 año** (cookie robada privilegiada 12 meses) | (nadie) | `verify:http` | **Alta** ✅ arreglado |
 | Límites por defecto del Run (`timeoutMs`, `outMaxFiles`) sin tope | (nadie) | `verify:sandbox` | Media ✅ arreglado |
+| Ventana anti-replay de firma de webhook 5 min → 10 años | `verify:webhooks` | — | — cubierto |
+| Tope de reintentos de los drainers (3 → 1M) | `disparo:pg`, `ajuste:pg` | — | — cubierto |
+| Arrendamiento de la cola 15 min → 0 (doble cobro del mismo build) | `verify:disparo:pg` | — | — cubierto |
 
 ## Hallazgo 1 — `verify:pg` probaba el aislamiento de UNA tabla de ocho ✅ ARREGLADO
 
@@ -50,17 +56,21 @@ explícito de que el `stripe_customer_id` de A es invisible desde B.
 
 Verificado: las cuatro mutaciones que antes sobrevivían ahora **MATAN**.
 
-## Hallazgo 2 — `verify:cuota:pg` prueba los topes, no que se cobre
+## Hallazgo 2 — `verify:cuota:pg` probaba el contador, no el cobro ✅ ARREGLADO
 
 Quitando entera la línea que cobra la generación al arrancar un build (`PERFORM app_consumir(…,
-'generaciones')` en `cobrar_build`), `verify:cuota:pg` sigue en verde: los builds saldrían **gratis
-e ilimitados** y el test de cuota no se entera. Lo caza `verify:ciclo:pg`.
+'generaciones')` en `cobrar_build`), `verify:cuota:pg` seguía en verde: los builds saldrían **gratis
+e ilimitados** y el test de cuota no se enteraba. Lo cazaba `verify:ciclo:pg` de rebote.
 
-Es el mismo patrón que el hallazgo 1: el test que *posee* el tema (cuota) valida los límites pero no
-que el cobro ocurra en el camino real; la red está en otro test, por accidente.
+**Por qué:** el test llamaba a `consumirGeneracion(...)` —el contador— directamente, nunca al camino
+que corre de verdad. Insertar una versión es lo que dispara el trigger, y eso no se ejercitaba.
 
-**Gravedad media, no alta**, porque la suite en conjunto sí lo detiene. Pendiente de reforzar
-`verify:cuota:pg` con un check de "arrancar un build consume una generación".
+Mismo patrón que el hallazgo 1: el test que *posee* el tema valida la pieza pero no el camino, y la
+red está en otro test por accidente.
+
+**Arreglo** (`verify:cuota:pg` §6bis): insertar una versión debe cobrar exactamente una generación,
+y una `reparacion` por ese mismo camino debe seguir exenta (docs/08 §2). Verificado: ambas
+mutaciones ahora MATAN.
 
 ## Hallazgo 3 — el tope de ajustes está declarado dos veces y nada comprobaba que coincidieran ✅ ARREGLADO
 

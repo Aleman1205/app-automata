@@ -109,6 +109,27 @@ async function main() {
     check("la 7ª generación lanza CuotaExcedida", await esCuota(() => conOrg(app, A, (c) => consumirGeneracion(c, PER))));
     check("el contador es POR MES: 2026-08 vuelve a 1", (await conOrg(app, A, (c) => consumirGeneracion(c, "2026-08"))) === 1);
 
+    // El cobro se probaba llamando al CONTADOR (consumirGeneracion), nunca al camino real. Una
+    // auditoría por mutación lo destapó: quitando entera la línea `PERFORM app_consumir(…,
+    // 'generaciones')` del trigger cobrar_build, este verify seguía en VERDE — los builds saldrían
+    // gratis e ilimitados y el test de CUOTA no se enteraba. Lo cazaba verify:ciclo:pg de rebote.
+    // Aquí se ejercita el camino que corre de verdad: insertar una versión dispara el trigger.
+    console.log("\n6bis. El COBRO ocurre en el CAMINO REAL (insertar una versión), no solo llamando al contador:");
+    const mesActual = new Date().toISOString().slice(0, 7);
+    const genE = async () => (await admin.query<{ n: number }>(
+      "SELECT coalesce(generaciones,0)::int AS n FROM uso_periodo WHERE org_id=$1 AND periodo=$2", [E, mesActual]
+    )).rows[0]?.n ?? 0;
+    const autoE = (await admin.query<{ id: string }>("SELECT id FROM automatizaciones WHERE org_id=$1 LIMIT 1", [E])).rows[0]!.id;
+    const genAntes = await genE();
+    await conOrg(app, E, (c) => c.query(
+      "INSERT INTO versiones (automatizacion_id, org_id, numero, estado) VALUES ($1, app_current_org(), 900, 'building')", [autoE]));
+    check(`arrancar un build cobra UNA generación (${genAntes} → ${await genE()})`, (await genE()) === genAntes + 1);
+    // Y una REPARACIÓN sigue exenta por el mismo camino (docs/08 §2: gratis e ilimitada).
+    const genTrasBuild = await genE();
+    await conOrg(app, E, (c) => c.query(
+      "INSERT INTO versiones (automatizacion_id, org_id, numero, estado, tipo) VALUES ($1, app_current_org(), 901, 'building', 'reparacion')", [autoE]));
+    check("una reparación NO cobra generación por ese mismo camino", (await genE()) === genTrasBuild);
+
     console.log("\n7. Tope DURO de ejecuciones, concurrente en el borde (docs/11 §8):");
     await admin.query(
       "INSERT INTO uso_periodo (org_id, periodo, ejecuciones) VALUES ($1,$2,499) ON CONFLICT (org_id,periodo) DO UPDATE SET ejecuciones=499", [A, PER]);
