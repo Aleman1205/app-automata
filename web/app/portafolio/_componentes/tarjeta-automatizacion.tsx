@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "motion/react";
+import { reintentarBuild } from "@/lib/automata/lectura";
 import { ArrowRight } from "lucide-react";
 import { Tarjeta } from "@/components/ui/tarjeta";
 import { Etiqueta } from "@/components/ui/etiqueta";
@@ -24,6 +26,9 @@ export interface DatosTarjeta {
   motivoFallo?: string;
   creadaPor?: string; // nombre de quien la creó
   creadaPorIndice?: number;
+  // Lo decide el BACKEND (mismas guardas que app_solicitar_reintento), no la tarjeta: ofrecer un
+  // botón que la SD va a rechazar es volver a prometer algo que no pasa.
+  reintentable?: boolean;
 }
 
 export function TarjetaAutomatizacion({
@@ -38,6 +43,7 @@ export function TarjetaAutomatizacion({
   alAvisar: (texto: string) => void;
 }) {
   const router = useRouter();
+  const [reintentando, setReintentando] = useState(false);
   const navegable = datos.estado === "lista" || datos.estado === "congelada";
 
   return (
@@ -93,19 +99,39 @@ export function TarjetaAutomatizacion({
                 {datos.motivoFallo}
               </p>
             )}
-            {/* Decía "Reintentar gratis" y solo mostraba un toast: el cliente creía haber
-                relanzado el build, se quedaba esperando un correo que nunca llegaba, y mientras
-                tanto la generación YA se le había cobrado y el espacio seguía ocupado. Prometer un
-                reintento que no existe es peor que no ofrecerlo. Hasta que exista
-                POST /reintentar, se le dice la verdad y se le da una salida real. */}
-            <Boton
-              variante="fantasma"
-              tamano="sm"
-              icono="reintentar"
-              href="/contacto"
-            >
-              Escríbenos y la reponemos
-            </Boton>
+            {/* "Reintentar gratis" fue un toast durante mucho tiempo: el cliente creía haber
+                relanzado el build y esperaba un correo que nunca llegaba. Ahora POST /reintentar
+                existe y rehace el build de verdad sin volver a cobrar — pero SOLO se ofrece si el
+                backend dice que esta califica. Cuando no (ya recibió una versión, o se construyó
+                antes de que se guardaran spec/ejemplo), se mantiene la salida honesta en vez de un
+                botón que va a fallar. */}
+            {datos.reintentable ? (
+              <Boton
+                variante="fantasma"
+                tamano="sm"
+                icono="reintentar"
+                deshabilitado={reintentando}
+                onClick={async () => {
+                  if (reintentando) return; // doble clic: la SD también deduplica, pero no llegamos
+                  setReintentando(true);
+                  try {
+                    await reintentarBuild(datos.id);
+                    alAvisar("Volvimos a construirla. Te avisamos por correo cuando esté lista.");
+                    router.refresh();
+                  } catch (err) {
+                    alAvisar(err instanceof Error ? err.message : "No se pudo reintentar.");
+                  } finally {
+                    setReintentando(false);
+                  }
+                }}
+              >
+                {reintentando ? "Reintentando…" : "Reintentar sin costo"}
+              </Boton>
+            ) : (
+              <Boton variante="fantasma" tamano="sm" icono="reintentar" href="/contacto">
+                Escríbenos y la reponemos
+              </Boton>
+            )}
           </div>
         )}
 

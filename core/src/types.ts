@@ -251,6 +251,11 @@ export interface PeticionAjuste {
   peticion: string; // lo que el cliente escribió, en sus palabras
   codigoAnterior?: string; // el artefacto vigente (si se pudo recuperar del storage)
   numeroVersion: number; // 2, 3, 4… para que el prompt sepa que es una revisión
+  // RECONSTRUCCIÓN: no hay ninguna versión entregada (el build anterior falló), así que no existe
+  // "lo que el cliente ya aprobó" que conservar. El prompt de revisión le pediría al agente
+  // "parte del código de abajo y cambia solo lo que se pide" sobre un código que NO EXISTE —
+  // instrucciones contradictorias en el build que más caro sale (el que ya falló una vez).
+  reconstruccion?: boolean;
 }
 
 export interface BuildClientAsync extends BuildClient {

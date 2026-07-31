@@ -123,6 +123,10 @@ export async function arrancarAjuste(deps: AjusteDeps, args: AjusteArgs): Promis
         peticion: args.peticion,
         codigoAnterior,
         numeroVersion: iniciado.numero,
+        // Se DERIVA del estado real (no hay versión 'lista'), no de una bandera que el llamador
+        // pueda poner mal: si no existe versión vigente, no hay nada que "revisar" y el prompt de
+        // revisión contradiría al agente pidiéndole partir de un código inexistente.
+        reconstruccion: !versionVigente,
       };
       // 3. Arranca CMA y graba la sesión (write-once). El webhook + la cosecha cierran el ciclo.
       const { sessionId } = await deps.cosechador.arrancar(args.spec, ejemploPath, args.contratoTexto, ajuste);

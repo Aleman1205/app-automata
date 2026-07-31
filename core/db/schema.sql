@@ -745,6 +745,43 @@ BEGIN
 END $fn$;
 GRANT EXECUTE ON FUNCTION app_solicitar_ajuste(uuid, text) TO automata_app;
 
+-- REINTENTAR un build que falló. Reusa la MISMA cola que los ajustes (el drainer ya sabe rehacer
+-- una versión desde spec + ejemplo_key), pero con guardas propias porque este camino es GRATIS y
+-- lo gratis es lo que hay que acotar en la BD, no en el front:
+--   · NUNCA ENTREGADA (entregada IS NULL). Es el corazón del permiso: el cliente pagó la generación
+--     al arrancar y no recibió NADA, así que rehacerlo no se le vuelve a cobrar. Si en cambio ya
+--     tiene una versión entregada y lo que falló fue un CAMBIO, esto NO aplica: dejarlo pasar le
+--     regalaría el cambio (el drainer lo clasificaría reparación, que no consume ninguno de sus 3).
+--   · con spec y ejemplo_key guardados: sin ellos no hay con qué reconstruir.
+--   · su última versión FALLÓ y no hay build en vuelo: no se reintenta lo que sigue corriendo.
+-- El costo real lo sigue acotando el circuit breaker de reparaciones (cobrar_build), así que esto
+-- no es una barra libre de builds de ~$1.8.
+CREATE OR REPLACE FUNCTION app_solicitar_reintento(p_auto uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_org uuid := app_current_org(); v_id uuid; v_a record; v_ultima text;
+BEGIN
+  IF v_org IS NULL THEN RAISE EXCEPTION 'app_solicitar_reintento sin contexto de org'; END IF;
+  SELECT activa, entregada, spec, ejemplo_key INTO v_a
+    FROM automatizaciones WHERE id = p_auto AND org_id = v_org;
+  IF v_a IS NULL          THEN RAISE EXCEPTION 'REINTENTO_NO_PERMITIDO:no_existe'; END IF;
+  IF NOT v_a.activa       THEN RAISE EXCEPTION 'REINTENTO_NO_PERMITIDO:inactiva'; END IF;
+  IF v_a.entregada IS NOT NULL THEN RAISE EXCEPTION 'REINTENTO_NO_PERMITIDO:ya_entregada'; END IF;
+  IF v_a.spec IS NULL OR v_a.ejemplo_key IS NULL THEN RAISE EXCEPTION 'REINTENTO_NO_PERMITIDO:sin_insumos'; END IF;
+
+  SELECT estado INTO v_ultima FROM versiones
+    WHERE automatizacion_id = p_auto ORDER BY numero DESC LIMIT 1;
+  IF v_ultima IS DISTINCT FROM 'failed' THEN RAISE EXCEPTION 'REINTENTO_NO_PERMITIDO:no_fallida'; END IF;
+
+  INSERT INTO ajuste_pendiente (org_id, automatizacion_id, peticion)
+    VALUES (v_org, p_auto, '')
+    ON CONFLICT (automatizacion_id) DO NOTHING
+    RETURNING id INTO v_id;
+  -- Dos clics no encolan dos builds: se devuelve el que ya estaba (igual que app_solicitar_ajuste).
+  IF v_id IS NULL THEN SELECT id INTO v_id FROM ajuste_pendiente WHERE automatizacion_id = p_auto; END IF;
+  RETURN v_id;
+END $fn$;
+GRANT EXECUTE ON FUNCTION app_solicitar_reintento(uuid) TO automata_app;
+
 -- ── Onboarding de un usuario nuevo (Clerk user.created / primer acceso) ──────────────────────
 -- Crear un tenant es OWNER-ONLY (REVOKE INSERT ON orgs FROM automata_app): el rol de app NO puede
 -- dar de alta una org directo. Estas dos SD (como resolver_sesion_cma) corren como el DUEÑO

@@ -41,6 +41,7 @@ interface AutomatizacionApi {
   ejecuciones: number;
   ajustesUsados: number;
   creada: string | null;
+  reintentable?: boolean; // el build falló y SÍ se puede rehacer gratis (mismas guardas que la SD)
 }
 
 // El backend no guarda una "descripción" por automatización (no es una columna); mostramos
@@ -78,6 +79,7 @@ export async function listarAutomatizaciones(): Promise<DatosTarjeta[] | null> {
       creada: fechaCorta(a.creada),
       ejecuciones: a.ejecuciones,
       ajustesUsados: a.ajustesUsados,
+      reintentable: a.reintentable === true,
     }));
   } catch {
     return null; // red caída / JSON inválido → fallback a datos falsos
@@ -525,6 +527,30 @@ export async function pedirAjuste(id: string, peticion: string): Promise<void> {
       // —es una salida real— hasta que se cablee la re-verificación en el propio flujo.
       : err.error === "step_up_requerido" ? "Por seguridad esto pide verificar tu identidad otra vez. Cierra sesión y vuelve a entrar para continuar."
       : "No se pudo enviar el cambio. Intenta de nuevo.";
+    throw new Error(msg);
+  }
+}
+
+/** Rehace un build que FALLÓ, sin volver a cobrar. Lanza con mensaje de cliente si no se puede. */
+export async function reintentarBuild(id: string): Promise<void> {
+  const org = await orgActual();
+  if (!org) throw new Error("No hay backend configurado.");
+  const r = await pedir(`/api/orgs/${org}/reintentar`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string };
+    const msg =
+      // Estos dos NO se le explican con jerga de estados: al cliente solo le importa que esta no es
+      // la salida y que hay una que sí (escribirnos).
+      err.error === "no_reintentable" || err.error === "sin_insumos"
+        ? "Esta no se puede rehacer sola. Escríbenos y la reponemos."
+      : err.error === "inactiva" ? "Esta automatización quedó en solo lectura (tu plan bajó de nivel)."
+      : err.error === "no_encontrada" ? "No encontramos esta automatización."
+      : err.error === "step_up_requerido" ? "Por seguridad esto pide verificar tu identidad otra vez. Cierra sesión y vuelve a entrar para continuar."
+      : "No se pudo reintentar. Intenta de nuevo.";
     throw new Error(msg);
   }
 }

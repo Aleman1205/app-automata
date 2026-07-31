@@ -257,6 +257,9 @@ export const listarAutomatizacionesEP: Endpoint<Record<string, never>> = {
   handler: async ({ cliente }) => {
     const r = await cliente.query(
       `SELECT a.id, a.nombre, a.activa, a.ciclo_estado, a.ajustes_usados, a.creada, a.entregada,
+         -- Sin spec/ejemplo no hay con qué reconstruir (automatizaciones anteriores a que se
+         -- persistieran). El front no debe ofrecer un botón que la SD va a rechazar.
+         (a.spec IS NOT NULL AND a.ejemplo_key IS NOT NULL) AS con_insumos,
          (SELECT v.estado FROM versiones v WHERE v.automatizacion_id = a.id ORDER BY v.numero DESC LIMIT 1) AS ultima,
          -- MISMO criterio que usa el Run para elegir qué correr (pipeline/run.ts): si esto existe,
          -- el cliente la puede usar, punto — aunque encima haya un ajuste en vuelo o uno fallido.
@@ -279,7 +282,7 @@ export const listarAutomatizacionesEP: Endpoint<Record<string, never>> = {
           // `enCola` la distingue de un build YA arrancado: no tiene automatización detrás, así que
           // el front no debe dejar navegar a su detalle (el id es el de la SOLICITUD, no el de una
           // automatización — pedirlo daría 404).
-          enCola: true,
+          enCola: true, reintentable: false,
           cambioEnCurso: false, ejecuciones: 0, ultimaEjecucion: null,
         })),
         ...r.rows.map((f) => ({
@@ -287,6 +290,13 @@ export const listarAutomatizacionesEP: Endpoint<Record<string, never>> = {
           ajustesUsados: f.ajustes_usados, creada: iso(f.creada), entregada: iso(f.entregada),
           estado: estadoAuto(f.ultima ?? null, f.ciclo_estado, !!f.ejecutable),
           enCola: false,
+          // MISMAS condiciones que app_solicitar_reintento, para que el botón solo aparezca cuando
+          // de verdad va a funcionar: activa (una en solo-lectura por downgrade no construye nada),
+          // nada entregado (si no, rehacerlo gratis regalaría un cambio), el último build falló, y
+          // quedan los insumos con que reconstruir.
+          // El `activa` faltaba y la primera prueba por HTTP lo cazó: la lista ofrecía el botón y la
+          // SD respondía 409 'inactiva' al clic — exactamente el botón-que-miente que esto evita.
+          reintentable: !!f.activa && !f.entregada && f.ultima === "failed" && !!f.con_insumos,
           cambioEnCurso: !!f.cambio_en_curso, ejecuciones: f.ejecuciones, ultimaEjecucion: iso(f.ultima_ejec),
         })),
       ],
@@ -371,6 +381,37 @@ export const pedirAjusteEP: Endpoint<PedirAjuste> = {
       if (m?.[1] === "inactiva") return { status: 409, cuerpo: { error: "inactiva" } };
       if (m?.[1] === "build_en_vuelo") return { status: 409, cuerpo: { error: "cambio_en_curso" } };
       if (m?.[1] === "peticion_vacia") return R.malParametro("peticion requerida");
+      throw e;
+    }
+  },
+};
+
+// ── Reintentar un build que falló (POST) ─────────────────────────────────────
+// Sin esto, un build fallido dejaba la generación COBRADA y el espacio ocupado para siempre: el
+// cliente pagaba por algo que nunca recibió y su única salida era escribirnos. Reusa la cola de
+// ajustes —el drainer ya sabe rehacer una versión desde spec + ejemplo_key— y sale GRATIS porque
+// el drainer lo clasifica como reparación (`entregada IS NULL` ⇒ no hay nada que "cambiar").
+// NO pide `confirmado` como el ajuste: ahí se confirma porque CUESTA; aquí no cuesta, y pedir una
+// confirmación de algo gratis solo sembraría la duda de que se va a cobrar.
+export const reintentarEP: Endpoint<{ id: string }> = {
+  nombre: "POST /orgs/:orgId/reintentar",
+  metodo: "POST",
+  accion: "ajustar",
+  esquema: esquemaVerId,
+  handler: async ({ cliente, input }) => {
+    try {
+      const r = await cliente.query<{ id: string }>("SELECT app_solicitar_reintento($1) AS id", [input.id]);
+      return R.creado({ id: r.rows[0]?.id }); // encolado; el drainer reconstruye
+    } catch (e) {
+      const msg = (e as { message?: string })?.message ?? "";
+      const m = /REINTENTO_NO_PERMITIDO:(no_existe|inactiva|ya_entregada|sin_insumos|no_fallida)/.exec(msg);
+      if (m?.[1] === "no_existe") return { status: 404, cuerpo: { error: "no_encontrada" } };
+      if (m?.[1] === "inactiva") return { status: 409, cuerpo: { error: "inactiva" } };
+      // `ya_entregada` / `no_fallida`: no hay build fallido que rehacer (o el cliente YA recibió
+      // algo, y entonces rehacerlo gratis le regalaría un cambio). 409, no 403: no es un permiso
+      // que le falte, es un estado en el que la acción no aplica.
+      if (m?.[1] === "ya_entregada" || m?.[1] === "no_fallida") return { status: 409, cuerpo: { error: "no_reintentable" } };
+      if (m?.[1] === "sin_insumos") return { status: 409, cuerpo: { error: "sin_insumos" } };
       throw e;
     }
   },
@@ -486,4 +527,4 @@ export const congelarEP: Endpoint<{ id: string }> = {
 // Registro central. NOTA (revisión): esto NO es la garantía anti-olvido completa —
 // en Next hace falta un test que ESCANEE app/api/**/route.ts y falle si algún handler
 // con efecto no delega en withEfecto. Aquí registrarse es la convención.
-export const ENDPOINTS = [crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, solicitarBuildEP, intakeEP, pedirAjusteEP, listarAutomatizacionesEP, verAutomatizacionEP, listarEquipoEP, verCuentaEP, listarEjecucionesEP, congelarEP] as const;
+export const ENDPOINTS = [crearAutomatizacionEP, invitarEP, quitarMiembroEP, ejecutarEP, solicitarBuildEP, intakeEP, pedirAjusteEP, reintentarEP, listarAutomatizacionesEP, verAutomatizacionEP, listarEquipoEP, verCuentaEP, listarEjecucionesEP, congelarEP] as const;

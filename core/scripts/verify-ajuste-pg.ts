@@ -211,6 +211,51 @@ async function main() {
     check("se clasifica como reparacion (no le cobra un cambio de lo que nunca recibió)", vNueva?.["tipo"] === "reparacion");
     check("y NO consumió ajuste", (await conOrg(app, O, (c) => estadoDelCiclo(c, id6b))).ajustesUsados === 0);
 
+    // REINTENTAR un build fallido. Es GRATIS, así que lo que hay que probar no es el camino feliz
+    // sino las guardas: quién NO puede reintentar. Sin ellas, "reintentar" sería la puerta trasera
+    // para conseguir cambios sin gastar ninguno de los 3.
+    console.log("\n8. Reintentar un build fallido: gratis, pero acotado:");
+    const reintentar = async (auto: string): Promise<string> => {
+      try {
+        await conOrg(app, O, (c) => c.query("SELECT app_solicitar_reintento($1)", [auto]));
+        return "ok";
+      } catch (e) { return /REINTENTO_NO_PERMITIDO:(\w+)/.exec((e as Error).message)?.[1] ?? `otro: ${(e as Error).message}`; }
+    };
+    // (a) nunca entregada + última versión fallida + con insumos → SÍ
+    const id8 = (await uno("INSERT INTO automatizaciones (org_id, nombre, spec, ejemplo_key) VALUES ($1,'Falló al construir',$2,$3) RETURNING id", [O, JSON.stringify(spec), EJEMPLO]))!["id"] as string;
+    await admin.query("INSERT INTO versiones (automatizacion_id, org_id, numero, estado) VALUES ($1,$2,1,'failed')", [id8, O]);
+    check("un build fallido SÍ se puede reintentar", (await reintentar(id8)) === "ok");
+    check("dos clics no encolan dos veces", (await reintentar(id8)) === "ok" && (await uno("SELECT count(*)::int AS n FROM ajuste_pendiente WHERE automatizacion_id=$1", [id8]))?.["n"] === 1);
+
+    // (b) el drainer lo reconstruye SIN cobrar y le dice al agente que empiece de cero.
+    await drenarAjustes({ ...deps, poolOwner: admin, planeador, notificador: { async notificar() {} } });
+    const v8 = await uno("SELECT numero, estado, tipo, (vista IS NOT NULL) AS vista FROM versiones WHERE automatizacion_id=$1 AND estado='building'", [id8]);
+    check("arranca la versión siguiente, con vista", v8?.["numero"] === 2 && !!v8?.["vista"]);
+    check("como reparacion → NO le cobra otra generación por el build que falló", v8?.["tipo"] === "reparacion");
+    check("al agente se le dice RECONSTRUIR (no 'parte del código vigente', que no existe)",
+      cosechador.ultimoAjuste?.reconstruccion === true && !cosechador.ultimoAjuste?.codigoAnterior);
+
+    // (c) las guardas: cada una tapa una forma de sacar builds gratis o de romperse.
+    const idEntregada = await sembrar(); // v1 'lista' ⇒ entregada quedó sellada
+    await admin.query("UPDATE automatizaciones SET spec=$2, ejemplo_key=$3 WHERE id=$1", [idEntregada, JSON.stringify(spec), EJEMPLO]);
+    await admin.query("INSERT INTO versiones (automatizacion_id, org_id, numero, estado, tipo) VALUES ($1,$2,2,'failed','cambio')", [idEntregada, O]);
+    check("YA ENTREGADA con un cambio fallido → NO (gratis le regalaría un ajuste de sus 3)", (await reintentar(idEntregada)) === "ya_entregada");
+    const idSinInsumos = (await uno("INSERT INTO automatizaciones (org_id, nombre) VALUES ($1,'Sin insumos') RETURNING id", [O]))!["id"] as string;
+    await admin.query("INSERT INTO versiones (automatizacion_id, org_id, numero, estado) VALUES ($1,$2,1,'failed')", [idSinInsumos, O]);
+    check("SIN spec/ejemplo → NO (no hay con qué reconstruir)", (await reintentar(idSinInsumos)) === "sin_insumos");
+    const idViva = (await uno("INSERT INTO automatizaciones (org_id, nombre, spec, ejemplo_key) VALUES ($1,'Construyendo',$2,$3) RETURNING id", [O, JSON.stringify(spec), EJEMPLO]))!["id"] as string;
+    await admin.query("INSERT INTO versiones (automatizacion_id, org_id, numero, estado) VALUES ($1,$2,1,'building')", [idViva, O]);
+    check("con un build EN VUELO → NO (no se reintenta lo que sigue corriendo)", (await reintentar(idViva)) === "no_fallida");
+    check("de OTRA org → NO existe (RLS/scope de la SD)", (await (async () => {
+      const ajena = (await uno("INSERT INTO orgs (id,nombre) VALUES (gen_random_uuid(),'Otra') RETURNING id"))!["id"] as string;
+      const a = (await uno("INSERT INTO automatizaciones (org_id, nombre, spec, ejemplo_key) VALUES ($1,'Ajena',$2,$3) RETURNING id", [ajena, JSON.stringify(spec), EJEMPLO]))!["id"] as string;
+      await admin.query("INSERT INTO versiones (automatizacion_id, org_id, numero, estado) VALUES ($1,$2,1,'failed')", [a, ajena]);
+      const r = await reintentar(a);
+      await admin.query("DELETE FROM orgs WHERE id=$1", [ajena]);
+      return r;
+    })()) === "no_existe");
+    await admin.query("DELETE FROM ajuste_pendiente");
+
     console.log("\n7. Una automatización SIN spec/ejemplo guardados no se puede ajustar (se avisa, no se finge):");
     const id7 = await sembrar(); // sin spec ni ejemplo_key
     await conOrg(app, O, (c) => c.query("SELECT app_solicitar_ajuste($1,$2) AS id", [id7, "cambio"]));

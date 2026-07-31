@@ -466,9 +466,28 @@ que ahora prueba **las dos** — antes ninguna.
 
 ### Lo que queda (2, ambos necesitan código nuevo, no copy)
 
-| # | Qué | Por qué importa | Evidencia |
-|---|---|---|---|
-| 1 | **`POST /orgs/:orgId/reintentar`** — re-encolar un build fallido reusando `spec` y `ejemplo_key` (ya persistidos) SIN cobrar generación, y que el drainer REUSE la versión reservada en vez de crear otra. | Hoy un build fallido deja la generación cobrada y el espacio ocupado para siempre. La tarjeta ya dice la verdad ("escríbenos"), pero el cliente sigue pagando por algo que no recibió. | `web/app/portafolio/_componentes/tarjeta-automatizacion.tsx` |
-| 2 | **Tras aprobar, el portafolio queda vacío** — `/construir` solo encola y devuelve el id de la SOLICITUD, así que hasta que el cron corra no hay tarjeta. Listar las solicitudes en cola como tarjetas "en cola" (o crear la automatización en generando dentro del request). | El cliente aprueba, llega a un portafolio vacío y es probable que vuelva a aprobar — y eso sí cobra otro build. | `core/src/http/endpoints.ts` (listarAutomatizacionesEP) |
+> ✅ **`POST /orgs/:orgId/reintentar` construido (2026-07-30).** Rehace un build fallido SIN volver
+> a cobrar. Reusa la cola de ajustes (el drainer ya sabe reconstruir desde `spec` + `ejemplo_key`) y
+> sale gratis porque con `entregada IS NULL` se clasifica como **reparación**. Las guardas de lo
+> gratis viven en la SD `app_solicitar_reintento`, no en el front: activa, **nunca entregada**, con
+> insumos, y última versión `failed`. La de "nunca entregada" es la que importa — si ya recibió algo
+> y lo que falló fue un CAMBIO, rehacerlo gratis le regalaría uno de sus 3 ajustes. El prompt tiene
+> rama propia (`reconstruccion`, derivada de que no haya versión vigente): decirle "parte del código
+> de abajo" sobre un código inexistente son instrucciones contradictorias. Verify:
+> `verify:ajuste:pg` §8 y `verify:lectura:pg` §7.
+> **Falta:** correr un reintento real (~$1.8) — la rama `reconstruccion` del prompt es lo único que
+> no se ha ejercido con el modelo. Hay uno **ya encolado** en la BD local: disparar
+> `POST /api/cron/ajustes` lo construye y gasta.
 
-Y **/panel** sigue sin consumir las APIs: se quitó del nav, hay que cablearlo o borrarlo.
+**Los dos que listaba esta tabla (reintentar y el portafolio vacío) quedaron construidos**, igual que
+`/panel` (borrado). Lo que queda de código, por orden de lo que bloquea COBRAR:
+
+| # | Qué | Por qué importa |
+|---|---|---|
+| 1 | **Stripe: checkout + portal de cliente.** | Es lo único que falta para cobrar. Necesita `STRIPE_SECRET_KEY` y los 3 `price_…` reales: decisión deliberada de no escribir código de cobro que no se pueda ejecutar. El resto de Stripe (webhook, `price`→plan, downgrade) ya está y probado. |
+| 2 | **Correo de invitación.** | La invitación existe y ocupa lugar del plan, pero nadie le avisa a la persona: se entera si por su cuenta se registra. `TipoCorreo` no tiene `'invitacion'`. |
+| 3 | **Selector multi-org** (`orgActual()` toma `orgs[0]` fijo). | Quien pertenezca a dos equipos ve SOLO el primero, sin señal de que hay otro. |
+| 4 | **Renombrar la org** autogenerada ("Mi negocio"). | No hay endpoint; el nombre sale en la UI y en los correos. |
+| 5 | **Re-verificación de MFA en el front** cuando el `fva` envejece. | Mitigado (el mensaje ya da salida: volver a entrar), no resuelto. Solo afecta invitar/quitar gente/facturación. |
+| 6 | **Formula injection** en salidas xlsx/csv (`=`,`+`,`@`) sin neutralizar. | Exposición baja hoy porque lo que se sirve es JSON; cerrar antes de servir hojas de cálculo. |
+| 7 | **`correrRegresion()` devuelve `"indeterminado"`** hasta que exista el runner. | Nada se clasifica como reparación gratis automáticamente. La UI lo dice de frente y el ajuste exige `confirmado:true`. |

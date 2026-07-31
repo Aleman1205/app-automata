@@ -131,6 +131,17 @@ function instruccionesDesde(spec: Spec, rutaRemota: string, contratoTexto?: stri
 }
 
 function seccionAjuste(a: PeticionAjuste): string {
+  if (a.reconstruccion) {
+    return [
+      `\n─── RECONSTRUCCIÓN (intento ${a.numeroVersion}) ───`,
+      "El intento anterior de construir esta automatización FALLÓ y el cliente no recibió nada.",
+      "Constrúyela desde el objetivo, las reglas y los criterios de arriba, como si fuera la primera",
+      "vez. NO hay versión anterior que conservar.",
+      a.peticion.trim()
+        ? `\nEl cliente agregó esta nota sobre lo que necesita:\n${a.peticion}`
+        : "",
+    ].filter(Boolean).join("\n");
+  }
   return [
     `\n─── REVISIÓN (versión ${a.numeroVersion}) ───`,
     "Esta automatización YA EXISTE y el cliente la está usando. NO la reescribas desde cero:",

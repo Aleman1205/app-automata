@@ -105,6 +105,28 @@ async function main() {
     check("otra org NO ve lo encolado por A (la SD acota por org, no hay RLS que la salve)",
       !(colaB.cuerpo as { automatizaciones: Array<{ nombre: string }> }).automatizaciones.some((f) => f.nombre === "Recién aprobada"));
     await admin.query("DELETE FROM build_pendiente WHERE org_id = $1", [A]);
+
+    // `reintentable` decide si el front pinta el botón de "Reintentar sin costo". Tiene que decir
+    // que sí SOLO cuando app_solicitar_reintento lo va a aceptar: un botón que responde 409 al clic
+    // es la misma promesa rota que el toast que reemplazó. La primera prueba por HTTP cazó que le
+    // faltaba `activa`.
+    console.log("\n7. `reintentable` coincide con lo que la SD va a aceptar:");
+    const R1 = "0aaaaaaa-0000-4000-8000-00000000ee01";
+    const reint = async (id: string): Promise<boolean> => {
+      const r = await conOrg(app, A, (c) => invocar(listarAutomatizacionesEP, c, {}));
+      const f = (r.cuerpo as { automatizaciones: Array<{ id: string; reintentable?: boolean }> }).automatizaciones.find((x) => x.id === id);
+      return f?.reintentable === true;
+    };
+    await admin.query("INSERT INTO automatizaciones (id,org_id,nombre,spec,ejemplo_key) VALUES ($1,$2,'Falló',$3,$4)", [R1, A, JSON.stringify({ objetivo: "x", reglas: [], criterios_exito: ["y"], entradas: [] }), `ejemplos/${A}/x.csv`]);
+    await admin.query("INSERT INTO versiones (automatizacion_id,org_id,numero,estado) VALUES ($1,$2,1,'failed')", [R1, A]);
+    check("fallida, nunca entregada, con insumos → sí", await reint(R1));
+    await admin.query("UPDATE automatizaciones SET activa=false WHERE id=$1", [R1]);
+    check("INACTIVA (downgrade) → no (la SD respondería 409 'inactiva')", !(await reint(R1)));
+    await admin.query("UPDATE automatizaciones SET activa=true, ejemplo_key=NULL WHERE id=$1", [R1]);
+    check("sin ejemplo guardado → no (no hay con qué reconstruir)", !(await reint(R1)));
+    await admin.query("UPDATE automatizaciones SET ejemplo_key=$2 WHERE id=$1", [R1, `ejemplos/${A}/x.csv`]);
+    await admin.query("UPDATE versiones SET estado='lista' WHERE automatizacion_id=$1", [R1]); // sella entregada
+    check("ya entregada → no (rehacerlo gratis regalaría un cambio)", !(await reint(R1)));
   } finally {
     await admin.query("DELETE FROM orgs WHERE id = ANY($1)", [[A, B]]).catch(() => {});
     await admin.end(); await app.end();
