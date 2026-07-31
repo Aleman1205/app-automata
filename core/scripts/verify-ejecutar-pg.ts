@@ -116,6 +116,34 @@ async function main() {
     const eCross = await lanza(() => ejecutarAutomatizacion(deps, { orgId: A, automatizacionId: AUTO_B, inputs, metas }));
     check("correr AUTO_B desde A → SinVersionEjecutable (RLS la esconde)", eCross instanceof SinVersionEjecutable);
     check("no se cobró nada de B por el intento cross-org", (await cuenta(AUTO_B)) === 0);
+
+    console.log("\n6. Solo-lectura tras un downgrade: activa=false NO se puede ejecutar:");
+    // Sección nueva (auditoría por mutación, Parte 2). El `AND a.activa` del WHERE no lo ejercía
+    // ningún check: quitarlo pasaba la suite entera. Y no hace falta atacante — es el usuario
+    // honesto: al bajar de Equipo ($1,999, 10 espacios) a Base ($499, 3), aplicarDowngrade deja el
+    // excedente en activa=false, pero la tarjeta sigue en el portafolio con su botón Ejecutar.
+    // Sin esta línea, el cliente sigue usando lo que dejó de pagar.
+    await admin.query("UPDATE automatizaciones SET activa = false WHERE id = $1", [AUTO_A]);
+    const antesInactiva = await cuenta(AUTO_A);
+    const eInactiva = await lanza(() => ejecutarAutomatizacion(deps, { orgId: A, automatizacionId: AUTO_A, inputs, metas }));
+    check("automatización en solo-lectura → SinVersionEjecutable", eInactiva instanceof SinVersionEjecutable);
+    check("no se cobró la ejecución de una automatización inactiva", (await cuenta(AUTO_A)) === antesInactiva);
+    await admin.query("UPDATE automatizaciones SET activa = true WHERE id = $1", [AUTO_A]); // restaurar
+
+    console.log("\n7. Con varias versiones entregadas, corre la VIGENTE (la más reciente):");
+    // La otra mitad del mismo WHERE: `ORDER BY v.numero DESC`. Con ASC, quien pagó un ajuste
+    // recibiría para siempre el reporte VIEJO con datos frescos — sin excepción, sin 500, y con la
+    // UI diciendo "lista". Resultado incorrecto SILENCIOSO, el peor modo de falla que hay.
+    // Se distinguen por el valor que produce cada artefacto (42 la v1, 99 la v2): comprobar el
+    // `numero` no bastaría, porque lo que le llega al cliente es el resultado, no el número.
+    const ART_V2: Artefacto = { ...ARTEFACTO, automatizacionPy: PY.replace("'total': 42", "'total': 99") };
+    const verA2 = (await admin.query<{ id: string }>("INSERT INTO versiones (automatizacion_id,org_id,numero,estado,artefacto_key) VALUES ($1,$2,2,'lista','pendiente') RETURNING id", [AUTO_A, A])).rows[0]!.id;
+    await storage.put(`artefactos/${verA2}.json`, JSON.stringify(ART_V2));
+    const resV2 = await ejecutarAutomatizacion(deps, { orgId: A, automatizacionId: AUTO_A, inputs, metas });
+    const bloqueV2 = resV2.resultado.bloques[0];
+    const valorV2 = bloqueV2?.tipo === "metricas" ? bloqueV2.items[0]?.valor : undefined;
+    check("corrió la v2 y no la v1 (el resultado trae 99, no 42)", valorV2 === 99);
+    check("la ejecución quedó atada a la versión vigente", resV2.ejecucion.versionId === verA2);
   } finally {
     await admin.query("UPDATE interruptores SET ejecuciones = false").catch(() => {});
     await admin.query("DELETE FROM orgs WHERE id = ANY($1)", [[A, B]]).catch(() => {});

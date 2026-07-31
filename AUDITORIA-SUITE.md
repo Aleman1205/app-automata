@@ -651,9 +651,63 @@ reconocidos, sin veredicto. Reparto: `notificaciones` 5 · `incidentes:pg`, `sto
 **Comprobación de integridad:** tras 620 mutaciones, `git diff HEAD` vacío y la suite en verde. El
 arnés no dejó residuo.
 
-## Qué falta hacer
+## Arreglado (2026-07-31, mismo día)
 
-Los 13 confirmados **están reportados, no arreglados**. Reforzar los tests toca 6 archivos:
+**10 de los 13 cerrados.** Cada uno verificado con su propia mutación: el refuerzo vale cuando la
+mutación **MATA**, no cuando el test se ve más completo.
+
+| Verify | Hallazgos cerrados | Cómo |
+|---|---|---|
+| `verify:rutas` | **6** (5 graves + 1 media) | Reescrito entero |
+| `verify:webhooks:handlers:pg` | 2 (incluido el **crítico**) | §1 afirma el CONTENIDO del outbox; §4bis nueva |
+| `verify:ejecutar:pg` | 2 | §6 y §7 nuevas |
+
+**`verify:rutas` cambió de principio, no de expresión regular.** Antes reconocía una FORMA
+(`export const POST = ruta(...)`) leyendo el texto crudo; ahora RESUELVE cada verbo mutante hasta su
+definición —con los comentarios fuera— y exige que llame a una entrada sancionada **importada del
+wiring**. Cuatro consecuencias:
+
+- Los comentarios dejaron de contar como código. `// export const POST = ruta(ep);` ya no aprueba
+  nada, así que el refactor "comento la línea y escribo el handler debajo" falla en CI.
+- `export { POST }` y `export { h as POST }` ahora se ven. Antes el verbo desaparecía del escaneo, y
+  lo que no se ve no falla: calla.
+- Webhooks y crons se sancionan en POSITIVO. Antes bastaba con NO usar `ruta()`; ahora tienen que
+  delegar en el receptor que valida la firma HMAC y en el cron que compara `CRON_SECRET`.
+- Un `ruta` casero definido en el propio archivo no sanciona nada.
+
+Y el escáner **se prueba a sí mismo** (§1-3): fixtures sintéticos obligan a que reconocer menos
+formas ROMPA el test. Ese silencio era el hallazgo #2. Se conserva el patrón envuelto legítimo
+(`const invitar = ruta(ep)` + un POST que lo llama), con su propio check para que arreglar esto no
+rompa código correcto — la otra forma de fallar, no más barata.
+
+**El crítico:** `version_id` y `auto_id` son los dos `uuid`, así que cruzarlos inserta igual de bien
+y `count(*)` sigue dando 1. El test ahora compara los tres ids contra los reales.
+
+**Los del Run:** §6 desactiva la automatización (`activa=false`, el excedente de un downgrade) y
+exige `SinVersionEjecutable` sin cobro; §7 siembra una v2 cuyo artefacto produce **99** en vez de 42
+y exige que el resultado traiga 99. Comprobar el `numero` no bastaría: al cliente le llega el
+resultado, no el número.
+
+**Suite completa en verde tras los cambios** (38/38), `tsc` limpio.
+
+## Qué queda (3 de 13)
+
+- **CSRF por prefijo** (`verify:adaptador:pg`). Real, pero requiere que alguien cambie `===` por
+  `startsWith`, que no pasa por accidente. Mutación registrada arriba.
+- **2 de `cma/build.ts`**: entregar una sesión `en_curso` como satisfecha, y entregar un build sin
+  `automatizacion.py`. Ambas piden un fixture de sesión de CMA que hoy no existe en la suite.
+- Las **28 ciegas de gravedad media/baja**, sin veredicto.
+
+## Deuda que salió de refilón (no es de la suite)
+
+`resolverIncidente` e `incidentesAbiertos` **no tienen un solo llamador**: ni ruta, ni cron, ni
+consola. Hay observabilidad escrita que nadie puede mirar. Lo mismo con `entitlementsDe` y `esPlan`.
+Cuatro "críticas" de esta auditoría se cayeron por ahí — no porque el test fuera bueno, sino porque
+el código no lo usa nadie.
+
+## Nota de método
+
+Los 13 confirmados **estaban reportados, no arreglados**. Reforzar los tests toca 6 archivos:
 `verify-rutas.ts` (5 hallazgos, un solo arreglo: que el auditor exija delegación real en vez de
 reconocer una forma sintáctica), `verify-cma-clasificar.ts` (2), `verify-ejecutar-pg.ts` (2),
 `verify-webhooks-handlers-pg.ts` (2, incluido el crítico), `verify-adaptador-pg.ts` (1) y

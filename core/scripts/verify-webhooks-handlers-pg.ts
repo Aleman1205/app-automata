@@ -7,7 +7,7 @@
 //   ADMIN_URL=... WEBHOOK_URL=... DATABASE_URL=... npm run verify:webhooks:handlers:pg
 // ─────────────────────────────────────────────────────────────────────────────
 import { crearPool } from "../src/db/pg.ts";
-import { procesarCma, procesarStripe } from "../src/webhooks/handlers.ts";
+import { procesarCma, procesarStripe, type CambioPlan } from "../src/webhooks/handlers.ts";
 import { type Evento } from "../src/webhooks/receptor.ts";
 import { type Pool, type PoolClient } from "pg";
 
@@ -58,11 +58,26 @@ async function main() {
     check("automata_app NO puede llamar el resolver (revocado) → 42501", await app.query("SELECT resolver_sesion_cma('x')").then(() => false).catch((e) => (e as { code?: string }).code === "42501"));
 
     const enOutbox = (sid: string) => admin.query<{ n: number }>("SELECT count(*)::int AS n FROM cosecha_pendiente WHERE session_id=$1", [sid]).then((r) => r.rows[0]?.n ?? 0);
+    // Contar filas NO basta: version_id y auto_id son los dos uuid, así que cruzarlos inserta
+    // igual de bien y el conteo sigue dando 1. Ese fue el hallazgo CRÍTICO de la auditoría por
+    // mutación (AUDITORIA-SUITE.md, Parte 2): con los ids cruzados el drainer no encuentra la
+    // versión, reporta 'cosechado', borra el outbox, y la versión real se queda 'building' hasta
+    // que el reaper la mata a las 6 h. Le pasa a TODOS los builds: cada cliente paga ~$1.8 y no
+    // recibe nada mientras el cron informa cosechados>0. Hay que mirar QUÉ se encoló.
+    const filaOutbox = (sid: string) =>
+      admin.query<{ version_id: string; auto_id: string; org_id: string }>(
+        "SELECT version_id, auto_id, org_id FROM cosecha_pendiente WHERE session_id=$1", [sid],
+      ).then((r) => r.rows[0]);
 
     console.log("\n1. CMA status_idled (tipo REAL): ENCOLA en el outbox, NO confirma in-tx:");
     await enTx((c) => procesarCma(c, evCma("session.status_idled", "sess_ok")));
     check("la versión sigue 'building' (la cosecha la hace el drainer, no el webhook)", (await estadoVer("sess_ok"))?.estado === "building");
     check("encoló en cosecha_pendiente (idempotente por session_id)", (await enOutbox("sess_ok")) === 1);
+    const fila = await filaOutbox("sess_ok");
+    const verOk = await estadoVer("sess_ok");
+    check("encoló la VERSIÓN correcta (no otro uuid: cruzarlos inserta igual y el drainer no la encuentra)", fila?.version_id === verOk?.id);
+    check("encoló la AUTOMATIZACIÓN correcta", fila?.auto_id === AUTO);
+    check("encoló la ORG del resolver FIRMADO (no una del payload)", fila?.org_id === A);
     await enTx((c) => procesarCma(c, evCma("session.status_idled", "sess_ok"))); // duplicado
     check("un status_idled duplicado NO crea segunda fila (ON CONFLICT)", (await enOutbox("sess_ok")) === 1);
 
@@ -98,6 +113,34 @@ async function main() {
     check("evento de plan (no accionable) → no toca el estado", (await estadoSub()) === "cancelada");
     await enTx((c) => procesarStripe(c, evStripe("invoice.payment_failed", "cus_desconocido", 500)));
     check("customer no mapeado → no-op (no lanza)", true);
+
+    console.log("\n4bis. El CAMBIO DE PLAN que devuelve el handler (el wiring lo aplica tras el commit):");
+    // Sección nueva (auditoría por mutación, Parte 2): la suite ejercitaba `procesarStripe` pero
+    // JAMÁS miraba su valor de retorno, que es donde viaja el cambio de plan. Con eso, hacer que un
+    // price desconocido devolviera `{plan:'base'}` pasaba en verde — y ese es un DOWNGRADE real:
+    // Stripe manda `checkout.session.completed` SIN price junto al `subscription.created` que sí lo
+    // trae, así que un cliente que acaba de pagar Equipo ($1,999) caería a 3 espacios y sus
+    // automatizaciones excedentes a solo-lectura. Nadie lo detectaría: el fallo del webhook es
+    // best-effort y ni siquiera se le reporta a Stripe.
+    process.env.STRIPE_PRICE_EQUIPO = "price_equipo_test";
+    const enTxR = async (fn: (c: PoolClient) => Promise<CambioPlan | undefined>) => {
+      const c = await wh.connect();
+      try { await c.query("BEGIN"); const v = await fn(c); await c.query("COMMIT"); return v; }
+      catch (e) { await c.query("ROLLBACK").catch(() => {}); throw e; } finally { c.release(); }
+    };
+    const evPrecio = (tipo: string, priceId?: string, orgRef?: string): Evento =>
+      ({ id: `evt_${tipo}_${priceId ?? "sin"}`, tipo, recurso: { fuente: "stripe", customerId: "cus_123", priceId, orgRef }, ts: 600 });
+
+    // Control POSITIVO: sin él, una mutación que devolviera siempre `undefined` (nunca cambiar de
+    // plan: el cliente paga Equipo y se queda en Base) pasaría los dos checks negativos de abajo.
+    const conocido = await enTxR((c) => procesarStripe(c, evPrecio("customer.subscription.updated", "price_equipo_test")));
+    check("price CONOCIDO → devuelve el plan que se pagó", conocido?.plan === "equipo" && conocido?.org === A);
+
+    const desconocido = await enTxR((c) => procesarStripe(c, evPrecio("customer.subscription.updated", "price_que_nadie_dio_de_alta")));
+    check("price DESCONOCIDO → sin cambio de plan (nunca se adivina)", desconocido === undefined);
+
+    const sinPrice = await enTxR((c) => procesarStripe(c, evPrecio("checkout.session.completed", undefined, A)));
+    check("checkout SIN price → sin cambio (si devolviera 'base', degradaría a quien acaba de pagar)", sinPrice === undefined);
   } finally {
     await admin.query("DELETE FROM cosecha_pendiente WHERE org_id = $1", [A]).catch(() => {}); // outbox: sin FK a orgs
     await admin.query("DELETE FROM incidentes WHERE org_id = $1 OR org_id IS NULL", [A]).catch(() => {});
