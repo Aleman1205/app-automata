@@ -560,6 +560,11 @@ export async function correrAutomatizacion(req: Request, orgId: string): Promise
       const err = e as { name?: string; message?: string };
       if (err.name === "CuotaExcedida" || /CUOTA_EXCEDIDA/.test(err.message ?? "")) return R.cuota(err.message ?? "cuota");
       if (err.name === "ServicioSuspendido" || /SUSPENDIDO/i.test(err.message ?? "")) return R.suspendido();
+      // Un error NO reconocido sube al adaptador, que responde 500 `error_interno` sin cuerpo —
+      // correcto de cara al cliente (no se filtran internals), pero deja a ops sin nada que mirar:
+      // el Run es el paso donde el cliente espera SU resultado, y "algo salió mal" sin traza es
+      // indiagnosticable. Se registra aquí antes de re-lanzar.
+      console.error(`[ejecutar] error no manejado (org ${orgId}, automatización ${automatizacionId}):`, e);
       throw e;
     } finally {
       await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});

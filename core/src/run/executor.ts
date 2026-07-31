@@ -147,7 +147,20 @@ export class LocalPythonExecutor implements RunExecutor {
       if (!primerInput) throw new Error("El Run necesita al menos un archivo de entrada.");
 
       const inicio = Date.now();
-      const { code, stderr } = await correrPython(scriptPath, [primerInput, "--salida", outDir], dir, this.lim);
+      // Se pasa la salida por las DOS convenciones que un agente puede elegir: posicional
+      // (<entrada> <ruta_resultado>) y bandera (--salida <dir>). El primer build real escribió un
+      // archivo llamado literalmente "--salida" porque su script leía argv[2] como ruta de salida:
+      // el resultado era correcto y se perdía por una diferencia de convención, tirando un build de
+      // ~$1.8. Con ambas, cualquiera de las dos lecturas aterriza dentro de outDir. El prompt ya fija
+      // el contrato (cma/build.ts); esto es la red por si el agente elige otra cosa — son
+      // estocásticos, y aquí lo barato es tolerar, no fallar.
+      const rutaResultado = path.join(outDir, "resultado.json");
+      const { code, stderr } = await correrPython(
+        scriptPath,
+        [primerInput, rutaResultado, "--salida", outDir],
+        dir,
+        this.lim,
+      );
       const ms = Date.now() - inicio;
       if (code !== 0) {
         throw new Error(`El artefacto falló (exit ${code}):\n${stderr.slice(0, 2000)}`);
@@ -164,11 +177,23 @@ export class LocalPythonExecutor implements RunExecutor {
         if (totalBytes > this.lim.outMaxBytes) throw new Error(`La salida excede ${this.lim.outMaxBytes} bytes.`);
       }
 
-      const nombreResultado = NOMBRES_RESULTADO.find((n) => salidas.includes(n));
+      // El agente es ESTOCÁSTICO: aunque el prompt ahora fija el contrato (`--salida <dir>` y
+      // resultado.json dentro), puede escribirlo junto al script o en el directorio de trabajo. Un
+      // contrato rígido tiraría un build que YA COSTÓ ~$1.8 y que por lo demás funciona — el primer
+      // build real cayó exactamente aquí. Se busca en el directorio de salida y, si no está, en el
+      // de trabajo, que son los dos únicos lugares bajo nuestro control (ambos temporales y
+      // acotados, así que no amplía la superficie).
+      let base = outDir;
+      let nombreResultado = NOMBRES_RESULTADO.find((n) => salidas.includes(n));
       if (!nombreResultado) {
-        throw new Error(`El artefacto no produjo un resultado JSON (${NOMBRES_RESULTADO.join(" / ")}). Produjo: ${salidas.join(", ")}`);
+        const enTrabajo = await fs.readdir(dir).catch(() => [] as string[]);
+        nombreResultado = NOMBRES_RESULTADO.find((n) => enTrabajo.includes(n));
+        if (nombreResultado) base = dir;
       }
-      const resultado = JSON.parse(await leerAcotado(path.join(outDir, nombreResultado), this.lim.resultMaxBytes));
+      if (!nombreResultado) {
+        throw new Error(`El artefacto no produjo un resultado JSON (${NOMBRES_RESULTADO.join(" / ")}). Produjo: ${salidas.join(", ") || "(nada)"}`);
+      }
+      const resultado = JSON.parse(await leerAcotado(path.join(base, nombreResultado), this.lim.resultMaxBytes));
 
       // Local = $0. session-hours equivalente en CMA se calcula donde se reporta.
       return { resultado, ms, costoUsd: 0, salidas };

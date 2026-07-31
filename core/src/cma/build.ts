@@ -62,6 +62,22 @@ Trabajas así:
    reales, calculando sumas y conteos de forma independiente.
 5. Solo entonces das el trabajo por terminado.
 
+CONTRATO DE INVOCACIÓN — obligatorio, el orquestador lo exige tal cual:
+
+    python3 automatizacion.py <ruta_entrada> --salida <directorio_salida>
+
+  · <ruta_entrada> es POSICIONAL: la ruta del archivo del cliente.
+  · --salida es una BANDERA con el DIRECTORIO donde debes escribir todo.
+  · En ese directorio escribe SIEMPRE un archivo llamado exactamente
+    "resultado.json" con los datos del resultado. Sin ese archivo, con ese
+    nombre y en ese directorio, la automatización se considera fallida aunque
+    tu código funcione.
+  · No escribas el resultado junto al script ni en el directorio de trabajo:
+    solo cuenta lo que quede dentro de --salida.
+
+Acepta también un segundo argumento posicional como alternativa, por si el
+orquestador lo invoca así.
+
 El código debe ser reutilizable: recibe la ruta de entrada como argumento y
 funciona con cualquier archivo del mismo formato. Escribe también
 /mnt/session/outputs/manifiesto.json con la forma:
