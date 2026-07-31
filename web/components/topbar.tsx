@@ -28,10 +28,11 @@ const enlacesApp = [
   { href: "/equipo", etiqueta: "Equipo" },
 ];
 
-// /panel sigue aqui para que la barra se pinte en modo app si alguien llega por URL, pero YA NO se
-// ofrece en el nav ni desde el logo: es 100% demo (pinta los datos del hotel de ejemplo) y a un
-// cliente real le mostraria el negocio de otro. Se re-agrega cuando consuma las APIs.
-const RUTAS_APP = ["/panel", "/portafolio", "/equipo", "/cuenta", "/nueva"];
+// /panel se BORRÓ (no solo se quitó del nav): era 100% demo —pintaba los datos del hotel de
+// ejemplo aunque hubiera backend real, a diferencia del resto que cae a los falsos solo si NO hay
+// backend— y a un cliente real le habría mostrado el negocio de otro. Lo que enseñaba ya vive
+// cableado en /portafolio, /cuenta y /equipo. Está en el historial de git si se quiere revivir.
+const RUTAS_APP = ["/portafolio", "/equipo", "/cuenta", "/nueva"];
 const RUTAS_LIMPIAS = ["/entrar"]; // sin topbar (login)
 
 export function Topbar() {

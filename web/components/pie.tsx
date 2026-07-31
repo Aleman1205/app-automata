@@ -8,7 +8,7 @@ import { MARCA } from "@/lib/marca";
 import { Boton } from "@/components/ui/boton";
 import { Etiqueta } from "@/components/ui/etiqueta";
 
-const RUTAS_APP = ["/panel", "/portafolio", "/equipo", "/cuenta", "/nueva"];
+const RUTAS_APP = ["/portafolio", "/equipo", "/cuenta", "/nueva"];
 const RUTAS_LIMPIAS = ["/entrar"]; // sin pie (login)
 
 // Pie global. En el sitio de venta: CTA grande + enlaces + nombre gigante con

@@ -266,13 +266,30 @@ export const listarAutomatizacionesEP: Endpoint<Record<string, never>> = {
          (SELECT max(e.creada) FROM ejecuciones e JOIN versiones v ON e.version_id = v.id WHERE v.automatizacion_id = a.id) AS ultima_ejec
        FROM automatizaciones a ORDER BY a.creada DESC`,
     );
+    // Lo aprobado que TODAVÍA no es una automatización (sigue en la cola; el drainer no ha corrido).
+    // Va PRIMERO porque es lo más reciente: el cliente acaba de aprobarlo y viene a buscarlo. Sin
+    // esto llegaba a un portafolio vacío y volvía a aprobar — y eso sí cobra otro build.
+    const cola = await cliente.query<{ id: string; nombre: string; creada: Date }>("SELECT id, nombre, creada FROM app_builds_en_cola()");
     return R.ok({
-      automatizaciones: r.rows.map((f) => ({
-        id: f.id, nombre: f.nombre, activa: f.activa, cicloEstado: f.ciclo_estado,
-        ajustesUsados: f.ajustes_usados, creada: iso(f.creada), entregada: iso(f.entregada),
-        estado: estadoAuto(f.ultima ?? null, f.ciclo_estado, !!f.ejecutable),
-        cambioEnCurso: !!f.cambio_en_curso, ejecuciones: f.ejecuciones, ultimaEjecucion: iso(f.ultima_ejec),
-      })),
+      automatizaciones: [
+        ...cola.rows.map((f) => ({
+          id: f.id, nombre: f.nombre, activa: true, cicloEstado: "ready",
+          ajustesUsados: 0, creada: iso(f.creada), entregada: null,
+          estado: "generando" as const,
+          // `enCola` la distingue de un build YA arrancado: no tiene automatización detrás, así que
+          // el front no debe dejar navegar a su detalle (el id es el de la SOLICITUD, no el de una
+          // automatización — pedirlo daría 404).
+          enCola: true,
+          cambioEnCurso: false, ejecuciones: 0, ultimaEjecucion: null,
+        })),
+        ...r.rows.map((f) => ({
+          id: f.id, nombre: f.nombre, activa: f.activa, cicloEstado: f.ciclo_estado,
+          ajustesUsados: f.ajustes_usados, creada: iso(f.creada), entregada: iso(f.entregada),
+          estado: estadoAuto(f.ultima ?? null, f.ciclo_estado, !!f.ejecutable),
+          enCola: false,
+          cambioEnCurso: !!f.cambio_en_curso, ejecuciones: f.ejecuciones, ultimaEjecucion: iso(f.ultima_ejec),
+        })),
+      ],
     });
   },
 };

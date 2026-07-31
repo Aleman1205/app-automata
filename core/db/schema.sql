@@ -701,6 +701,21 @@ BEGIN
 END $fn$;
 GRANT EXECUTE ON FUNCTION app_solicitar_build(text, jsonb, text) TO automata_app;
 
+-- Lo que el cliente YA aprobó pero todavía no tiene automatización: sigue en build_pendiente
+-- porque el drainer no ha corrido. Sin esto el portafolio se ve VACÍO justo después de aprobar
+-- —la automatización no existe hasta que el cron dispara— y lo más natural es que el cliente
+-- crea que no se guardó y vuelva a aprobar. Eso SÍ cobra: otro build de ~$1.8 y otra generación.
+-- SD porque build_pendiente tiene REVOKE ALL para el app. El guard de org_id NULL es lo que
+-- impide que una sesión sin contexto se lleve la cola de TODOS los tenants.
+CREATE OR REPLACE FUNCTION app_builds_en_cola()
+RETURNS TABLE (id uuid, nombre text, creada timestamptz)
+LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+  SELECT b.id, b.nombre, b.creada FROM build_pendiente b
+   WHERE app_current_org() IS NOT NULL AND b.org_id = app_current_org()
+   ORDER BY b.creada DESC;
+$fn$;
+GRANT EXECUTE ON FUNCTION app_builds_en_cola() TO automata_app;
+
 -- Encola un AJUSTE. SD como app_solicitar_build (el app no escribe la cola directo). Valida aquí lo
 -- que se puede saber sin correr nada, para no encolar trabajo destinado a fallar y para que el
 -- cliente reciba el "no" al instante en vez de un correo de fracaso minutos después:

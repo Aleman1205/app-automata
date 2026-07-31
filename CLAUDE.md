@@ -432,6 +432,23 @@ tras el arreglo**. Hoy es una **escalera**: se prueba el contrato del prompt y, 
 resultado, se reintenta con la posicional (local, sub-segundo, $0). Verify: `verify:sandbox` §5,
 que ahora prueba **las dos** — antes ninguna.
 
+### Cerrados en la auditoría del 2026-07-30 (segunda tanda)
+
+- **El portafolio ya no se ve vacío tras aprobar.** `/construir` solo encola, así que hasta que el
+  cron corriera no había tarjeta: el cliente concluía que no se guardó y **volvía a aprobar** —y eso
+  sí cobra otro build (~$1.8) y otra generación. Ahora `listarAutomatizacionesEP` también lista lo
+  encolado (SD `app_builds_en_cola`, acotada por `app_current_org()` porque `build_pendiente` es
+  tabla de plataforma **sin RLS**) como tarjetas `generando` con `enCola: true`. Verify:
+  `verify:lectura:pg` §6, que incluye el check cross-org.
+- **`/panel` borrado.** Era la única pantalla que mostraba datos inventados **aunque hubiera backend
+  real** (importaba `lib/datos` directo, sin el fallback del resto), y a un cliente le habría
+  enseñado el negocio de otro. Estaba fuera del nav pero viva por URL. Lo que enseñaba ya vive
+  cableado en `/portafolio`, `/cuenta` y `/equipo`. Está en el historial de git.
+- **El 403 de step-up ya no es un callejón sin salida.** El claim `fva` de Clerk caduca a los 5 min
+  y el mensaje ("verifica tu identidad") no daba salida alguna. Ahora dice que cierre sesión y
+  vuelva a entrar, que **sí** refresca el claim. Afecta solo a invitar/quitar gente/facturación —
+  el camino del dinero (construir/ajustar/ejecutar) no pide step-up.
+
 ### Lo que queda (2, ambos necesitan código nuevo, no copy)
 
 | # | Qué | Por qué importa | Evidencia |

@@ -87,6 +87,24 @@ async function main() {
     check("con el ajuste FALLIDO sigue lista (no queda ladrillada)", conFallo[A1]?.estado === "lista");
     check("y ya no reporta cambio en curso", conFallo[A1]?.cambioEnCurso === false);
     await admin.query("DELETE FROM versiones WHERE automatizacion_id=$1 AND numero=2", [A1]);
+
+    // El agujero que esto cubre: /construir solo ENCOLA, así que entre aprobar y el cron el
+    // portafolio se veía VACÍO. El cliente concluye que no se guardó y vuelve a aprobar — y eso sí
+    // cobra otro build (~$1.8) y otra generación. Ahora lo encolado se muestra como "generando".
+    console.log("\n6. Lo aprobado y AÚN EN COLA se ve en el portafolio (si no, se aprueba dos veces):");
+    await conOrg(app, A, (c) => c.query("SELECT app_solicitar_build($1,$2,$3)", ["Recién aprobada", JSON.stringify({ objetivo: "x", reglas: [], criterios_exito: ["y"], entradas: [] }), `ejemplos/${A}/x.csv`]));
+    const conCola = await conOrg(app, A, (c) => invocar(listarAutomatizacionesEP, c, {}));
+    const filas = (conCola.cuerpo as { automatizaciones: Array<{ nombre: string; estado: string; enCola?: boolean }> }).automatizaciones;
+    const enCola = filas.find((f) => f.nombre === "Recién aprobada");
+    check("aparece en el portafolio antes de que el cron corra", !!enCola);
+    check("como 'generando' (el cliente ve que sí quedó)", enCola?.estado === "generando");
+    check("marcada enCola (su id es el de la SOLICITUD: el detalle daría 404)", enCola?.enCola === true);
+    // Aislamiento: la cola es una tabla de PLATAFORMA sin RLS, así que el scope depende ENTERO de
+    // que la SD filtre por app_current_org(). Si se filtrara mal, B vería lo aprobado por A.
+    const colaB = await conOrg(app, B, (c) => invocar(listarAutomatizacionesEP, c, {}));
+    check("otra org NO ve lo encolado por A (la SD acota por org, no hay RLS que la salve)",
+      !(colaB.cuerpo as { automatizaciones: Array<{ nombre: string }> }).automatizaciones.some((f) => f.nombre === "Recién aprobada"));
+    await admin.query("DELETE FROM build_pendiente WHERE org_id = $1", [A]);
   } finally {
     await admin.query("DELETE FROM orgs WHERE id = ANY($1)", [[A, B]]).catch(() => {});
     await admin.end(); await app.end();

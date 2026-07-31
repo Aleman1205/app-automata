@@ -305,7 +305,11 @@ export async function invitarMiembro(correo: string, rol: "admin" | "operador"):
     const err = (await r.json().catch(() => ({}))) as { error?: string };
     const msg =
       err.error === "cuota_excedida" ? "Alcanzaste el límite de personas de tu plan."
-      : err.error === "step_up_requerido" ? "Necesitas verificar tu identidad (MFA)."
+      // La verificación de Clerk (claim `fva`) CADUCA a los 5 minutos. Decir solo "verifica tu
+      // identidad" dejaba al admin en un callejón sin salida: el 403 no trae forma de re-verificar
+      // y no hay botón que lo haga. Volver a entrar SÍ refresca el claim, así que se le dice eso
+      // —es una salida real— hasta que se cablee la re-verificación en el propio flujo.
+      : err.error === "step_up_requerido" ? "Por seguridad esto pide verificar tu identidad otra vez. Cierra sesión y vuelve a entrar para continuar."
       : r.status === 400 ? "Revisa el correo: no parece válido."
       : "No se pudo invitar (¿ya está en el equipo?).";
     throw new Error(msg);
@@ -460,7 +464,7 @@ export async function construirDesdeSpec(spec: SpecIntake, file: File): Promise<
     // invitamos a reintentar (eso mandaba al cliente a un bucle).
     const msg =
       err.error === "cuota_excedida" ? "Alcanzaste el límite de automatizaciones de tu plan."
-      : err.error === "step_up_requerido" ? "Necesitas verificar tu identidad (MFA) para construir."
+      : err.error === "step_up_requerido" ? "Por seguridad esto pide verificar tu identidad otra vez. Cierra sesión y vuelve a entrar para continuar."
       : r.status === 400 ? "No pudimos armar el pedido con lo que entendimos. Corrige tus respuestas y vuelve a aprobar."
       : "No se pudo iniciar la construcción. Intenta de nuevo.";
     throw new Error(msg);
@@ -515,7 +519,11 @@ export async function pedirAjuste(id: string, peticion: string): Promise<void> {
       err.error === "cambio_en_curso" ? "Ya estamos preparando un cambio de esta automatización. Espera a que quede lista."
       : err.error === "inactiva" ? "Esta automatización quedó en solo lectura (tu plan bajó de nivel)."
       : err.error === "no_encontrada" ? "No encontramos esta automatización."
-      : err.error === "step_up_requerido" ? "Necesitas verificar tu identidad (MFA)."
+      // La verificación de Clerk (claim `fva`) CADUCA a los 5 minutos. Decir solo "verifica tu
+      // identidad" dejaba al admin en un callejón sin salida: el 403 no trae forma de re-verificar
+      // y no hay botón que lo haga. Volver a entrar SÍ refresca el claim, así que se le dice eso
+      // —es una salida real— hasta que se cablee la re-verificación en el propio flujo.
+      : err.error === "step_up_requerido" ? "Por seguridad esto pide verificar tu identidad otra vez. Cierra sesión y vuelve a entrar para continuar."
       : "No se pudo enviar el cambio. Intenta de nuevo.";
     throw new Error(msg);
   }
