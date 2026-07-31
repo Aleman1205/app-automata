@@ -1,6 +1,6 @@
 # Auditoría de la suite por MUTACIÓN — TERMINADA (2026-07-31)
 
-**Estado:** ~84 corridas de mutación sobre 24 de los 38 verify. **9 hallazgos, 9 arreglados y
+**Estado (Parte 1):** ~84 corridas de mutación sobre 24 de los 38 verify. La **Parte 2** (al final de este archivo) cubre los 14 restantes: la suite queda auditada entera. **9 hallazgos, 9 arreglados y
 verificados** (la mutación que sobrevivía ahora MATA), más **1 observación** sobre cómo falla
 `verify:plan:pg`. **Ningún hallazgo abierto.**
 
@@ -297,3 +297,367 @@ git diff main..auditoria-suite
 **único** cambio a código de producción en toda la auditoría es de una palabra: exportar
 `LIMITES_DEFAULT` (`core/src/run/executor.ts`) para poder afirmar los límites por defecto. Todo lo
 demás son tests.
+
+---
+
+# PARTE 2 — los 14 verify que faltaban (2026-07-31)
+
+**Estado:** los 38 verify quedan auditados por mutación. Esta segunda tanda cubrió los 14 que la
+primera había dejado fuera por bajo valor esperado. **111 mutaciones · 96 supervivientes · 15
+descartados por cruce · 53 sometidos a refutación · 13 hallazgos graves confirmados.**
+
+## Por qué el número que importa es 13 y no 96
+
+Tres filtros, cada uno tumbó una parte. Los tres son necesarios: sin ellos este documento diría
+"96 hallazgos, 27 críticos", que es falso.
+
+| Filtro | Antes | Después | Qué tumbó |
+|---|---|---|---|
+| Ejecutar la mutación | 111 propuestas | 96 sobreviven | 15 las mata el verify al que apuntaban |
+| **Cruce contra el resto de la suite** | 96 | 81 ciegas | 15 las mata OTRO verify |
+| **Refutación adversarial** | 53 graves | 13 graves reales | 13 falsos + 25 inflados + rebajas |
+
+**El cruce es el filtro que la Parte 1 sí tenía y esta corrida no.** `mutar.ts` corre UN verify: que
+una mutación sobreviva a `verify:cuenta:pg` no dice que la suite sea ciega. Se reejecutó cada
+superviviente contra todos los verify cuyo cierre transitivo de imports incluye el archivo mutado
+(509 corridas, con corte al primer MATA). 15 murieron ahí. Casi todas eran mutaciones de
+`schema.sql` que `verify:pgstate:pg` no ve pero `verify:pg` sí.
+
+**La refutación invirtió la carga de la prueba.** La gravedad la había puesto el mismo agente que
+propuso la mutación, y nadie juzga bien su propia hipótesis. Once escépticos independientes, con
+posición por defecto "INFLADO", tenían que demostrar dos cosas para sostener un hallazgo: que el
+código es alcanzable en producción, y que ninguna otra capa detiene el daño. Resultado: **48 de 53
+rebajados, ninguno subido.**
+
+Los dos motivos de refutación que más pesaron, y que conviene recordar antes de creerse el próximo
+hallazgo:
+
+- **No es código de producción.** `core/src/storage/local.ts` (path traversal) solo se usa en dev:
+  el wiring real devuelve `LocalStorage` dentro de `if (DEV)`. `entitlementsDe`, `esPlan` y
+  `resolverIncidente` no tienen NI UN llamador fuera de los tests. Cuatro "críticas" cayeron aquí.
+- **Otra capa detiene el daño.** El gate de entrada ya corre dos veces antes y después del punto
+  mutado; `FORCE ROW LEVEL SECURITY` solo afecta al dueño de la tabla, no al rol de app.
+
+## Lo que hay que leer si solo lees una cosa
+
+Los 13 confirmados se agrupan en **cuatro huecos**, no trece problemas sueltos:
+
+1. **El auditor de rutas (`verify:rutas`) se evade con refactors normales** — 5 hallazgos. Su regex
+   solo reconoce `export const POST = ruta(...)`: comentar la línea y escribir el handler debajo,
+   o usar `export { POST }`, lo hace invisible. Y las exenciones de webhooks y crons se conceden
+   por RUTA, no por comprobar que el archivo delegue de verdad. Un `route.ts` sin las 8 capas pasa
+   el CI. Aquí caen `/webhooks/stripe` (fuente de verdad del plan, sin firma) y `/cron/disparo`
+   (drena la cola con el pool dueño y gasta ~$1.8 por build).
+2. **La cosecha entrega builds que no existen** — 3 hallazgos en `cma/build.ts` y `handlers.ts`.
+   Incluye el único **crítico**: cruzar `version_id`/`auto_id` al encolar deja a TODOS los clientes
+   pagando sin recibir nada, mientras el cron reporta `cosechados>0`.
+3. **El Run puede correr la versión equivocada** — 2 hallazgos. Sin `a.activa` una automatización en
+   solo-lectura tras un downgrade sigue ejecutándose; con `ORDER BY numero ASC` el cliente que pagó
+   un ajuste recibe para siempre el reporte VIEJO con datos frescos. Resultado incorrecto
+   silencioso: el peor modo de falla que hay.
+4. **CSRF por prefijo** — 1 hallazgo. `===` a `startsWith` y `automata.mx.evil.com` pasa la capa 2.
+   Los dos únicos fixtures hostiles de la suite son `https://evil`, que no ejerce ese caso.
+
+## Los 13 hallazgos confirmados
+
+### 1. [CRITICA] `verify:webhooks:handlers:pg` — `src/webhooks/handlers.ts`
+
+**Mutación que sobrevive a TODA la suite:**
+
+```
+[evento.recurso.sessionId, v.version_id, v.auto_id, v.org_id],
+→
+[evento.recurso.sessionId, v.auto_id, v.version_id, v.org_id],
+```
+
+**Qué se rompe:** El outbox de cosecha se llena con la version/auto REALES que devolvio el resolver FIRMADO. El test solo cuenta filas (`count(*)=1` en cosecha_pendiente) y nunca compara version_id/auto_id contra la version sembrada: valida el mecanismo por la dimension existencia y da por supuesto el contenido.
+
+**Camino de daño (verificado por un escéptico independiente):** CMA manda `session.status_idled` → el handler encola en cosecha_pendiente con version_id/auto_id cruzados → el cron de cosecha no encuentra la versión, reporta 'cosechado' y borra el outbox → la versión real se queda 'building' para siempre → a las 6 h el reaper la marca 'failed'. Le pasa a TODOS los builds: cada cliente paga (~$1.8 de costo) y no recibe nada, mientras el cron reporta cosechados>0.
+
+**Nota del juicio:** Verificado punta a punta. El INSERT está en core/src/webhooks/handlers.ts:71-74 y `cosecha_pendiente` NO tiene FK ni CHECK (core/db/schema.sql:326-333: version_id y auto_id son `uuid NOT NULL` a secas), así que Postgres acepta el intercambio en silencio — ninguna capa de BD lo ve. Aguas abajo, `drenarCosecha` construye el ItemCosecha desde esas columnas (cosecha.ts:130) y `cosecharYConfirmar` hace `SELECT vista, estado FROM versiones WHERE id=$1 AND org_id=$2` (cosecha.ts:64); con el auto_id en lugar del version_id no hay fila y la función devuelve 'cosechado' (`if (!row) return "cosechado"`, :66), con lo que el drainer BORRA la fila del outbox y la cuenta como éxito (:135-137). El verify qu
+
+---
+
+### 2. [ALTA] `verify:adaptador:pg` — `src/http/pipeline.ts`
+
+**Mutación que sobrevive a TODA la suite:**
+
+```
+if (s.origen === undefined || s.hostEsperado === undefined || s.origen !== s.hostEsperado) {
+→
+if (s.origen === undefined || s.hostEsperado === undefined || !s.origen.startsWith(s.hostEsperado)) {
+```
+
+**Qué se rompe:** Capa 2 (CSRF): el Origin de toda mutación debe ser IGUAL al origen propio. Con startsWith, 'https://app.evil.com' y 'https://app-evil.mx' pasan como si fueran nuestros.
+
+**Camino de daño (verificado por un escéptico independiente):** Atacante registra un dominio cuyo origen tiene APP_ORIGIN como prefijo (p.ej. 'automata.mx.evil.com' o 'app.automata.mx.attacker.io') → un admin logueado visita su página → la página dispara POST /orgs/:orgId/construir (~$1.8 por build), DELETE de miembros, POST /pagar o /ajustar → la capa 2 acepta el Origin porque `startsWith` da true → la petición pasa a rate/authn ya sin defensa CSRF propia. El único freno que queda es que el navegador no adjunte la cookie __session por SameSite=Lax; el paso de step-up cubre invitar/quitar/facturación pero NO construir/ajustar/ejecutar, que es justo el camino del dinero.
+
+**Nota del juicio:** Es la capa 2 del pipeline real (core/src/http/pipeline.ts:70-74), y la cruzan TODAS las mutaciones: los endpoints JSON vía withEfecto y las subidas binarias vía adaptarUpload, ambos con `hostEsperado: cfg.appOrigin` poblado por el adaptador (core/src/http/adaptador.ts:87 y :126) y `origen: req.headers.get('origin')`. Un comparador por prefijo sobre un Origin completo es explotable de forma trivial: con APP_ORIGIN='https://automata.mx', el origen 'https://automata.mx.evil.com' empieza con él y pasa. Y la mutación sobrevive porque los dos únicos fixtures hostiles de la suite son 'https://evil' (verify-http.ts:70) y 'https://evil' (verify-adaptador-pg.ts §5), ninguno con el origen propio como p
+
+---
+
+### 3. [ALTA] `verify:ejecutar:pg` — `src/pipeline/run.ts`
+
+**Mutación que sobrevive a TODA la suite:**
+
+```
+WHERE v.automatizacion_id = $1 AND a.activa
+→
+WHERE v.automatizacion_id = $1
+```
+
+**Qué se rompe:** Una automatizacion en solo-lectura (activa=false, el excedente que deja aplicarDowngrade al bajar de plan) NO se puede ejecutar. El comentario justo arriba del query dice literalmente que el JOIN con automatizaciones y el a.activa 'NO son decorado' y que sin eso el downgrade no le quitaba nada al cliente.
+
+**Camino de daño (verificado por un escéptico independiente):** Cliente en Equipo ($1,999, 10 espacios) baja a Base ($499, 3 espacios) → Stripe manda customer.subscription.updated → aplicarDowngrade deja 7 automatizaciones en activa=false → el cliente entra a /portafolio, la tarjeta sigue ahí y el botón Ejecutar sigue vivo → sin `a.activa` el query resuelve la versión y corre. No hace falta atacante ni URL a mano: es el usuario honesto. El daño está ACOTADO por app_consumir('ejecuciones'), que ya usa el plan nuevo (500/mes en base vs 10000 en equipo), así que no es ilimitado: lo que se fuga es el diferenciador de ESPACIOS (10 automatizaciones por el precio de 3), ~$1,500 MXN/mes por cliente que baje de plan. Por eso alta y no crítica: es fuga de ingreso, no brecha de datos, y el volumen sigue topado.
+
+**Nota del juicio:** El `a.activa` es la ÚNICA aplicación del estado solo-lectura en el camino del Run. Lo verifiqué en las tres capas que podrían salvarlo y ninguna lo hace: (1) los triggers del INSERT en `ejecuciones` son `trg_kill_run` (verificar_kill_switch, core/db/schema.sql:1144-1146) y `trg_presupuesto_run` (cobrar_ejecucion, schema.sql:1154-1164) — ninguno mira `automatizaciones.activa`; (2) RLS solo acota por org, no por activa; (3) el front NO gatea: no hay una sola referencia a `activa` en web/app/portafolio/** fuera de una variable local de UI (portafolio/[id]/page.tsx:434 es otra cosa). El escritor de activa=false es `aplicarDowngrade` (core/src/billing/plan.ts:54-62), llamado de verdad en producci
+
+---
+
+### 4. [ALTA] `verify:ejecutar:pg` — `src/pipeline/run.ts`
+
+**Mutación que sobrevive a TODA la suite:**
+
+```
+ORDER BY v.numero DESC LIMIT 1
+→
+ORDER BY v.numero ASC LIMIT 1
+```
+
+**Qué se rompe:** El Run dispara la version ejecutable MAS RECIENTE (la vigente), no cualquiera. Es lo que hace que un ajuste ya entregado (v2/v3) sea el que corre.
+
+**Camino de daño (verificado por un escéptico independiente):** Cliente pide un ajuste (POST /ajustar, ya probado con dinero real: la v3 con columnas nuevas), se le cobra uno de sus 3 cambios, el drainer entrega la v2 'lista' → toda ejecución posterior vuelve a correr la v1. La UI dice 'lista', no hay excepción, no hay 500: el cliente recibe el reporte VIEJO con datos frescos — resultado incorrecto silencioso, el peor modo de falla. Se queda en alta y no crítica porque es auto-delatante: el cliente pidió columnas concretas y verá que no están, así que el daño se detecta en la primera corrida en vez de acumularse en silencio.
+
+**Nota del juicio:** El fixture de verify-ejecutar-pg.ts inserta UNA sola versión por automatización (numero=1: líneas 74, 77, 78), así que DESC y ASC son indistinguibles y el test no fija nada. El propio docstring de la función promete la garantía en texto (core/src/pipeline/run.ts:46: «Dispara la versión ejecutable más reciente»), o sea que la garantía no es inventada por el proponente. Ninguna otra capa elige versión: el artefacto se carga por `version.id` y no hay chequeo de vigencia en build-pipeline ni en el wiring; `ejecutarAutomatizacion` no tiene otro llamador. CORRIJO al proponente en un punto: el reintento gratis NO se rompe. El WHERE filtra `estado IN ('ready','lista')`, y en ese escenario la v1 qued
+
+---
+
+### 5. [ALTA] `verify:rutas` — `../web/app/api/orgs/[orgId]/miembros/route.ts`
+
+**Mutación que sobrevive a TODA la suite:**
+
+```
+export const DELETE = ruta(quitarMiembroEP);
+→
+export async function DELETE(req: Request, ctx: { params: Promise<{ orgId: string }> }) {
+  const { orgId } = await ctx.params;
+  const { userId } = (await req.json()) as { userId: string };
+  await quitarMiembroDirecto(orgId, userId); // sin autorizar(): sin rol admin, sin step-up, sin CSRF
+  return Response.json({ ok: true });
+}
+```
+
+**Qué se rompe:** 'Todo verbo mutante pasa por un camino sancionado'. El DELETE deja de ir por ruta() y expulsa gente sin las 8 capas. El test NO lo ve por un fallo REAL de su lógica 'envuelta': `cuerpo` se calcula con `export function DELETE...[\s\S]*` (greedy HASTA EL FINAL DEL ARCHIVO), así que arrastra el cuerpo del POST de más abajo, donde vive `await invitar(req, ctx)` — e `invitar` está en `ligados`. El DELETE hereda la sanción de OTRO handler.
+
+**Camino de daño (verificado por un escéptico independiente):** Alguien añade a miembros/route.ts un DELETE/PUT propio (el archivo ya invita a ello: documenta el patrón «envuelto» para efectos posteriores) → CI verde → en producción ese verbo no pasa por autorizar(): sin rate-limit, sin authn, sin CSRF, sin assertCan('quitar_gente'=admin+step-up) y sin validar el orgId de la URL contra la membresía. RLS no salva: el propio handler fija app_current_org con el orgId que viene en la ruta. Resultado: expulsión de miembros cross-org. El daño es CONDICIONADO a que alguien escriba ese handler — por eso alta y no crítica: hoy no hay ningún handler así en el árbol, el agujero es del detector.
+
+**Nota del juicio:** Reproduje la lógica del escáner fuera de la suite (sin BD) y el fallo es exactamente el descrito: para DELETE, `viaRutaDirecta`=false pero `cuerpo` = /export\s+(?:async\s+)?function\s+DELETE\b[\s\S]*/ es GREEDY hasta el fin del archivo (core/scripts/verify-rutas.ts, cálculo de `cuerpo`/`viaRutaEnvuelta`), arrastra el POST de abajo donde vive `await invitar(req, ctx)`, e `invitar` está en `ligados` → viaRutaEnvuelta=true → check VERDE. Es un falso verde, no una omisión. Y no hay red de seguridad en runtime: web/middleware.ts excluye /api explícitamente («la API se autentica en el pipeline»), así que `ruta()` es TODA la puerta. Las guardas propias del endpoint (no dejar la org sin admin) viven
+
+---
+
+### 6. [ALTA] `verify:rutas` — `../web/app/api/orgs/[orgId]/construir/route.ts`
+
+**Mutación que sobrevive a TODA la suite:**
+
+```
+export const POST = ruta(solicitarBuildEP);
+→
+// export const POST = ruta(solicitarBuildEP);  ← desactivado: el pipeline consume el cuerpo
+export async function POST(req: Request, ctx: { params: Promise<{ orgId: string }> }) {
+  const { orgId } = await ctx.params;
+  return Response.json(await encolarBuildDirecto(orgId, await req.json()));
+}
+```
+
+**Qué se rompe:** Misma garantía, rota por el refactor MÁS común que existe: comentar la línea vieja y escribir el handler nuevo debajo. `viaRutaDirecta` es la regex textual `POST\s*=[^\n]*\bruta\s*\(` sobre el archivo ENTERO — un comentario la satisface igual que código vivo. El escáner no distingue código de prosa.
+
+**Camino de daño (verificado por un escéptico independiente):** Se comenta `export const POST = ruta(solicitarBuildEP)` y se escribe un POST propio → CI verde → POST /orgs/:orgId/construir queda sin autorizar(): sin authn, sin CSRF, sin rate-limit y sin validar que el orgId de la URL sea de tu membresía. Ese endpoint encola builds de ~$1.8 reales que consumen cuota de generaciones. La única barrera que quedaría es cobrar_build/app_consumir, que topa el gasto al plan pero NO impide que lo queme un tercero ni un operador. Alta y no crítica por la misma razón que el 12: el daño necesita que alguien haga ese refactor; lo que está roto hoy es el detector.
+
+**Nota del juicio:** Confirmado mecánicamente: `viaRutaDirecta` = /POST\s*=[^\n]*\bruta\s*\(/ corre sobre el ARCHIVO ENTERO sin quitar comentarios, así que la línea vieja comentada (`// export const POST = ruta(solicitarBuildEP);`) la satisface igual que código vivo → check VERDE. De los tres agujeros de verify:rutas éste es el de mayor alcance: no depende de la forma del archivo, aplica a los 11 route.ts que hoy usan `= ruta(`, y el gesto que lo dispara (comentar la línea vieja y escribir el handler nuevo debajo) es el refactor más común que existe. Sin runtime que respalde: web/middleware.ts deja /api sin proteger a propósito.
+
+---
+
+### 7. [ALTA] `verify:rutas` — `../web/app/api/orgs/[orgId]/ajustar/route.ts`
+
+**Mutación que sobrevive a TODA la suite:**
+
+```
+export const POST = ruta(pedirAjusteEP);
+→
+const POST = async (req: Request, ctx: { params: Promise<{ orgId: string }> }) => {
+  const { orgId } = await ctx.params;
+  return Response.json(await encolarAjusteDirecto(orgId, await req.json()));
+};
+export { POST };
+```
+
+**Qué se rompe:** Misma garantía, evadida por SINTAXIS de export. El detector es `export\s+(?:const|async\s+function|function)\s+POST\b`; `export { POST }` (re-export de un binding, que Next.js 16 honra igual como handler de ruta) no casa, así que `exporta` es false y el archivo se salta ENTERO con `continue` — ni siquiera se emite un check. El anti-olvido tiene un punto ciego en su propia detección de handlers.
+
+**Camino de daño (verificado por un escéptico independiente):** Cualquier route.ts nuevo escrito con `export { POST }` (o `export { h as POST }`) desaparece del escáner entero: el verify cuyo propósito declarado es «que añadir un camino nuevo obligue a pasar por aquí» no ve el camino nuevo. Si ese handler no llama a ruta(), llega a producción sin las 8 capas — en /ajustar concretamente se pierde assertCan('ajustar'=admin), el CSRF y la validación por esquema de `confirmado:true`, o sea gastar uno de los 3 ajustes del cliente sin que lo haya confirmado. Alta, no crítica: igual que 12 y 13, el daño requiere un handler futuro; lo roto hoy es la detección.
+
+**Nota del juicio:** Confirmado: el detector `export\s+(?:const|async\s+function|function)\s+POST\b` da false con `export { POST }`, y verify-rutas.ts hace `continue` → el archivo no emite NI UN check (falla silenciosa, ni siquiera un verde sospechoso). Next.js honra ese binding como handler: un route.ts es un módulo normal y Next lee sus exports nombrados. Y el proponente se queda corto en realismo: la variante idiomática del ecosistema Next es `export { handler as GET, handler as POST }` (patrón NextAuth), que evade el detector exactamente igual. O sea que la sintaxis evasora no es rebuscada, es la que la gente copia de la documentación de otras librerías.
+
+---
+
+### 8. [ALTA] `verify:rutas` — `../web/app/api/webhooks/stripe/route.ts`
+
+**Mutación que sobrevive a TODA la suite:**
+
+```
+export const POST = (req: Request) => webhook("stripe", req);
+→
+export async function POST(req: Request) {
+  // sin verificar la firma HMAC: cualquiera puede mandar un evento de Stripe falso
+  const evt = (await req.json()) as { type: string; data: unknown };
+  return Response.json(await aplicarEventoStripe(evt));
+}
+```
+
+**Qué se rompe:** El encabezado del test justifica la exención: 'Los webhooks van por OTRO camino (cuerpo crudo + firma HMAC), así que se excluyen'. Pero la exención se concede por el NOMBRE DE LA CARPETA y lo único que se comprueba es `!/POST\s*=\s*ruta/` — que NO usen ruta(). Nadie verifica que el handler siga delegando en `webhook()`, que es donde vive la firma. La premisa de la exención no está probada.
+
+**Camino de daño (verificado por un escéptico independiente):** POST anonimo a /api/webhooks/stripe. web/middleware.ts:30 hace `if (esApi(req)) return;` — la API no la protege el middleware, la protege el pipeline, y el webhook no pasa por el pipeline a proposito. Sin la delegacion no queda NINGUNA capa: el cuerpo entra directo a procesarStripe, que es la fuente de verdad del plan. Con un `client_reference_id` = id de org (visible para cualquier miembro de esa org) un cliente propio se asciende a Equipo gratis (builds a ~$1.8 cada uno), o un tercero le manda un `customer.subscription.deleted` falso a una org que si paga y le apaga el servicio. Rebajo de critica a alta solo porque explotarlo exige conocer un org_id/customer_id, no porque falte capa: no hay ninguna. El escenario realista no es reescribir esta ruta, es AGREGAR la cuarta (Resend, p.ej.) copiando el patron y olvidando `webhook()` — la suite entera se queda verde.
+
+**Nota del juicio:** Confirmado leyendo el test: core/scripts/verify-rutas.ts:44-53 concede la exencion por el NOMBRE DE LA CARPETA (`/(^|\/)webhooks?(\/|$)/` sobre la ruta relativa) y lo unico que comprueba es `!/POST\s*=\s*ruta/`. Un handler que exporte `export async function POST` y no llame a `webhook()` pasa el check tal cual. Nadie verifica la premisa de la exencion (que el handler delegue en el camino de firma). La firma vive UNICAMENTE en web/lib/automata/wiring.ts:194-210 (`webhook()` -> `recibir({rawBody,headers},{verificador: verificarStripe,...})`), y el archivo real es una sola linea: web/app/api/webhooks/stripe/route.ts:6. verify:webhooks prueba el HMAC dentro de core/, no que la ruta lo invoque: e
+
+---
+
+### 9. [ALTA] `verify:cma` — `src/cma/build.ts`
+
+**Mutación que sobrevive a TODA la suite:**
+
+```
+if (c.estado === "en_curso") return { estado: "en_curso" };
+→
+if (c.estado === "en_curso") return { estado: "satisfecho", codigo: await this.descargarCodigo(sessionId), iteraciones: c.iteraciones };
+```
+
+**Qué se rompe:** Un build sin veredicto (needs_revision, o un 'satisfied' bloqueado en requires_action, o sin evals) NO se entrega: cosechar() devuelve 'en_curso' y el drainer lo deja en el outbox para reintentar. Es la MISMA regla que el test prueba en la función pura, pero aplicada en el llamador que sí corre en producción (wiring.ts inyecta CmaBuildClient como cosechador en los tres drainers).
+
+**Camino de daño (verificado por un escéptico independiente):** El comentario de core/src/pipeline/cosecha.ts:107-110 dice que 'en_curso' es el caso NORMAL (el webhook encola en status_idled con la sesion todavia iterando). Con la mutacion, esa primera cosecha se lleva el codigo a medio hacer: descargarCodigo lo baja (el agente escribe automatizacion.py temprano y luego itera), cosecharYConfirmar lo sube, storage.existe() pasa (los bytes SI estan; ese guard vigila otra cosa) y confirmarAjuste marca 'lista'. Ninguna capa posterior lo detiene: el reaper solo barre 'building' (ciclo/servicio.ts:292-296), y la puerta de calidad de la vista corre al EJECUTAR, no al entregar. Consecuencias irreversibles en una sola pasada: se sella `entregada` por trigger (schema.sql:983, once-only), lo que ademas mata el reintento gratis (exige `entregada IS NULL`); app_consumir_ajuste gasta uno de los 3 cambios; y sale el correo 'ya esta lista' con codigo que el grader nunca aprobo. Tambien tapa el caso satisfied+requires_action, que el propio test declara como el guard clave.
+
+**Nota del juicio:** cosechar() (core/src/cma/build.ts:346-353) es codigo de PRODUCCION: web/lib/automata/wiring.ts:486, 505 y 523 inyectan `new CmaBuildClient()` como cosechador en los tres drainers. Y no lo cubre NADA: scripts/verify-cma-clasificar.ts:5 admite de frente que 'el resto del CmaBuildClient toca la red y se prueba con credenciales, aparte' — ese test aparte no existe en package.json (verify:cma apunta solo al clasificador puro), y verify:cosecha:pg / verify:disparo:pg / verify:ajuste:pg pasan DOBLES (`async cosechar(): return {estado:'en_curso'}`), nunca la clase real. La linea 349 es el unico punto donde la decision probada del clasificador se convierte en accion.
+
+---
+
+### 10. [ALTA] `verify:webhooks:handlers:pg` — `src/webhooks/handlers.ts`
+
+**Mutación que sobrevive a TODA la suite:**
+
+```
+return plan ? { org, plan } : undefined;
+→
+return { org, plan: plan ?? "base" };
+```
+
+**Qué se rompe:** Un price DESCONOCIDO no toca el plan: nunca se adivina (darle uno que no pago, o quitarle el que pago, son los dos errores caros). Este verify no ejerce NI UNA vez el camino de plan (ignora el valor de retorno de procesarStripe y nunca manda priceId), asi que la garantia que el encargo nombra literalmente no la vigila nadie aqui.
+
+**Camino de daño (verificado por un escéptico independiente):** Un cliente paga Equipo ($1,999) → Stripe entrega customer.subscription.created (con price → plan 'equipo') y checkout.session.completed (sin price). Al procesar el checkout, cambioDePrecio devuelve {org, plan:'base'} y el wiring corre aplicarDowngrade: la org baja a 3 espacios y sus automatizaciones excedentes quedan en solo lectura. Nadie lo detecta: el fallo del webhook ni siquiera se reporta a Stripe (es best-effort) y el único rastro sería el console.error, que aquí ni se emite porque la operación tiene ÉXITO. Cobrar de más y entregar de menos es exactamente el error que el comentario de handlers.ts:112 dice estar evitando.
+
+**Nota del juicio:** Confirmado en las tres puntas. (1) La mutación sobrevive a verify:stripe:pg: su §6 (scripts/verify-stripe-pg.ts:129-131) corre JUSTO DESPUÉS del downgrade de §5, con el plan ya en 'base', así que adivinar 'base' da el mismo resultado; y §1 solo prueba planDePrecio(), que la mutación no toca. (2) El valor devuelto se aplica SIN NINGUNA guarda: web/lib/automata/wiring.ts:216 llama aplicarDowngrade(owner, org, plan) tal cual, y core/src/billing/plan.ts:49 hace `UPDATE subscriptions SET plan=$2` + desactiva el excedente sin comparar con el plan vigente. 'base' es un plan válido, así que ningún CHECK ni trigger lo frena. (3) Lo peor: cambioDePrecio se llama en core/src/webhooks/handlers.ts:148 pa
+
+---
+
+### 11. [ALTA] `verify:rutas` — `../web/app/api/cron/disparo/route.ts`
+
+**Mutación que sobrevive a TODA la suite:**
+
+```
+export const POST = (req: Request) => cronDisparo(req);
+→
+export async function POST(req: Request) {
+  // sin comprobar CRON_SECRET: drena la cola de builds a quien la pida
+  return Response.json(await drenarDisparosSinAuth());
+}
+```
+
+**Qué se rompe:** Igual que los webhooks: el comentario dice que los crons son 'OTRO camino sancionado (auth por CRON_SECRET + pool DUEÑO)', pero lo único comprobado es que NO usen ruta(). Que el handler delegue en la función del wiring que sí compara el Bearer CRON_SECRET no se verifica en ningún lado.
+
+**Camino de daño (verificado por un escéptico independiente):** POST anónimo desde internet a /api/cron/disparo → middleware lo deja pasar (línea 31) → cronDisparo sin chequeo → drenarBuilds(getDisparoDeps()) con el pool DUEÑO, sin RLS, operando sobre build_pendiente de TODAS las orgs: corre el planner (Opus, dinero real), abre sesiones de CMA (~$1.8) y devuelve conteos cross-org. El arrendamiento de disparo.ts:43-53 (tomada_en + SKIP LOCKED) evita el doble cobro, pero no evita que un anónimo maneje el pipeline de build de todos los tenants, queme el presupuesto de `intentos` de filas en vuelo (3 intentos → DELETE + incidente + correo 'necesita revisión' al cliente) ni el DoS contra el pool dueño. Lo mismo aplica a /api/cron/reaper, /cosecha y /ajustes: cuatro rutas con el pool sin RLS y cero pruebas de su única puerta.
+
+**Nota del juicio:** Comprobado que la defensa existe y que NADIE la mira. La única auth de los crons es web/lib/automata/wiring.ts:626 (`if (!autorizadoCron(req)) return 401`, con autorizadoCron en wiring.ts:371-377, timingSafeEqual + fail-closed). verify-rutas.ts:47-51 exime a todo lo que caiga bajo /cron/ y solo comprueba que NO use ruta() — jamás toca CRON_SECRET. Un grep por CRON_SECRET/autorizadoCron en core/scripts/ no devuelve nada: ningún verify de los 38 ejerce esa comparación. Y no hay capa detrás: web/middleware.ts:31 dice literalmente `if (esApi(req)) return;` — el middleware NO protege /api, la autenticación vive en el handler. El drainer corre con getPoolOwner() (pool DUEÑO, sin RLS). La mutación 
+
+---
+
+### 12. [ALTA] `verify:lectura:pg` — `src/http/endpoints.ts`
+
+**Mutación que sobrevive a TODA la suite:**
+
+```
+if (ultimaVersion === "failed") return "fallo";
+→
+if (ultimaVersion === "failed") return "generando";
+```
+
+**Qué se rompe:** Un primer build que falló y nunca entregó nada se le dice al cliente como 'fallo' — es el estado desde el que la UI ofrece reintentar y el que distingue "se rompió" de "espera un poco".
+
+**Camino de daño (verificado por un escéptico independiente):** Cliente aprueba en /nueva → se cobra el build (~$1.8) → el build revienta (v1 'failed', sin versión ejecutable) → `estadoAuto` devuelve 'generando' en vez de 'fallo' → la tarjeta muestra el esqueleto animado + "Te avisaremos por correo cuando esté lista" y el detalle (web/app/portafolio/[id]/page.tsx:244-249) bloquea con el mismo mensaje. El botón de reintento gratis —que existe y funciona (POST /reintentar)— desaparece para siempre, y el portafolio se queda haciendo polling cada 10 s (portafolio/page.tsx:65) de algo que no va a llegar. Nada lo corrige: el correo de 'fallo' (core/src/ops/notificaciones.ts:68-72) dice "nuestro equipo la revisa… te avisamos", o sea REFUERZA la espera en vez de contradecirla. El cliente pagó, no recibió nada, y el único camino de recuperación autoservicio queda oculto.
+
+**Nota del juicio:** `estadoAuto` (core/src/http/endpoints.ts:233-242) es la ÚNICA fuente del estado que ve el cliente, y el front confía en él ciegamente: web/lib/automata/lectura.ts:118-127 lo copia tal cual y web/app/portafolio/_componentes/tarjeta-automatizacion.tsx:95-108 renderiza el botón "Reintentar gratis" DENTRO de la rama `datos.estado === "fallo"` — el flag `reintentable` (endpoints.ts:299) sigue siendo true pero nunca se pinta si el estado no es 'fallo'. Confirmé que verify-lectura-pg.ts no afirma `estado === "fallo"` en ningún check: §1 prueba lista/generando/congelada, §5 lista, §6 generando, y la única fila realmente fallida (R1, línea 120-129) solo se mira por `reintentable`. La mutación pasa en
+
+---
+
+### 13. [ALTA] `verify:cma` — `src/cma/build.ts`
+
+**Mutación que sobrevive a TODA la suite:**
+
+```
+if (!automatizacionPy) throw new Error("El build no produjo automatizacion.py.");
+→
+if (!automatizacionPy) this.log("build sin automatizacion.py (se entrega igual)");
+```
+
+**Qué se rompe:** Un build 'satisfied' que no dejó el script en /mnt/session/outputs NO se entrega: revienta la cosecha (error técnico → reintento) en vez de publicar un artefacto sin código. Es el hermano del guard de bytes de cosecha.ts ('no marcar lista sin artefacto ejecutable'), pero del lado de CMA.
+
+**Camino de daño (verificado por un escéptico independiente):** Grader 'satisfied' sin automatizacion.py → `codigo.automatizacionPy` undefined → cosecha.ts:73 arma el artefacto y JSON.stringify OMITE la clave → put + `existe()` dice que hay bytes (el guard de bytes no mira el contenido) → confirmarAjuste marca 'lista', consume el ajuste y el trigger SELLA `entregada` → sale el correo "ya está lista". Al ejecutar, core/src/run/executor.ts:154 hace `fs.writeFile(scriptPath, undefined)` → TypeError, todas las corridas fallan. Y el cliente queda atrapado: `reintentar` exige `entregada IS NULL`, así que el arreglo entra como AJUSTE, y con `correrRegresion()` devolviendo 'indeterminado' se clasifica como CAMBIO → le gasta 1 de sus 3 ajustes y cobra otra generación. Ninguna otra capa lo detiene: no hay puerta de calidad sobre el artefacto entre la descarga y el 'lista'.
+
+**Nota del juicio:** `descargarCodigo` (core/src/cma/build.ts:274-304) SÍ es código de producción: lo llama `cosechar()` (build.ts:354), que es lo que ejecuta el cron de cosecha vía `drenarCosecha` con `new CmaBuildClient()` (web/lib/automata/wiring.ts:486). El throw de la línea 293 es el único control que convierte "sesión aprobada pero sin script" en error TÉCNICO (cosecha.ts:88-90 lo relanza y la fila se queda en el outbox para reintento). Y el escenario es alcanzable de dos formas realistas: el agente deja el script fuera de /mnt/session/outputs (el SYSTEM de build.ts:75-76 existe precisamente porque el modelo coloca mal los archivos — el incidente del archivo llamado literalmente `--salida` está documentado
+
+---
+
+## Lo que NO se confirmó (y por qué importa dejarlo escrito)
+
+**13 refutados de plano.** El patrón dominante: código sin llamadores de producción. `entitlementsDe`
+y `esPlan` (`billing/planes.ts`) no se usan en ningún lado fuera de sus tests; `resolverIncidente` /
+`incidentesAbiertos` tampoco — el tablero de ops existe como módulo pero **nadie lo tiene cableado**,
+ni ruta, ni cron, ni consola. Eso no es un fallo de la suite: es código sin cliente. Vale anotarlo
+como deuda distinta.
+
+**25 inflados, rebajados a media o baja.** Puntos ciegos ciertos, daño menor del anunciado. Los más
+instructivos:
+
+- **`conOrg` con `is_local=false`** (el GUC de org sobrevive al COMMIT y la conexión vuelve al pool
+  sucia). Se rebajó a alta-inflado porque hoy no existe el segundo eslabón: las únicas queries del
+  pool de app fuera de `conOrg` son SECURITY DEFINER que ignoran el GUC. Pero **destruye la red**:
+  el patrón del repo es confiar en RLS como filtro (`plan.ts:92` consulta sin `org_id`), así que la
+  primera consulta que alguien escriba fuera de `conOrg` devolvería las filas del tenant anterior en
+  silencio. Es el hallazgo con más futuro de esta tanda.
+- **`afirmarRolSeguro` sin el chequeo de superuser/BYPASSRLS.** `verify:pgstate:pg` abre sus pools
+  con `crearPool`, nunca con `crearPoolApp`, así que esa función **no se ejecuta ni una vez** en el
+  script que se supone la vigila. El daño lo ataja el segundo guard (rechaza al dueño de tablas),
+  que sí cubre los dos roles reales de este proyecto.
+
+**28 ciegas de gravedad media/baja no se sometieron a refutación** — quedan como puntos ciegos
+reconocidos, sin veredicto. Reparto: `notificaciones` 5 · `incidentes:pg`, `storage`,
+`webhooks:handlers:pg`, `ejecutar:pg`, `cuenta:pg` 3 c/u · resto 1-2.
+
+## Método y herramientas nuevas
+
+- `core/scripts/mutar-lote.ts` — encadena un lote de mutaciones en SERIE (paralelizar da auditoría
+  falsa: el archivo de producción se pisa y los `:pg` comparten cola global), escribe resultados en
+  cada vuelta, y separa `ERROR` de `SOBREVIVE`. Confundirlos infla la auditoría con humo.
+- El cruce de cobertura se calculó con el cierre transitivo de imports de cada script `verify:*`.
+  Para `schema.sql`, candidatos = todos los `:pg`.
+
+**Comprobación de integridad:** tras 620 mutaciones, `git diff HEAD` vacío y la suite en verde. El
+arnés no dejó residuo.
+
+## Qué falta hacer
+
+Los 13 confirmados **están reportados, no arreglados**. Reforzar los tests toca 6 archivos:
+`verify-rutas.ts` (5 hallazgos, un solo arreglo: que el auditor exija delegación real en vez de
+reconocer una forma sintáctica), `verify-cma-clasificar.ts` (2), `verify-ejecutar-pg.ts` (2),
+`verify-webhooks-handlers-pg.ts` (2, incluido el crítico), `verify-adaptador-pg.ts` (1) y
+`verify-lectura-pg.ts` (1).
+
+Cada mutación de arriba queda como criterio de aceptación: el refuerzo sirve cuando la mutación
+**MATA**.
