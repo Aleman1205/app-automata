@@ -164,6 +164,12 @@ alturas, procrastinar el #2 y el #4.
   `file:../core`) — y los `verify:*` pasan en verde mientras el front corre código viejo.
   El síntoma parece un bug del producto. Reiniciar `pnpm dev` después.
 - **`~/Desktop` y TCC de macOS**: ver "Notas de entorno".
+- **El puerto 3000 lo ocupa OTRO proyecto de esta máquina.** `pnpm dev` se pasa solo a **:3001**, y
+  entonces `APP_ORIGIN=http://localhost:3000` de `.env.local` ya no cuadra: Next aborta cualquier
+  POST con `Invalid Server Actions request` (choque `x-forwarded-host` vs `origin`) y sale un 500 en
+  HTML que NO es un error del producto. Arrancar con `APP_ORIGIN=http://localhost:3001 pnpm dev`.
+  Comprobar el puerto real en el log antes de culpar al código — un 307 a `/login` desde :3000 es
+  del otro proyecto, no de este (aquí el login es `/entrar`).
 - **Dos fuentes de env**: `web/.env` y `web/.env.local` tienen las mismas claves y
   `.env.local` GANA. Editar la equivocada parece "no funcionó". Y `web/.env.local` puede
   quedar apuntando a la BD **local** (`127.0.0.1:55432`) tras una sesión de pruebas —
@@ -417,9 +423,18 @@ de reservar, porque `iniciarAjuste` es lo que cobra: si el planner truena despu�
 pagó un build que no existe. `AjusteArgs.vista` es **obligatoria en el tipo** para que no se vuelva
 a olvidar. Verify: `verify:ajuste:pg` §6bis.
 
-**Lo que este arreglo NO cubre:** falta correr un ajuste real de punta a punta con el planner ya
-cableado (~$1.8). La automatización que quedó rota en dev (v2 sin vista) sigue rota — su v2 se
-construyó sin contrato, así que lo honesto es rehacer el ajuste, no parchear la vista a mano.
+**PROBADO CON DINERO REAL (2026-07-30).** Se retiró la v2 inservible (`failed` — código sin vista
+no es entregable) y se volvió a pedir el MISMO cambio por el endpoint real. Resultado: v3 nació
+`building` **con vista**, la cosecha la dejó `lista`, y al **ejecutarla dio HTTP 200** con la tabla
+trayendo las dos columnas que el cliente pidió (`numero_ventas`, `promedio_venta`) — antes tronaba.
+`ajustes_usados` siguió en 0 (ventana gratis de 30 días) y la v1 nunca dejó de estar `lista`.
+El ciclo posventa completo funciona de punta a punta.
+
+⚠️ **En local la cosecha NO se dispara sola.** `cosecha_pendiente` la llena SOLO el webhook de CMA
+(`GRANT INSERT … TO automata_webhook`), y en la máquina no hay URL pública que lo reciba: el cron
+devuelve `{"cosechados":0,"pendientes":0}` para siempre y el build parece colgado. Hay que simular
+el webhook insertando la fila a mano (owner):
+`INSERT INTO cosecha_pendiente (session_id, version_id, auto_id, org_id) SELECT cma_session_id, id, automatizacion_id, org_id FROM versiones WHERE id = '<version>';`
 
 ### El Run entendía UNA sola convención, y el primer parche rompió la otra (2026-07-30)
 
