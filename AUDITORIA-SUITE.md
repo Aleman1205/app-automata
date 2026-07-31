@@ -1,8 +1,33 @@
 # Auditoría de la suite por MUTACIÓN — en curso
 
-**Estado:** ~72 corridas de mutación sobre 21 de los 38 verify. **9 hallazgos, 9 arreglados y
+**Estado:** ~84 corridas de mutación sobre 24 de los 38 verify. **9 hallazgos, 9 arreglados y
 verificados** (la mutación que sobrevivía ahora MATA), más **1 observación** sobre cómo falla
-`verify:plan:pg`. Ningún hallazgo abierto.
+`verify:plan:pg`. **Ningún hallazgo abierto.**
+
+### Lo que hay que leer si solo lees una cosa
+
+Los 9 hallazgos tienen la MISMA forma: **el test valida el mecanismo por un camino y da por supuesto
+el resto** — otra tabla con RLS, otra función que consulta el mismo freno, otro valor por defecto,
+otro formato del mismo correo. Ninguno era un bug en el producto: eran defensas reales, bien
+escritas, que **nadie estaba vigilando** — podían desaparecer en un refactor y la suite seguiría en
+verde.
+
+Los tres más graves, por si hay que priorizar:
+
+1. **Se podía habilitar la ejecución de código de IA SIN JAULA en producción** (riesgo #1 del threat
+   model del propio proyecto) sin que un solo test se quejara.
+2. **El kill-switch quedaba fail-open** por el camino de la app — incluida la palanca de `cobros`,
+   que el trigger no cubre en absoluto.
+3. **Fuga cross-tenant invisible en 4 de las 8 tablas** con RLS, incluida la que guarda el
+   `stripe_customer_id` de cada cliente.
+
+### Zonas auditadas que salieron BIEN cubiertas
+
+Ventana gratis de 30 días · circuit breaker de reparaciones · clasificación reparación/cambio ·
+firma y anti-replay de webhooks · reintentos y arrendamiento de los drainers · clasificador de
+desenlace de CMA (4 mutaciones, las 4 mueren) · purga/offboarding · política de roles y step-up ·
+adaptador de intake (el bug histórico de `criterio_cliente` ya está vigilado) · off-by-one de los
+topes de cuota.
 
 **Pregunta:** no "¿pasa el producto?" sino **"¿este test fallaría si se rompiera lo que dice
 vigilar?"**. Método y reglas en `NIGHT-RUN.md`. Arnés: `core/scripts/mutar.ts`.
