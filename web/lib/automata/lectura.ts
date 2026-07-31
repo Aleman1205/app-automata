@@ -20,18 +20,62 @@ import type {
 // carga de página (una sola llamada a /api/yo); null cacheado = sin backend/login → datos falsos.
 // ─────────────────────────────────────────────────────────────────────────────
 
-let orgPromesa: Promise<string | null> | undefined;
-async function orgActual(): Promise<string | null> {
-  return (orgPromesa ??= (async () => {
+export interface OrgVista {
+  id: string;
+  nombre: string;
+  rol: "admin" | "operador";
+}
+
+// Cuál de sus equipos está viendo. Vive en localStorage (por navegador) y NO se manda al servidor:
+// la org viaja SIEMPRE en la ruta y el pipeline valida la membresía (capa 6), así que esto no puede
+// dar acceso a nada — es solo preferencia de UI. Aun así se VALIDA contra la lista real en cada
+// carga: si dejó el equipo (o lo quitaron), el id guardado queda huérfano y sin validar el front
+// pegaría a una org ajena y cosecharía 403 en todas las pantallas, pareciendo un producto roto.
+const LLAVE_ORG = "automata.org";
+const leerElegida = (): string | null => {
+  try { return localStorage.getItem(LLAVE_ORG); } catch { return null; } // Safari privado lanza
+};
+
+let orgsPromesa: Promise<OrgVista[]> | undefined;
+/** Los equipos a los que pertenece el usuario. Cacheado por carga de página (una sola /api/yo). */
+export async function misOrgs(): Promise<OrgVista[]> {
+  return (orgsPromesa ??= (async () => {
     try {
       const r = await fetch("/api/yo", { headers: { accept: "application/json" }, cache: "no-store" });
-      if (!r.ok) return null;
-      const d = (await r.json()) as { orgs?: { id: string }[] };
-      return d.orgs?.[0]?.id ?? null;
+      if (!r.ok) return [];
+      const d = (await r.json()) as { orgs?: OrgVista[] };
+      return d.orgs ?? [];
     } catch {
-      return null; // sin backend / red caída → el llamador usa datos falsos
+      return []; // sin backend / red caída → el llamador usa datos falsos
     }
   })());
+}
+
+async function orgActual(): Promise<string | null> {
+  const orgs = await misOrgs();
+  if (orgs.length === 0) return null;
+  const elegida = leerElegida();
+  // El fallback es el PRIMERO, no "la última que vi": una elección que ya no existe se descarta.
+  return orgs.find((o) => o.id === elegida)?.id ?? orgs[0]!.id;
+}
+
+/** La org que el usuario está viendo, con su nombre y rol (para pintarla en la UI). */
+export async function orgActualVista(): Promise<OrgVista | null> {
+  const [orgs, id] = await Promise.all([misOrgs(), orgActual()]);
+  return orgs.find((o) => o.id === id) ?? null;
+}
+
+/**
+ * Cambia de equipo. RECARGA la página a propósito: media app ya tiene datos de la org anterior en
+ * memoria (portafolio, cuenta, equipo), y refrescar solo algunas dejaría la pantalla mezclando dos
+ * negocios — el error más caro posible aquí no es un 403, es que alguien lea los números de un
+ * equipo creyendo que son del otro. Recargar garantiza que no queda nada de la anterior.
+ */
+export async function elegirOrg(id: string): Promise<void> {
+  const orgs = await misOrgs();
+  if (!orgs.some((o) => o.id === id)) return; // no es suya: no se guarda ni se recarga
+  try { localStorage.setItem(LLAVE_ORG, id); } catch { /* sin storage: vale por esta carga */ }
+  window.location.reload();
 }
 
 interface AutomatizacionApi {

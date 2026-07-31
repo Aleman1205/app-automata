@@ -18,8 +18,8 @@ import {
   usuarioActual,
 } from "@/lib/datos";
 import {
-  verCuenta, irAlCheckout, irAlPortalDePago,
-  type CuentaVista, type PlanPagable,
+  verCuenta, irAlCheckout, irAlPortalDePago, orgActualVista,
+  type CuentaVista, type PlanPagable, type OrgVista,
 } from "@/lib/automata/lectura";
 
 // Los precios de docs/06 (MXN provisionales). Se muestran para que el cliente sepa qué va a pagar
@@ -73,6 +73,8 @@ export default function Cuenta() {
   const [eligiendoPlan, setEligiendoPlan] = useState(false);
   const [yendoAPagar, setYendoAPagar] = useState<PlanPagable | null>(null);
   const [abriendoPortal, setAbriendoPortal] = useState(false);
+  const [orgVista, setOrgVista] = useState<OrgVista | null>(null);
+  useEffect(() => { orgActualVista().then(setOrgVista).catch(() => {}); }, []);
   useEffect(() => {
     verCuenta().then(setReal).catch(() => setReal(null));
   }, []);
@@ -110,7 +112,9 @@ export default function Cuenta() {
   return (
     <div className="mx-auto max-w-4xl px-6 pt-36 pb-24 md:pt-44">
       <Reveal desenfoque={false} y={12}>
-        <Etiqueta punto>{organizacion.nombre}</Etiqueta>
+        {/* El nombre REAL del equipo que estás viendo. Con el falso, alguien con dos equipos veía
+            "Hotel Vitrales" en los dos y no había forma de saber de cuál eran los números. */}
+        <Etiqueta punto>{orgVista?.nombre ?? organizacion.nombre}</Etiqueta>
       </Reveal>
       <TextoRevelado
         como="h1"

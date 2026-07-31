@@ -11,6 +11,7 @@ import { Boton } from "@/components/ui/boton";
 import { Avatar } from "@/components/ui/avatar";
 import { usuarioActual } from "@/lib/datos";
 import { CLERK_ACTIVO } from "@/lib/automata/dev";
+import { SelectorOrg } from "@/components/selector-org";
 
 // El sitio tiene DOS mundos:
 //  · venta (público): landing, precios, sobre, contacto, legal
@@ -96,6 +97,8 @@ export function Topbar() {
         <div className="pointer-events-auto hidden items-center gap-3 md:flex">
           {esApp ? (
             <>
+              {/* Solo se pinta con MÁS DE UN equipo; con uno solo no ocupa lugar. */}
+              <SelectorOrg />
               <Boton href="/nueva" variante="acento" tamano="sm" icono="flecha">
                 Nueva automatización
               </Boton>
@@ -181,6 +184,7 @@ export function Topbar() {
                     <Avatar nombre={usuarioActual().nombre} tamano="sm" />
                     <span className="text-sm font-medium">Tu cuenta</span>
                   </Link>
+                  <SelectorOrg variante="movil" />
                 </>
               ) : (
                 <>

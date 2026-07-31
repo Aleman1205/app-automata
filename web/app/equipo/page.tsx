@@ -17,7 +17,7 @@ import {
   type Miembro,
   type RolMiembro,
 } from "@/lib/datos";
-import { listarEquipo, invitarMiembro, quitarMiembro, verCuenta } from "@/lib/automata/lectura";
+import { listarEquipo, invitarMiembro, quitarMiembro, verCuenta, orgActualVista, type OrgVista } from "@/lib/automata/lectura";
 
 const etiquetaRol: Record<RolMiembro, string> = {
   admin: "Administrador",
@@ -40,6 +40,8 @@ export default function Equipo() {
   const [esReal, setEsReal] = useState(false);
   // Límites del plan real (null hasta que responda /cuenta, o si no hay backend).
   const [plan, setPlan] = useState<{ nombre: string; usuariosTotal: number } | null>(null);
+  // El nombre REAL del equipo: con el falso, quien pertenece a dos veía el mismo en los dos.
+  const [orgVista, setOrgVista] = useState<OrgVista | null>(null);
   const [invitando, setInvitando] = useState(false);
   const [correo, setCorreo] = useState("");
   const [rolNuevo, setRolNuevo] = useState<RolMiembro>("operador");
@@ -47,6 +49,8 @@ export default function Equipo() {
   // Roster REAL desde el API (modo dev/prod). El backend solo da user_id+rol+esTu (sin
   // nombre/correo — eso es Clerk); lectura.ts prettifica el id. Si no hay backend, datos
   // falsos. Invitar/quitar siguen siendo demo local (la mutación real exige MFA).
+  useEffect(() => { orgActualVista().then(setOrgVista).catch(() => {}); }, []);
+
   useEffect(() => {
     listarEquipo()
       .then((reales) => {
@@ -131,7 +135,7 @@ export default function Equipo() {
       {/* Cabecera */}
       <Reveal>
         <Etiqueta punto>
-          {organizacion.nombre} · Plan {plan?.nombre ?? organizacion.plan}
+          {orgVista?.nombre ?? organizacion.nombre} · Plan {plan?.nombre ?? organizacion.plan}
         </Etiqueta>
       </Reveal>
       <TextoRevelado
