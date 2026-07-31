@@ -66,7 +66,20 @@ export async function drenarBuilds(deps: DisparoDeps, opts?: { lote?: number }):
         // 3. Reserva la versión (cobrar_build) + arranca CMA + graba cma_session_id.
         await arrancarConstruccion(
           { state: new PgStateRepo(deps.pool, row.org_id), cosechador: deps.cosechador, ahora: deps.ahora },
-          { orgId: row.org_id, nombre: row.nombre, spec: row.spec, vista: plan.vista, ejemploPath, contratoTexto: JSON.stringify(plan.resultado_contrato) },
+          // `ejemploKey` (la CLAVE, no la ruta temporal) se persiste en la automatización: es lo
+          // único con que un AJUSTE futuro puede volver a probar con los datos del cliente. Sin
+          // ella, arrancarAjuste descarta el ajuste con "la automatización no guardó su
+          // spec/ejemplo". Se pasaba `ejemploPath` —un temp que se borra al terminar— y la clave
+          // se quedaba solo en build_pendiente, que el drainer borra.
+          {
+            orgId: row.org_id,
+            nombre: row.nombre,
+            spec: row.spec,
+            vista: plan.vista,
+            ejemploPath,
+            ejemploKey: row.ejemplo_key,
+            contratoTexto: JSON.stringify(plan.resultado_contrato),
+          },
         );
       } finally {
         await fs.rm(dir, { recursive: true, force: true }).catch(() => {});

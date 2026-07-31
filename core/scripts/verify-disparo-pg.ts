@@ -66,6 +66,11 @@ async function main() {
     check("sacó la solicitud del outbox", (await uno("SELECT count(*)::int AS n FROM build_pendiente WHERE org_id=$1", [A]))?.["n"] === 0);
     const auto = await uno("SELECT id FROM automatizaciones WHERE org_id=$1 AND nombre='Reporte X'", [A]);
     check("creó la automatización", !!auto);
+    // Sin esto un AJUSTE futuro no tiene con que reconstruir y se descarta. El verify no lo
+    // comprobaba: se pasaba ejemploPath (un temp que se borra) y la CLAVE se quedaba solo en
+    // build_pendiente, que el drainer borra al terminar. Lo cazo el primer ajuste real.
+    const conQue = await uno("SELECT (spec IS NOT NULL) AS s, (ejemplo_key IS NOT NULL) AS e FROM automatizaciones WHERE id=$1", [auto?.["id"]]);
+    check("persistió spec Y ejemplo_key (con que se ajusta despues)", conQue?.["s"] === true && conQue?.["e"] === true);
     const ver = await uno("SELECT estado, cma_session_id AS sid, (vista IS NOT NULL) AS v FROM versiones WHERE automatizacion_id=$1", [auto?.["id"]]);
     check("creó la versión 'building' con cma_session_id + vista", ver?.["estado"] === "building" && ver?.["sid"] === "sess_disparo_1" && ver?.["v"] === true);
     check("resolver_sesion_cma la mapea (el webhook la encontrará)", !!(await uno("SELECT version_id FROM resolver_sesion_cma('sess_disparo_1')")));
