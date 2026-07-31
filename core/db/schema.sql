@@ -30,6 +30,26 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+-- El rol de webhooks se crea AQUÍ, junto al de app, y no allá abajo donde están sus GRANT:
+-- el primer `GRANT … TO automata_webhook` aparece ~200 líneas ANTES de donde se creaba, así que
+-- sobre una BD limpia el esquema moría con "role \"automata_webhook\" does not exist". Los dos
+-- roles existen antes de que se les otorgue nada.
+-- Rol del pool de webhooks: no-super, no-dueño (afirmarRolSeguro lo acepta), con los
+-- privilegios MÍNIMOS para el receptor + los handlers, y sujeto a RLS (por eso necesita
+-- los resolvers y app.current_org). NO puede leer cross-org por sí mismo.
+-- Mismo criterio que automata_app: los atributos por defecto no se nombran (nombrarlos exige
+-- superusuario y rompe en Postgres administrado) y el resultado se AFIRMA.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'automata_webhook') THEN
+    CREATE ROLE automata_webhook LOGIN;
+  ELSE
+    ALTER ROLE automata_webhook LOGIN;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'automata_webhook' AND (rolsuper OR rolbypassrls)) THEN
+    RAISE EXCEPTION 'automata_webhook es SUPERUSER o BYPASSRLS: los handlers dejarían de estar contenidos por RLS. Corrígelo con un rol superusuario antes de seguir.';
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS orgs (
   id      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   nombre  text NOT NULL,
@@ -105,20 +125,7 @@ CREATE TABLE IF NOT EXISTS automatizaciones (
 -- solo aplica en instalaciones nuevas).
 ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS entregada   timestamptz;
 ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS en_revision timestamptz;
--- El CHECK de subscriptions.estado se REDEFINE aparte: el CREATE TABLE de arriba solo aplica en
--- instalaciones nuevas, así que en una BD existente el estado 'pendiente' quedaba rechazado por el
--- constraint viejo (y el alta de todo usuario nuevo fallaba). Idempotente.
-ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_estado_check;
-ALTER TABLE subscriptions ADD  CONSTRAINT subscriptions_estado_check
-  CHECK (estado IN ('pendiente', 'activa', 'morosa', 'cancelada'));
 
--- ARRENDAMIENTO de las colas. El claim es un UPDATE en autocommit, así que su FOR UPDATE SKIP
--- LOCKED suelta el lock ANTES del trabajo caro (planner + sesión de CMA, decenas de segundos):
--- dos corridas de cron que se solapan reclamaban LA MISMA fila y construían —y COBRABAN— el mismo
--- build dos o tres veces. Con `tomada_en` solo se reclama lo libre o lo vencido, así que un drainer
--- que muere a la mitad libera su fila solo al vencer el plazo, sin dejarla trabada para siempre.
-ALTER TABLE build_pendiente  ADD COLUMN IF NOT EXISTS tomada_en timestamptz;
-ALTER TABLE ajuste_pendiente ADD COLUMN IF NOT EXISTS tomada_en timestamptz;
 
 ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS spec        jsonb;
 ALTER TABLE automatizaciones ADD COLUMN IF NOT EXISTS ejemplo_key text;
@@ -367,6 +374,28 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   recibido  timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (fuente, id)                   -- dedupe POR FUENTE: CMA y Stripe no colisionan
 );
+
+-- ── RETROFITS de tablas creadas más arriba ─────────────────────────────────
+-- Estos ALTER viven AQUÍ, después de todos los CREATE TABLE, y no junto a la tabla que tocan.
+-- Estaban antes de sus CREATE y por eso `psql -f schema.sql` sobre una BD LIMPIA reventaba en
+-- "relation \"subscriptions\" does not exist": el archivo solo funcionaba sobre bases que YA
+-- tenían las tablas. O sea que no se podía levantar un entorno nuevo —ni recuperar producción—
+-- desde este archivo, y el fallo aparecía a media aplicación, dejando la BD a medias.
+
+-- El CHECK de subscriptions.estado se REDEFINE aparte: el CREATE TABLE de arriba solo aplica en
+-- instalaciones nuevas, así que en una BD existente el estado 'pendiente' quedaba rechazado por el
+-- constraint viejo (y el alta de todo usuario nuevo fallaba). Idempotente.
+ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_estado_check;
+ALTER TABLE subscriptions ADD  CONSTRAINT subscriptions_estado_check
+  CHECK (estado IN ('pendiente', 'activa', 'morosa', 'cancelada'));
+
+-- ARRENDAMIENTO de las colas. El claim es un UPDATE en autocommit, así que su FOR UPDATE SKIP
+-- LOCKED suelta el lock ANTES del trabajo caro (planner + sesión de CMA, decenas de segundos):
+-- dos corridas de cron que se solapan reclamaban LA MISMA fila y construían —y COBRABAN— el mismo
+-- build dos o tres veces. Con `tomada_en` solo se reclama lo libre o lo vencido, así que un drainer
+-- que muere a la mitad libera su fila solo al vencer el plazo, sin dejarla trabada para siempre.
+ALTER TABLE build_pendiente  ADD COLUMN IF NOT EXISTS tomada_en timestamptz;
+ALTER TABLE ajuste_pendiente ADD COLUMN IF NOT EXISTS tomada_en timestamptz;
 
 -- ── Blindaje de search_path (hallazgo ALTA de la revisión de la ventana) ────
 -- `SET search_path = public` NO basta: Postgres busca pg_temp ANTES que public para
@@ -622,22 +651,6 @@ BEGIN
   RETURN true;
 END $fn$;
 GRANT EXECUTE ON FUNCTION app_stripe_vincular(uuid, text) TO automata_webhook;
-
--- Rol del pool de webhooks: no-super, no-dueño (afirmarRolSeguro lo acepta), con los
--- privilegios MÍNIMOS para el receptor + los handlers, y sujeto a RLS (por eso necesita
--- los resolvers y app.current_org). NO puede leer cross-org por sí mismo.
--- Mismo criterio que automata_app: los atributos por defecto no se nombran (nombrarlos exige
--- superusuario y rompe en Postgres administrado) y el resultado se AFIRMA.
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'automata_webhook') THEN
-    CREATE ROLE automata_webhook LOGIN;
-  ELSE
-    ALTER ROLE automata_webhook LOGIN;
-  END IF;
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'automata_webhook' AND (rolsuper OR rolbypassrls)) THEN
-    RAISE EXCEPTION 'automata_webhook es SUPERUSER o BYPASSRLS: los handlers dejarían de estar contenidos por RLS. Corrígelo con un rol superusuario antes de seguir.';
-  END IF;
-END $$;
 
 -- Privilegios MÍNIMOS del rol de webhooks (sujeto a RLS; resuelve cross-org solo por los
 -- SECURITY DEFINER de arriba). Nada de GRANT ALL: lo justo para el receptor + los handlers.

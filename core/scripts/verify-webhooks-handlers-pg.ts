@@ -12,7 +12,11 @@ import { type Evento } from "../src/webhooks/receptor.ts";
 import { type Pool, type PoolClient } from "pg";
 
 const ADMIN_URL = process.env.ADMIN_URL ?? "postgres://postgres@127.0.0.1:55432/postgres";
-const WEBHOOK_URL = process.env.WEBHOOK_URL ?? "postgres://automata_webhook@127.0.0.1:55432/postgres";
+// Acepta los DOS nombres: `DATABASE_URL_WEBHOOK` es el que usa la app (web/.env) y el resto de la
+// suite; `WEBHOOK_URL` es el que tenía solo este script. Con nombres distintos para lo mismo,
+// apuntar la suite a otro cluster dejaba ESTE pool en el de siempre y el test fallaba mezclando
+// dos bases — un falso positivo que parece bug del producto.
+const WEBHOOK_URL = process.env.DATABASE_URL_WEBHOOK ?? process.env.WEBHOOK_URL ?? "postgres://automata_webhook@127.0.0.1:55432/postgres";
 const APP_URL = process.env.DATABASE_URL ?? "postgres://automata_app@127.0.0.1:55432/postgres";
 const A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const AUTO = "e3000000-0000-0000-0000-00000000000a";

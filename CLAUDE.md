@@ -308,6 +308,7 @@ npm run spike                              # corre el caso (Vitrales sintético)
 
 # Motor de Fase 1 — desde core/ (agregado 2026-07-26)
 cd core && npm install
+./scripts/bd-prueba.sh                      # levanta/recrea el Postgres de PRUEBAS en 55432 (idempotente)
 npm run typecheck                          # tsc --noEmit
 npm run verify                             # verify base (run → vista, sin BD)
 # Verifies contra Postgres real (requieren la BD temporal en el puerto 55432):
@@ -393,6 +394,12 @@ cd web && pnpm dev                         # → localhost:3000 (portafolio/cuen
   No se recupera desde dentro — hay que reiniciar la app. Como salida de emergencia se
   puede levantar `pnpm dev` desde un shell que sí tenga permiso, pero conviene decirlo en
   voz alta porque lo normal es usar el panel.
+- **El Postgres de pruebas se levanta con `core/scripts/bd-prueba.sh`** (datadir estable en
+  `~/.automata-pg-prueba`). Antes se creaba a mano DENTRO del scratchpad de la sesión, que es por
+  sesión y macOS limpia: al retomar, los 20 verify `:pg` fallaban todos y parecía un bug del producto.
+- **Para apuntar la suite a otro cluster hay que exportar las TRES envs**: `ADMIN_URL`,
+  `DATABASE_URL` y `DATABASE_URL_WEBHOOK`. Con dos, un pool se queda en el cluster viejo y el test
+  falla mezclando bases.
 - **`ON_ERROR_STOP=1` es obligatorio al aplicar el esquema.** Sin él psql sigue tras un
   error y deja la BD a medias, que es peor que fallar. Y el **SQL Editor de Neon no sirve**
   para `schema.sql`: si tiene el modo *Explain* activo prefija `EXPLAIN` (y `EXPLAIN DO …`
