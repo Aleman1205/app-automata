@@ -106,7 +106,18 @@ try {
       process.exit(2);
     }
   }
-  const r = spawnSync("npm", ["run", verify], { encoding: "utf8", stdio: "pipe" });
+  // TIMEOUT: una mutación puede COLGAR el verify en vez de romperlo (p.ej. si rompe un lock y el
+  // test se queda esperando a otra transacción). Sin tope, el arnés se queda ahí para siempre y se
+  // pierde la corrida — pasó auditando el downgrade de plan. Colgarse NO es "MATA": es su propia
+  // categoría, y en CI es peor que fallar, porque bloquea en vez de reportar.
+  const r = spawnSync("npm", ["run", verify], { encoding: "utf8", stdio: "pipe", timeout: 180_000 });
+  if (r.error && (r.error as { code?: string }).code === "ETIMEDOUT") {
+    console.log(`SE CUELGA — ${verify} no terminó en 180s con la mutación (no falla: se queda esperando).`);
+    console.log(`   ${archivo}: ${JSON.stringify(buscar)} → ${JSON.stringify(reemplazar)}`);
+    console.log("   Detecta el cambio, pero colgarse en CI bloquea el pipeline en vez de reportar.");
+    restaurar();
+    process.exit(0); // cuenta como detectado, pero queda anotado como cuelgue
+  }
   salida = r.status ?? 1;
   const fallos = (r.stdout ?? "").split("\n").filter((l) => l.includes("✗")).slice(0, 4);
   if (salida !== 0) {

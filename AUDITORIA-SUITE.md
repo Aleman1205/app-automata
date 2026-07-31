@@ -1,7 +1,8 @@
 # Auditoría de la suite por MUTACIÓN — en curso
 
-**Estado:** ~55 corridas de mutación sobre 17 de los 38 verify. **6 hallazgos, 6 arreglados y
-verificados** (la mutación que sobrevivía ahora MATA). Ningún hallazgo abierto.
+**Estado:** ~62 corridas de mutación sobre 19 de los 38 verify. **7 hallazgos, 7 arreglados y
+verificados** (la mutación que sobrevivía ahora MATA), más **1 observación** sobre cómo falla
+`verify:plan:pg`. Ningún hallazgo abierto.
 
 **Pregunta:** no "¿pasa el producto?" sino **"¿este test fallaría si se rompiera lo que dice
 vigilar?"**. Método y reglas en `NIGHT-RUN.md`. Arnés: `core/scripts/mutar.ts`.
@@ -32,6 +33,8 @@ vigilar?"**. Método y reglas en `NIGHT-RUN.md`. Arnés: `core/scripts/mutar.ts`
 | Ventana anti-replay de firma de webhook 5 min → 10 años | `verify:webhooks` | — | — cubierto |
 | Tope de reintentos de los drainers (3 → 1M) | `disparo:pg`, `ajuste:pg` | — | — cubierto |
 | Arrendamiento de la cola 15 min → 0 (doble cobro del mismo build) | `verify:disparo:pg` | — | — cubierto |
+| **Quitar el write-once de `app_stripe_vincular`** (la org cambia de customer) | (nadie) | `verify:stripe:pg` | **Alta** ✅ arreglado |
+| Downgrade: no desactivar el excedente / conservar las más nuevas | `verify:plan:pg` **pero COLGÁNDOSE** | — | ver observación |
 
 ## Hallazgo 1 — `verify:pg` probaba el aislamiento de UNA tabla de ocho ✅ ARREGLADO
 
@@ -138,6 +141,37 @@ Faltaba el caso obvio: **presente pero viejo**.
 **Arreglo:** dos identidades nuevas que fijan los dos bordes — 6 min (fuera, debe dar 403) y 4 min
 (dentro, debe pasar). Así se caza tanto ensanchar como encoger la ventana. Verificado con las dos
 mutaciones.
+
+## Hallazgo 7 — la org podía cambiar de customer de Stripe y nadie lo notaba ✅ ARREGLADO
+
+`app_stripe_vincular` es write-once por dos razones distintas, y solo una estaba probada. El test
+cubría *"el customer pertenece a OTRA org"* (`STRIPE_CUSTOMER_DE_OTRA_ORG`), pero no *"la org ya
+tiene OTRO customer"* (`STRIPE_ORG_YA_TIENE_CUSTOMER`). Quitando ese segundo `IF`,
+`verify:stripe:pg` seguía en verde.
+
+**Qué pasaría:** el `stripe_customer_id` de la org se re-apunta al customer nuevo, y **todos** los
+eventos del viejo —pagos, fallos, cancelaciones— pasan a ser no-op silenciosos, porque
+`resolver_org_stripe` ya no los mapea. Es exactamente el bug que este proyecto ya sufrió cuando
+`stripe_customer_id` no tenía escritor: Stripe cobrando y el producto sin enterarse de nada.
+
+**Arreglo** (`verify:stripe:pg` §3bis): un checkout con otro customer sobre una org ya vinculada
+debe fallar, la org debe seguir con el original, el customer nuevo no debe quedar mapeado a nadie —
+y re-vincular el MISMO customer debe seguir siendo idempotente (un webhook duplicado no puede
+romper). Verificado: la mutación ahora MATA.
+
+## Observación — `verify:plan:pg` detecta el fallo, pero COLGÁNDOSE
+
+Dos mutaciones del downgrade (no desactivar el excedente; conservar las automatizaciones más nuevas
+en vez de las más antiguas) **no hacen fallar** a `verify:plan:pg`: lo dejan colgado para siempre.
+El test tiene casos de concurrencia con advisory locks, y al romper el downgrade una transacción se
+queda esperando a otra que nunca cierra.
+
+No es un punto ciego —el cambio se detecta— pero **en CI es peor que un fallo**: bloquea el pipeline
+en vez de reportar, y sin tope se lleva la corrida entera por delante (se llevó dos de esta
+auditoría). Vale la pena ponerle un `statement_timeout` a las transacciones de ese test para que
+falle rápido y con mensaje.
+
+`mutar.ts` ahora corta a los 180 s y lo reporta como `SE CUELGA`, su propia categoría.
 
 ## Notas de método
 
