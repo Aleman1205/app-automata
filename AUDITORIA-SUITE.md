@@ -1,4 +1,4 @@
-# Auditoría de la suite por MUTACIÓN — en curso
+# Auditoría de la suite por MUTACIÓN — TERMINADA (2026-07-31)
 
 **Estado:** ~84 corridas de mutación sobre 24 de los 38 verify. **9 hallazgos, 9 arreglados y
 verificados** (la mutación que sobrevivía ahora MATA), más **1 observación** sobre cómo falla
@@ -265,7 +265,24 @@ falle rápido y con mensaje.
 - `verify:http` sobrevive a las mutaciones de RLS y **no es un hallazgo**: su guarda de membresía
   (capa 6) corta el cross-org antes de que RLS entre en juego. Es lo que ese test debe probar.
 
-## Dudas para el dueño
+## Qué queda (nada bloqueante)
 
-- ¿Vale reforzar `verify:cuota:pg` con el cobro, o basta con que `verify:ciclo:pg` lo cubra? Mi
-  criterio: sí vale — el test debe fallar por lo que promete su nombre, no depender de otro.
+1. **`statement_timeout` en `verify:plan:pg`** para que falle rápido en vez de colgarse. Ver la
+   observación de arriba. Es lo único con impacto real (en CI bloquea el pipeline).
+2. **14 de los 38 verify sin auditar a fondo** — los de menor valor: `incidentes:pg`, `storage`,
+   `pgstate:pg`, `adaptador:pg`, `entrada:gate`, `webhooks:handlers:pg`, `ejecutar:pg`, `rutas`,
+   `notificaciones`, `cuenta:pg`, `lectura:pg` (parcial), `cma`, y los unit de `ciclo`/`cuota`.
+   El arnés queda listo para retomarlos: `npx tsx scripts/mutar.ts [--sql] <archivo> <buscar>
+   <reemplazar> <verify>`.
+3. **Nada que decidir.** Los 9 hallazgos están cerrados y verificados; no hay preguntas abiertas.
+
+## Cómo revisar esto
+
+```
+git diff main..auditoria-suite
+```
+
+9 commits, uno por hallazgo, cada uno explicando qué se rompió y por qué el test no lo vio. El
+**único** cambio a código de producción en toda la auditoría es de una palabra: exportar
+`LIMITES_DEFAULT` (`core/src/run/executor.ts`) para poder afirmar los límites por defecto. Todo lo
+demás son tests.
