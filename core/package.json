@@ -77,7 +77,8 @@
     "verify:stripe:pg": "tsx scripts/verify-stripe-pg.ts",
     "verify:pasarela:pg": "tsx scripts/verify-pasarela-pg.ts",
     "verify:csv": "tsx scripts/verify-csv.ts",
-    "verify:reverificacion": "tsx scripts/verify-reverificacion.ts"
+    "verify:reverificacion": "tsx scripts/verify-reverificacion.ts",
+    "verify:contenedor": "tsx scripts/verify-contenedor.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",
