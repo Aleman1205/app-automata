@@ -132,5 +132,35 @@ const loteMalo = validarLote([csv(), f(txt('<!DOCTYPE r [<!ENTITY x SYSTEM "file
 check("lote con un hostil → rechazado (el peor manda), con detalle por-archivo", loteMalo.veredicto === "rechazado" && loteMalo.archivos.some((a) => a.motivo === "xxe"));
 check("lote con un ilegible → a_revisar", validarLote([csv(), f(bin, "txt")]).veredicto === "a_revisar");
 
+console.log("\n7. Los límites POR DEFECTO (los que corren en producción):");
+// Todos los casos de arriba INYECTAN límites pequeños (`lim({...})`), así que prueban que el gate
+// SABE bloquear — pero no que ESTÉ CONFIGURADO para bloquear. Una auditoría por mutación lo
+// demostró: poniendo maxEntradas a 10 millones, maxDescomprimido a 900 GB o maxArchivos a 10
+// millones, TODA la suite seguía en verde. En producción se usan los defaults
+// (`gatearArchivoBytes(...)` los toma de LIMITES), o sea que se podía desarmar la defensa contra
+// zip-bombs y subidas gigantes sin que un solo test se quejara.
+//
+// Se comprueban dos cosas distintas: (a) que los defaults sigan en un rango sensato, y (b) el
+// comportamiento REAL sin inyectar nada — que es lo que de verdad corre.
+check(`maxBytesArchivo por defecto es sensato (${(LIMITES.maxBytesArchivo / 1024 / 1024).toFixed(0)} MB)`,
+  LIMITES.maxBytesArchivo > 0 && LIMITES.maxBytesArchivo <= 100 * 1024 * 1024);
+check(`maxPixeles por defecto es sensato (${(LIMITES.maxPixeles / 1e6).toFixed(0)} MP)`,
+  LIMITES.maxPixeles > 0 && LIMITES.maxPixeles <= 500_000_000);
+check(`zip.maxEntradas por defecto es sensato (${LIMITES.zip.maxEntradas})`,
+  LIMITES.zip.maxEntradas > 0 && LIMITES.zip.maxEntradas <= 10_000);
+check(`zip.maxDescomprimido por defecto es sensato (${(LIMITES.zip.maxDescomprimido / 1024 / 1024).toFixed(0)} MB)`,
+  LIMITES.zip.maxDescomprimido > 0 && LIMITES.zip.maxDescomprimido <= 1024 * 1024 * 1024);
+check(`lote.maxArchivos por defecto es sensato (${LIMITES.lote.maxArchivos})`,
+  LIMITES.lote.maxArchivos > 0 && LIMITES.lote.maxArchivos <= 500);
+check(`lote.maxBytesTotal por defecto es sensato (${(LIMITES.lote.maxBytesTotal / 1024 / 1024).toFixed(0)} MB)`,
+  LIMITES.lote.maxBytesTotal > 0 && LIMITES.lote.maxBytesTotal <= 1024 * 1024 * 1024);
+
+// Y el comportamiento con los defaults, SIN inyectar: un ZIP con más entradas de las permitidas se
+// rechaza de verdad. Es la prueba de que el número no es decorativo.
+const demasiadas = Array.from({ length: LIMITES.zip.maxEntradas + 1 }, (_, i) => ({ name: `f${i}.csv`, data: txt("a,b\n1,2\n") }));
+check("ZIP con más entradas que el default → rechazado SIN inyectar límites", rech(f(zip(demasiadas), "zip"), "zip_entradas"));
+const loteGrande = Array.from({ length: LIMITES.lote.maxArchivos + 1 }, () => csv());
+check("lote con más archivos que el default → rechazado SIN inyectar límites", validarLote(loteGrande).veredicto === "rechazado");
+
 console.log(`\n${ok ? "✓ M4 (validación de insumos hostiles) PROBADO" : "✗ FALLÓ"} — inflación acotada, XXE-en-xlsx, spoofing, pixel-flood, lote.`);
 process.exit(ok ? 0 : 1);

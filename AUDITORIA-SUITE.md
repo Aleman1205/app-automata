@@ -18,6 +18,11 @@ vigilar?"**. Método y reglas en `NIGHT-RUN.md`. Arnés: `core/scripts/mutar.ts`
 | RLS de `invitaciones` / `ejecuciones` → `USING (true)` | (nadie, antes) | **`verify:pg`** | **Alta** ✅ arreglado |
 | **`MAX_AJUSTES = 3` → `99`** (el tope de ajustes del plan) | `verify:ciclo` (unit) | **`verify:ciclo:pg`**, `ajuste:pg` | **Alta** ✅ arreglado |
 | Invertir `clasificar()` (reparaciones cobran, cambios gratis) | `ciclo`, `ciclo:pg`, `ajuste:pg` | — | — cubierto |
+| Ventana gratis 30 días → 0 / 3000 días | `verify:ventana:pg`, `ciclo:pg` | — | — cubierto |
+| Circuit breaker de reparaciones: nunca engancha | `verify:reparaciones:pg` | — | — cubierto |
+| **Desactivar el tope de zip-bomb** (`maxEntradas`, `maxDescomprimido`) | (nadie) | `entrada`, `entrada:gate` | **Alta** ✅ arreglado |
+| **Desactivar el tope de tamaño** de archivo y de lote | (nadie) | `entrada`, `entrada:gate` | **Alta** ✅ arreglado |
+| Desactivar el tope de pixel-flood | `verify:entrada` | — | — cubierto |
 
 ## Hallazgo 1 — `verify:pg` probaba el aislamiento de UNA tabla de ocho ✅ ARREGLADO
 
@@ -69,6 +74,26 @@ un 500 en vez de "ya usaste tus ajustes". Al revés (bajar el CHECK) los agotar�
 —`MAX_AJUSTES + 1` debe violar y `MAX_AJUSTES` debe entrar— y así falla si cualquiera de las dos
 declaraciones se mueve sin la otra. Verificado: `MAX_AJUSTES = 99` ahora MATA.
 
+## Hallazgo 4 — el gate probaba que SABE bloquear, no que ESTÉ configurado para bloquear ✅ ARREGLADO
+
+El gate de entrada es la defensa contra archivos hostiles (docs/11 §4bis: XXE, zip-bomb,
+pixel-flood, spoofing). Sus tests son buenos… pero **cada caso inyecta límites pequeños**
+(`lim({ maxBytesArchivo: 100 })`, `lim({ zip: {...} })`) para poder disparar el rechazo con
+fixtures diminutos. Nadie ejercitaba los valores **por defecto**, que son justo los que corren en
+producción (`gatearArchivoBytes(...)` los toma de `LIMITES`).
+
+Resultado: subiendo `zip.maxEntradas` a 10 millones, `zip.maxDescomprimido` a 900 GB,
+`maxBytesArchivo` a 900 GB o `lote.maxArchivos` a 10 millones, **la suite entera seguía en verde**.
+Se podía desarmar la defensa contra zip-bombs y subidas gigantes sin que un solo test se quejara.
+De los cinco topes, solo el de pixel-flood estaba cubierto.
+
+**Arreglo** (`verify:entrada` §7): dos cosas distintas, porque prueban cosas distintas —
+(a) que cada default siga en un rango sensato, y (b) el comportamiento **sin inyectar nada**: un ZIP
+con `maxEntradas + 1` entradas y un lote con `maxArchivos + 1` archivos deben rechazarse con la
+configuración real. La (b) es la que demuestra que el número no es decorativo.
+
+Verificado: las cinco mutaciones que antes sobrevivían ahora **MATAN**.
+
 ## Notas de método
 
 - Casi todo el cobro y todo el aislamiento viven en **SQL**, no en TypeScript. Mutar `schema.sql` no
@@ -83,6 +108,9 @@ declaraciones se mueve sin la otra. Verificado: `MAX_AJUSTES = 99` ahora MATA.
   con el 3). `mutar.ts` ahora lo detecta y reporta `INCONCLUSO`. Sin esa guarda, media auditoría del
   esquema habría sido humo. Para probar un constraint hay que mutarlo con `ALTER TABLE … DROP/ADD
   CONSTRAINT` o recrear la BD desde cero.
+- **Un test que inyecta su propia configuración prueba el mecanismo, no el sistema.** Es el patrón
+  del hallazgo 4 y conviene buscarlo en otros sitios: si el test pasa `lim`/`opts`/`deps` a medida,
+  los valores reales de producción quedan sin ejercitar.
 - `verify:http` sobrevive a las mutaciones de RLS y **no es un hallazgo**: su guarda de membresía
   (capa 6) corta el cross-org antes de que RLS entre en juego. Es lo que ese test debe probar.
 
