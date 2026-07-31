@@ -31,7 +31,8 @@
     "./pipeline/ajuste": "./src/pipeline/ajuste.ts",
     "./billing/plan": "./src/billing/plan.ts",
     "./billing/pasarela": "./src/billing/pasarela.ts",
-    "./ops/killswitch": "./src/ops/killswitch.ts"
+    "./ops/killswitch": "./src/ops/killswitch.ts",
+    "./salida/csv": "./src/salida/csv.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -74,7 +75,8 @@
     "planner:live": "tsx scripts/planner.ts",
     "verify:ajuste:pg": "tsx scripts/verify-ajuste-pg.ts",
     "verify:stripe:pg": "tsx scripts/verify-stripe-pg.ts",
-    "verify:pasarela:pg": "tsx scripts/verify-pasarela-pg.ts"
+    "verify:pasarela:pg": "tsx scripts/verify-pasarela-pg.ts",
+    "verify:csv": "tsx scripts/verify-csv.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",
