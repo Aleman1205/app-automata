@@ -29,7 +29,18 @@ export class CuotaExcedida extends Error {
 /** El mes UTC actual como 'YYYY-MM'. Se pasa explícito a los consumidores para que
  *  los tests sean deterministas; este helper es la conveniencia para producción.
  *  NOTA (revisión M3): mes-calendario UTC, no alineado al ciclo de facturación
- *  (subscriptions.periodo_fin) ni a la zona MX — pendiente de M3-billing. */
+ *  (subscriptions.periodo_fin) ni a la zona MX — pendiente de M3-billing.
+ *
+ *  ⚠️ NO lo uses para leer ni escribir `uso_periodo`. HOY NO LO LLAMA NADIE (2026-08-01), y así
+ *  conviene que siga: quien cobra de verdad es la BD, con `to_char(now(),'YYYY-MM')` en hora
+ *  LOCAL del servidor (app_consumir / cobrar_build / el endpoint de cuenta). Esto devuelve UTC.
+ *  Con el servidor en CST (-06:00) los dos valores coinciden 18 horas al día y divergen las
+ *  otras 6: el último día del mes, pasadas las 18:00 locales, este helper ya dice el mes
+ *  siguiente. Usarlo para consultar el consumo enseñaría 0 mientras el trigger cobra en el mes
+ *  anterior; usarlo para escribir partiría el contador en dos filas y regalaría cuota.
+ *  Ya mordió — a los TESTS, el 31/07/2026 a las 18:52 (ver AUDITORIA-SUITE.md). Si necesitas el
+ *  período en JS, PREGÚNTASELO A LA BD (`SELECT to_char(now(),'YYYY-MM')`): una segunda
+ *  implementación de la misma regla es libre de volver a separarse. */
 export function periodoActual(ahora: Date = new Date()): string {
   const y = ahora.getUTCFullYear();
   const m = String(ahora.getUTCMonth() + 1).padStart(2, "0");

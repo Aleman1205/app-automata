@@ -715,3 +715,54 @@ reconocer una forma sintáctica), `verify-cma-clasificar.ts` (2), `verify-ejecut
 
 Cada mutación de arriba queda como criterio de aceptación: el refuerzo sirve cuando la mutación
 **MATA**.
+
+---
+
+## Apéndice — el runner de contenedor y el bug de zona horaria (2026-08-01)
+
+**`verify:contenedor` corrió por primera vez.** No había podido: Docker no arrancaba porque el
+disco estaba al 99% (2 GiB libres de 228) y la VM no podía escribir ni su log de arranque. El mayor
+consumidor era el propio Docker — 36 GB en `Docker.raw` — así que no podía arrancar por su propia
+basura, y `docker system prune` necesita el daemon vivo. Se rompió el círculo borrando la imagen.
+
+Las 133 líneas de `ContainerRunExecutor` nunca se habían ejercido. Al correrlas, **3 fallos reales**:
+
+| Fallo | Por qué importaba |
+|---|---|
+| **Huérfanos al timeout** | Matar el cliente de `docker` NO mata el contenedor. Un bucle infinito seguía quemando CPU del host. El comentario del código afirmaba lo contrario. Se arregló con `--name` + `docker rm -f`. |
+| **Faltaba la escalera de convenciones** | El mismo fallo que ya costó un build de ~$1.8: el agente es estocástico y puede leer `argv[2]` como ruta del resultado. |
+| **Sin cotas de salida** | `/out` es un mount al disco del HOST, donde `--read-only` no alcanza. |
+
+La sospecha que MÁS pesaba antes de ejecutar —permisos de `/out` con `--user 65534`— resultó
+**equivocada**. Y el primer arreglo del timeout introdujo un bug propio: al hacer que el rechazo
+esperara a `docker rm`, el evento `close` del cliente ganaba la carrera y resolvía con `exit -1`
+en vez de timeout, así que la escalera reintentaba y el Run tardaba el doble antes de dar un error
+falso. Lo cazó el mismo test. 7/7 en verde.
+
+`runsc` (gVisor) NO se probó: es solo Linux. Al desplegar es la única variable nueva.
+
+### El bug de zona horaria: dos relojes para el mismo mes
+
+Tras esos cambios, `verify:cuota:pg` y `verify:pgstate:pg` empezaron a fallar. **No era el
+producto** — el cobro reproducido a mano funcionaba. Los tests calculaban el período con
+`new Date().toISOString().slice(0,7)`, o sea el mes en **UTC**, mientras que quien cobra —
+`cobrar_build` → `app_consumir` — usa `to_char(now(),'YYYY-MM')`, la hora **LOCAL** del servidor.
+
+Con la máquina en CST (-06:00) coinciden 18 horas al día y divergen las otras 6. El 31 de julio a
+las 18:52 locales, UTC ya estaba en agosto: el cobro caía en `2026-07` y el test lo buscaba en
+`2026-08`. **Verde a mediodía, rojo por la tarde, sin que una línea del producto cambiara.**
+
+El arreglo NO es convertir la zona en JS: eso sería una segunda implementación de la misma regla,
+libre de volver a separarse. Ahora el período se le **pregunta a la BD**, así coinciden por
+construcción.
+
+⚠️ **Honestidad sobre la verificación:** al arreglarlo ya era 1 de agosto y la ventana se había
+cerrado (UTC y local coinciden de nuevo), así que el verde de hoy **no re-prueba el arreglo**;
+solo prueba que no rompió nada. La evidencia es el fallo observado y su desaparición, más que el
+valor de la BD se mueve con la zona horaria y el de JS no.
+
+**`periodoActual()` (`src/billing/cuota.ts`) tiene el mismo defecto y NO lo llama nadie.** Devuelve
+UTC y se anuncia como "la conveniencia para producción": el primer llamador reintroduce este bug
+donde sí cuesta dinero — enseñar 0 de consumo mientras el trigger cobra, o partir el contador en
+dos filas y regalar cuota. Queda con una advertencia grande encima. Es la tercera función muerta
+que aparece en esta auditoría, junto a `entitlementsDe`/`esPlan` y `resolverIncidente`.

@@ -115,7 +115,14 @@ async function main() {
     // gratis e ilimitados y el test de CUOTA no se enteraba. Lo cazaba verify:ciclo:pg de rebote.
     // Aquí se ejercita el camino que corre de verdad: insertar una versión dispara el trigger.
     console.log("\n6bis. El COBRO ocurre en el CAMINO REAL (insertar una versión), no solo llamando al contador:");
-    const mesActual = new Date().toISOString().slice(0, 7);
+    // El mes se le PREGUNTA A LA BD. Era `new Date().toISOString().slice(0,7)` = mes en **UTC**,
+    // pero quien cobra es `cobrar_build` → `app_consumir(to_char(now(),'YYYY-MM'))`, o sea la hora
+    // **LOCAL**. En CST (-06:00) coinciden 18 h al día y divergen las otras 6: el último día del
+    // mes, pasadas las 18:00 locales, UTC ya está en el mes siguiente, el cobro cae en un período
+    // y este check lo busca en otro. Verde a mediodía, rojo a las 18:52 del 31 de julio, sin que
+    // nada del producto cambiara. Convertir la zona en JS sería una segunda implementación de la
+    // misma regla y volvería a separarse; preguntando a la BD coinciden por construcción.
+    const mesActual = (await admin.query<{ p: string }>("SELECT to_char(now(),'YYYY-MM') AS p")).rows[0]!.p;
     const genE = async () => (await admin.query<{ n: number }>(
       "SELECT coalesce(generaciones,0)::int AS n FROM uso_periodo WHERE org_id=$1 AND periodo=$2", [E, mesActual]
     )).rows[0]?.n ?? 0;

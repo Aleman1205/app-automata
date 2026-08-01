@@ -23,7 +23,18 @@ const A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const C = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const D = "dddddddd-dddd-dddd-dddd-dddddddddddd";
-const PER = () => new Date().toISOString().slice(0, 7); // YYYY-MM (mismo formato que cobrar_build)
+// El período se le PREGUNTA A LA BD, no se calcula en JS.
+// Antes era `new Date().toISOString().slice(0,7)`, o sea el mes en **UTC**, mientras que quien
+// cobra de verdad —`cobrar_build`/`app_consumir`— usa `to_char(now(),'YYYY-MM')`, o sea la hora
+// **LOCAL** del servidor. Con la máquina en CST (-06:00) los dos coinciden 18 horas al día y
+// divergen las otras 6: el último día del mes, a partir de las 18:00 locales, UTC ya está en el
+// mes siguiente. Este test sembraba la cuota agotada en un mes y el trigger cobraba en otro, así
+// que el tope no mordía y el verify fallaba sin que nada del producto estuviera roto.
+// Pasó de verdad: verde a mediodía, rojo a las 18:52 del 31 de julio.
+// Convertir la zona horaria en JS solo movería el problema — sería una SEGUNDA implementación de
+// la misma regla, libre de volver a separarse. Preguntando a la BD coinciden por construcción.
+const PER = async (p: { query: (q: string) => Promise<{ rows: Array<{ p: string }> }> }): Promise<string> =>
+  (await p.query("SELECT to_char(now(),'YYYY-MM') AS p")).rows[0]!.p;
 // a4: el gate de entrada ahora corre en construir/ejecutar, así que se usa un archivo REAL
 // válido (no '/dev/null' ni inputs:{}, que el gate rechazaría por 'vacio' antes de los asserts).
 let MUESTRA: string;
@@ -100,7 +111,7 @@ async function main() {
 
     console.log("\n5. La cuota corta el build A TRAVÉS del repo (plan base = 6 gen):");
     const autoC = await new PgStateRepo(app, C).crearAutomatizacion({ orgId: C, nombre: "c" });
-    await admin.query("INSERT INTO uso_periodo (org_id,periodo,generaciones) VALUES ($1,$2,6) ON CONFLICT (org_id,periodo) DO UPDATE SET generaciones=6", [C, PER()]);
+    await admin.query("INSERT INTO uso_periodo (org_id,periodo,generaciones) VALUES ($1,$2,6) ON CONFLICT (org_id,periodo) DO UPDATE SET generaciones=6", [C, await PER(admin)]);
     check("crearVersion con generaciones agotadas → CuotaExcedida", await lanza(() => new PgStateRepo(app, C).crearVersion({ automatizacionId: autoC.id, numero: 1, estado: "building", creada: "x" }), CuotaExcedida));
 
     console.log("\n6. Org SIN subscription no puede crear (integridad):");
@@ -131,7 +142,7 @@ async function main() {
     // (a) crearAutomatizacion no escribe en el tenant equivocado (repo mal-vinculado).
     check("crearAutomatizacion({orgId: B}) en un repo ligado a A → lanza (mismatch)", await lanza(() => repoA.crearAutomatizacion({ orgId: B, nombre: "trampa" }), Error));
     // (b) el tope de ejecuciones se aplica en el camino real (trg cobrar_ejecucion).
-    await admin.query("INSERT INTO uso_periodo (org_id,periodo,ejecuciones) VALUES ($1,$2,10000) ON CONFLICT (org_id,periodo) DO UPDATE SET ejecuciones=10000", [A, PER()]);
+    await admin.query("INSERT INTO uso_periodo (org_id,periodo,ejecuciones) VALUES ($1,$2,10000) ON CONFLICT (org_id,periodo) DO UPDATE SET ejecuciones=10000", [A, await PER(admin)]);
     check("crearEjecucion con ejecuciones agotadas → CuotaExcedida", await lanza(() => repoA.crearEjecucion({ versionId: ver.id, estado: "reservada", ms: 0, costoUsd: 0, creada: "x" }), CuotaExcedida));
     await admin.query("UPDATE uso_periodo SET ejecuciones=0 WHERE org_id=$1", [A]);
     // (c) ejecutar recomputa la clave: aunque artefacto_key esté tampereado, corre igual.
