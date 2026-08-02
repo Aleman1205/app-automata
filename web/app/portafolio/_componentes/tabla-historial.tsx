@@ -1,22 +1,38 @@
 "use client";
 
-import { motion } from "motion/react";
 import { Avatar } from "@/components/ui/avatar";
 import { equipo, obtenerMiembro, type EjecucionPrevia } from "@/lib/datos";
 
-// Tabla de ejecuciones anteriores. Sigue el estilo de la Tabla del sistema
-// (encabezado mono, filas en cascada, hover), pero permite pintar "Falló"
-// en ladrillo y mostrar QUIÉN ejecutó con su avatar — cosas que la Tabla base
-// no soporta.
+// Tabla de ejecuciones anteriores. Sigue el estilo de la Tabla del sistema (encabezado mono,
+// hover), pero permite pintar "Falló" en ladrillo y mostrar QUIÉN ejecutó con su avatar — cosas
+// que la Tabla base no soporta.
+//
+// Las filas ya se pueden ABRIR. Antes esta tabla listaba fecha, duración y estado, y ahí moría:
+// el resultado estaba guardado y la API lo devolvía, pero no había dónde hacer clic. En la
+// práctica el cliente veía su reporte UNA vez y, para volver a verlo, tenía que ejecutar otra vez
+// — gastando una ejecución de su cuota por consultar algo que ya había pagado.
+//
+// Sin cascada por fila, por lo mismo que la Tabla del sistema: es una lista de datos, no una
+// entrada de escena.
 const encabezados = [
   { etiqueta: "Fecha", alinear: "text-left" },
   { etiqueta: "Archivo", alinear: "text-left" },
   { etiqueta: "Ejecutó", alinear: "text-left" },
   { etiqueta: "Duración", alinear: "text-right" },
   { etiqueta: "Estado", alinear: "text-right" },
+  { etiqueta: "", alinear: "text-right" },
 ];
 
-export function TablaHistorial({ historial }: { historial: EjecucionPrevia[] }) {
+export function TablaHistorial({
+  historial,
+  onAbrir,
+  abriendo,
+}: {
+  historial: EjecucionPrevia[];
+  /** Ausente en el prototipo demo (sus datos falsos no tienen id que abrir). */
+  onAbrir?: (id: string) => void;
+  abriendo?: string | null;
+}) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-sm">
@@ -37,17 +53,9 @@ export function TablaHistorial({ historial }: { historial: EjecucionPrevia[] }) 
             const quien = obtenerMiembro(ej.por);
             const indice = equipo.findIndex((m) => m.id === ej.por);
             return (
-              <motion.tr
+              <tr
                 key={`${ej.fecha}-${i}`}
                 className="border-b border-linea/60 transition-colors duration-200 hover:bg-papel"
-                initial={{ opacity: 0, y: 10 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, margin: "-20px" }}
-                transition={{
-                  duration: 0.4,
-                  delay: i * 0.05,
-                  ease: [0.22, 1, 0.36, 1],
-                }}
               >
                 <td className="py-3 pr-4 tabular-nums">{ej.fecha}</td>
                 <td className="py-3 pr-4">{ej.archivo}</td>
@@ -77,7 +85,23 @@ export function TablaHistorial({ historial }: { historial: EjecucionPrevia[] }) 
                 >
                   {ej.estado}
                 </td>
-              </motion.tr>
+                <td className="py-3 text-right">
+                  {onAbrir && ej.id && ej.tieneResultado ? (
+                    <button
+                      type="button"
+                      onClick={() => onAbrir(ej.id!)}
+                      disabled={abriendo === ej.id}
+                      className="rounded-full border border-linea px-3 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-sepia transition-colors hover:bg-crema hover:text-tinta disabled:opacity-50"
+                    >
+                      {abriendo === ej.id ? "Abriendo…" : "Ver"}
+                    </button>
+                  ) : (
+                    // Una corrida que falló no dejó resultado. Un botón muerto haría creer que
+                    // se perdió algo; el guion dice que no hubo nada que guardar.
+                    <span className="font-mono text-[10px] text-sepia/60">—</span>
+                  )}
+                </td>
+              </tr>
             );
           })}
         </tbody>

@@ -1,3 +1,4 @@
+import { parametrosDeSpec } from "../vista/parametros.ts";
 import { crearAutomatizacion, invitarPorCorreo } from "../billing/cuota.ts";
 import { congelar, estadoDelCiclo, AjusteNoPermitido } from "../ciclo/servicio.ts";
 import { IntakeAgent, IntakeError } from "../intake/agent.ts";
@@ -310,7 +311,7 @@ export const verAutomatizacionEP: Endpoint<{ id: string }> = {
   accion: "ver",
   esquema: esquemaVerId,
   handler: async ({ cliente, input }) => {
-    const a = await cliente.query("SELECT id, nombre, activa, ciclo_estado, ajustes_usados, creada, entregada, en_revision FROM automatizaciones WHERE id = $1", [input.id]);
+    const a = await cliente.query("SELECT id, nombre, activa, ciclo_estado, ajustes_usados, creada, entregada, en_revision, spec FROM automatizaciones WHERE id = $1", [input.id]);
     const auto = a.rows[0];
     if (!auto) return { status: 404, cuerpo: { error: "no_encontrada" } }; // RLS: ajena/inexistente → 0 filas
     const vs = await cliente.query("SELECT numero, estado, tipo, creada, (artefacto_key IS NOT NULL) AS con_artefacto FROM versiones WHERE automatizacion_id = $1 ORDER BY numero DESC", [input.id]);
@@ -336,6 +337,10 @@ export const verAutomatizacionEP: Endpoint<{ id: string }> = {
       ejecuciones: ejec.rows[0]?.n ?? 0, ultimaEjecucion: iso(ejec.rows[0]?.ultima ?? null),
       versiones: vs.rows.map((v) => ({ numero: v.numero, estado: v.estado, tipo: v.tipo, creada: iso(v.creada) })),
       vista: vista.rows[0]?.vista ?? null, // el layout de la última versión lista; los DATOS del resultado son otro slice (ejecución)
+      // Con qué reglas se construyó. Se DERIVA del spec aquí y no se manda el spec crudo: así el
+      // mapeo a filas legibles vive en un solo lugar (vista/parametros.ts) y lo comparten la
+      // pantalla y el .xlsx, en vez de que cada uno invente su propio formato.
+      parametros: parametrosDeSpec((auto as { spec?: Spec }).spec),
     });
   },
 };

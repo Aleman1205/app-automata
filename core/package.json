@@ -36,7 +36,8 @@
     "./marca": "./src/marca.ts",
     "./types": "./src/types.ts",
     "./vista/formato": "./src/vista/formato.ts",
-    "./salida/xlsx": "./src/salida/xlsx.ts"
+    "./salida/xlsx": "./src/salida/xlsx.ts",
+    "./vista/parametros": "./src/vista/parametros.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -84,7 +85,8 @@
     "verify:reverificacion": "tsx scripts/verify-reverificacion.ts",
     "verify:contenedor": "tsx scripts/verify-contenedor.ts",
     "verify:formato": "tsx scripts/verify-formato.ts",
-    "verify:xlsx": "tsx scripts/verify-xlsx.ts"
+    "verify:xlsx": "tsx scripts/verify-xlsx.ts",
+    "verify:parametros": "tsx scripts/verify-parametros.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",

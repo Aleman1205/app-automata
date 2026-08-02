@@ -27,7 +27,8 @@ import { type Sesion, type RateLimiter, type Solicitud, type Respuesta } from "a
 import { plantillaCorreo, type Notificador, type EventoCorreo, type Correo } from "automata-core/ops/notificaciones";
 import { MARCA } from "automata-core/marca";
 import { aXlsx } from "automata-core/salida/xlsx";
-import type { Resultado } from "automata-core/types";
+import type { Resultado, Spec } from "automata-core/types";
+import { parametrosDeSpec } from "automata-core/vista/parametros";
 import { orgsDeUsuario, provisionarUsuario } from "automata-core/ops/onboarding";
 import { recibir, type Evento } from "automata-core/webhooks/receptor";
 import { aplicarDowngrade } from "automata-core/billing/plan";
@@ -764,8 +765,8 @@ export async function descargarResultado(req: Request, orgId: string): Promise<R
     // Se genera al vuelo desde el mismo resultado que ve la pantalla, no se guarda: el .json ya
     // está en storage y el workbook es una PROYECCIÓN de él, así que persistirlo sería un segundo
     // original que puede quedar desincronizado en el primer cambio de formato.
-    const meta = await cliente.query<{ nombre: string; creada: string }>(
-      `SELECT a.nombre, e.creada::text AS creada
+    const meta = await cliente.query<{ nombre: string; creada: string; spec: Spec | null }>(
+      `SELECT a.nombre, a.spec, e.creada::text AS creada
          FROM ejecuciones e JOIN versiones v ON v.id = e.version_id
          JOIN automatizaciones a ON a.id = v.automatizacion_id
         WHERE e.id = $1`,
@@ -775,6 +776,9 @@ export async function descargarResultado(req: Request, orgId: string): Promise<R
     const xlsx = await aXlsx(resultado, {
       titulo: nombre,
       cuando: meta.rows[0]?.creada ? `Ejecutada el ${new Date(meta.rows[0].creada).toLocaleString("es-MX")}` : undefined,
+      // La hoja de Parámetros sale del MISMO derivador que la pestaña de la pantalla, así el
+      // archivo y lo que el cliente vio no pueden contarle cosas distintas.
+      parametros: parametrosDeSpec(meta.rows[0]?.spec ?? undefined),
     });
     const archivo = `${nombre.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "resultado"}.xlsx`;
     return {

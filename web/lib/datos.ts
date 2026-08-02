@@ -88,6 +88,10 @@ export interface Automatizacion {
   resultado?: ResultadoDemo;
   historial: EjecucionPrevia[];
   cambios: CambioVersion[];
+  // Con qué reglas se construyó, derivadas del spec del intake POR EL BACKEND (no reinterpretadas
+  // aquí: ver core/src/vista/parametros.ts). Alimentan la pestaña "Parámetros" del resultado y la
+  // hoja homónima del .xlsx. Opcional porque los datos falsos del prototipo no la traen.
+  parametros?: { etiqueta: string; valor: string }[];
 }
 
 // ── Automatizaciones del portafolio ─────────────────────────────────────────

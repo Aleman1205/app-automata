@@ -28,6 +28,32 @@ const NOMBRE: Record<Seccion, string> = {
   parametros: "Parámetros",
 };
 
+// Una PESTAÑA POR TABLA dentro de 'detalle', igual que el .xlsx hace una hoja por tabla. Tenerlas
+// apiladas en una sola pestaña y separadas en el archivo serían dos productos distintos — y en una
+// conciliación (conciliados · en banco no en registro · en registro no en banco · diferencias) la
+// pila obliga a scrollear cientos de filas para llegar a la siguiente. Cada tabla con título se
+// vuelve su propia pestaña; lo que no es tabla, o no tiene título, se queda junto bajo "Detalle".
+interface Grupo { clave: string; nombre: string; bloques: Bloque[]; seccion: Seccion }
+
+function agrupar(bloques: Bloque[]): Grupo[] {
+  const grupos: Grupo[] = [];
+  for (const seccion of ORDEN) {
+    const dela = bloques.filter((b) => (b.seccion ?? "detalle") === seccion);
+    if (dela.length === 0) continue;
+    if (seccion !== "detalle") {
+      grupos.push({ clave: seccion, nombre: NOMBRE[seccion], bloques: dela, seccion });
+      continue;
+    }
+    const conTitulo = dela.filter((b) => b.tipo === "tabla" && b.titulo);
+    const resto = dela.filter((b) => !(b.tipo === "tabla" && b.titulo));
+    if (resto.length) grupos.push({ clave: "detalle", nombre: NOMBRE.detalle, bloques: resto, seccion });
+    conTitulo.forEach((b, i) => {
+      grupos.push({ clave: `detalle-${i}`, nombre: (b as Extract<Bloque, { tipo: "tabla" }>).titulo!, bloques: [b], seccion });
+    });
+  }
+  return grupos;
+}
+
 function ContenidoBloque({ bloque }: { bloque: Bloque }) {
   switch (bloque.tipo) {
     case "resumen":
@@ -141,37 +167,34 @@ function pendientes(bloques: Bloque[]): number {
 }
 
 export function Resultado({ bloques }: { bloques: Bloque[] }) {
-  const porSeccion = ORDEN.map((s) => ({
-    seccion: s,
-    // Un bloque sin `seccion` cae en 'detalle': el resolver ya la asigna siempre, pero el front
-    // no puede asumir que el dato viejo del prototipo (lib/datos.ts) la traiga.
-    bloques: bloques.filter((b) => (b.seccion ?? "detalle") === s),
-  })).filter((g) => g.bloques.length > 0);
+  // Un bloque sin `seccion` cae en 'detalle': el resolver ya la asigna siempre, pero el front no
+  // puede asumir que el dato viejo del prototipo (lib/datos.ts) la traiga.
+  const grupos = agrupar(bloques);
 
-  const [activa, setActiva] = useState<Seccion>(porSeccion[0]?.seccion ?? "resumen");
-  const actual = porSeccion.find((g) => g.seccion === activa) ?? porSeccion[0];
+  const [activa, setActiva] = useState<string>(grupos[0]?.clave ?? "resumen");
+  const actual = grupos.find((g) => g.clave === activa) ?? grupos[0];
 
-  // Con una sola sección las pestañas sobran: serían una fila de chrome sin ninguna elección.
-  const conPestanas = porSeccion.length > 1;
+  // Con una sola pestaña sobran: serían una fila de chrome sin ninguna elección.
+  const conPestanas = grupos.length > 1;
 
   return (
     <div className="flex flex-col gap-8">
       {conPestanas && (
         <div className="flex flex-wrap gap-1 border-b border-linea" role="tablist">
-          {porSeccion.map((g) => {
+          {grupos.map((g) => {
             const n = g.seccion === "revisar" ? pendientes(g.bloques) : 0;
-            const sel = g.seccion === activa;
+            const sel = g.clave === activa;
             return (
               <button
-                key={g.seccion}
+                key={g.clave}
                 role="tab"
                 aria-selected={sel}
-                onClick={() => setActiva(g.seccion)}
+                onClick={() => setActiva(g.clave)}
                 className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-sm transition-colors ${
                   sel ? "border-tinta text-tinta" : "border-transparent text-sepia hover:text-tinta"
                 }`}
               >
-                {NOMBRE[g.seccion]}
+                {g.nombre}
                 {n > 0 && (
                   <span className="rounded-full bg-ambar/16 px-2 py-0.5 font-mono text-[10px] font-semibold text-ambar">
                     {n}

@@ -24,7 +24,9 @@ import {
   ejecutarArchivo,
   congelarAutomatizacion,
   orgActualVista,
+  obtenerResultado,
 } from "@/lib/automata/lectura";
+import { bloqueDeParametros } from "automata-core/vista/parametros";
 import { Volver } from "../_componentes/volver";
 import { TablaHistorial } from "../_componentes/tabla-historial";
 import { TimelineCambios } from "../_componentes/timeline-cambios";
@@ -205,6 +207,10 @@ export default function PaginaDetalle({
   // vive el generador (ExcelJS pesa ~21 MB; meterlo al bundle del navegador por un botón sería
   // hacerle pagar ese peso a cada visita, incluso a quien nunca descarga nada).
   const [ejecucionId, setEjecucionId] = useState<string | null>(null);
+  // Va AQUÍ, con el resto del estado, y no junto a `abrirEjecucion`: allá abajo ya pasaron los
+  // returns tempranos (cargando / no encontrada), así que el hook solo se ejecutaba en algunos
+  // renders y React tumbaba la pantalla entera por orden de hooks inconsistente. tsc no lo ve.
+  const [abriendo, setAbriendo] = useState<string | null>(null);
   const [errorRun, setErrorRun] = useState<string | null>(null);
 
   // Archivos y selecciones del formulario de ejecución (demo)
@@ -275,12 +281,36 @@ export default function PaginaDetalle({
     ? archivoReal !== null
     : entradasArchivo.length > 0 && entradasArchivo.every((en) => archivos[en.id]);
   // El resultado a mostrar: en real, el de la corrida; en demo, el fijo del prototipo.
-  const resultadoMostrar: ResultadoDemo | null = esReal
-    ? resultadoReal
-    : a.resultado ?? null;
+  // Se le APILA la sección de Parámetros, que no sale del script sino del spec del intake: es
+  // metadato nuestro, así que lo pone la plataforma. Sin él, la pestaña existía en el contrato y
+  // nunca aparecía — y con él el reporte se vuelve defendible: cuando el contador pregunte por qué
+  // una partida quedó fuera, la tolerancia y las reglas están en la misma pantalla.
+  const base: ResultadoDemo | null = esReal ? resultadoReal : a.resultado ?? null;
+  const resultadoMostrar: ResultadoDemo | null = (() => {
+    if (!base) return null;
+    const bloque = bloqueDeParametros(a.parametros ?? []);
+    return bloque ? { ...base, bloques: [...base.bloques, bloque] } : base;
+  })();
   const mostrarResultado = esReal
     ? resultadoReal !== null
     : Boolean(a.resultado) && (a.ejecuciones > 0 || fase === "hecha");
+
+  // Abrir una corrida pasada: trae su resultado y lo muestra en el mismo lugar donde apareció
+  // recién ejecutada. También fija `ejecucionId`, así el botón de Excel baja el entregable DE ESA
+  // corrida y no de la última — que sería el error silencioso más fácil de cometer aquí.
+  const abrirEjecucion = async (id: string) => {
+    setAbriendo(id);
+    try {
+      const r = await obtenerResultado(id);
+      if (!r) { avisar("Esa corrida no dejó un resultado que podamos abrir."); return; }
+      setResultadoReal(r);
+      setEjecucionId(id);
+      setFase("hecha");
+      irAlResultado();
+    } finally {
+      setAbriendo(null);
+    }
+  };
 
   const irAlResultado = () => {
     window.setTimeout(() => {
@@ -599,7 +629,7 @@ export default function PaginaDetalle({
               como="h2"
               className="text-3xl font-black tracking-tight md:text-5xl"
             />
-            <TablaHistorial historial={a.historial} />
+            <TablaHistorial historial={a.historial} onAbrir={esReal ? abrirEjecucion : undefined} abriendo={abriendo} />
           </Reveal>
         </section>
       )}

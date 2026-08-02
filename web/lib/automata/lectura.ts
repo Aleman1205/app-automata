@@ -229,6 +229,7 @@ export async function verAutomatizacion(id: string): Promise<Automatizacion | nu
       id: string; nombre: string; estado: EstadoAuto; creada: string | null; ejecuciones: number;
       ultimaEjecucion: string | null; ajustesUsados: number;
       ajustesRestantes?: number; ventanaGratis?: boolean; ventanaHasta?: string | null; enRevision?: boolean;
+      parametros?: { etiqueta: string; valor: string }[];
       cicloEstado?: string;
       versiones: { numero: number; tipo: string | null; creada: string | null }[];
     };
@@ -268,6 +269,7 @@ export async function verAutomatizacion(id: string): Promise<Automatizacion | nu
       ejecuciones: d.ejecuciones,
       ultimaEjecucion: d.ultimaEjecucion ? fechaCorta(d.ultimaEjecucion) : undefined,
       ajustesUsados: d.ajustesUsados,
+      parametros: d.parametros ?? [],
       entradas: [
         // Genérica A PROPÓSITO: el manifiesto real (nombre y formato que espera esta automatización)
         // vive en el artefacto y el endpoint de detalle todavía no lo expone. Antes esto decía "Tu
@@ -315,6 +317,24 @@ export async function ejecutarArchivo(automatizacionId: string, file: File): Pro
   }
   const d = (await r.json()) as { resultado: ResultadoDemo; ms: number; ejecucionId?: string };
   return { resultado: d.resultado, ms: d.ms, ejecucionId: d.ejecucionId };
+}
+
+/** El resultado de una corrida PASADA. La clave del objeto se resuelve en el backend bajo RLS a
+ *  partir del id, nunca la manda el cliente. Devuelve null si esa corrida falló, es de otra org, o
+ *  es anterior a que se guardaran los resultados: en todos esos casos no hay nada que enseñar y
+ *  fingir un resultado vacío sería peor que decirlo. */
+export async function obtenerResultado(ejecucionId: string): Promise<ResultadoDemo | null> {
+  const org = await orgActual();
+  if (!org) return null;
+  try {
+    const r = await fetch(`/api/orgs/${org}/resultado?ejecucionId=${encodeURIComponent(ejecucionId)}`, {
+      headers: { accept: "application/json" }, cache: "no-store",
+    });
+    if (!r.ok) return null;
+    return (await r.json()) as ResultadoDemo;
+  } catch {
+    return null;
+  }
 }
 
 /** Historial real de corridas de una automatización → filas para la TablaHistorial. El backend
