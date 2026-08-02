@@ -42,19 +42,13 @@ export type FilaDemo = Record<string, string | number>;
 // Un resultado ya no es "3 cajones fijos": es una lista ordenada de BLOQUES que
 // el agente compone según el proceso. Los mismos bloques cubren ventas, RH,
 // administrativo, limpieza… sin una pantalla por dominio (ver docs/09).
-export type Bloque =
-  | { tipo: "resumen"; texto: string }
-  | { tipo: "metricas"; items: MetricaDemo[] }
-  | { tipo: "callout"; tono: "info" | "ok" | "alerta"; titulo: string; texto?: string }
-  | { tipo: "barras"; titulo: string; formato: "moneda" | "entero"; datos: PuntoDato[] }
-  | { tipo: "linea"; titulo: string; formato: "moneda" | "entero"; datos: PuntoDato[] }
-  | { tipo: "ranking"; titulo: string; formato: "moneda" | "entero"; datos: PuntoDato[] }
-  | { tipo: "tabla"; titulo?: string; columnas: ColumnaDemo[]; filas: FilaDemo[] }
-  | {
-      tipo: "comparacion";
-      titulo: string;
-      pasos: { etiqueta: string; valor: number; tono?: "ok" | "alerta" | "neutro" }[];
-    };
+//
+// El contrato NO se redefine aquí: se reexporta de `core`, que es quien lo emite (el resolver) y
+// quien lo valida (la puerta de coherencia). Estaba duplicado —una copia idéntica a mano— y esa es
+// exactamente la forma de bug que ya costó caro en este repo: las dos copias empiezan iguales y se
+// separan en el primer campo nuevo, sin que nada falle, porque cada lado compila contra la suya.
+import type { Bloque, Seccion } from "automata-core/types";
+export type { Bloque, Seccion };
 
 export interface ResultadoDemo {
   bloques: Bloque[];

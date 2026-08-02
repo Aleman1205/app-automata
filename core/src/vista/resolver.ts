@@ -6,6 +6,7 @@ import type {
   PuntoDato,
   Ref,
   Resultado,
+  Seccion,
   Vista,
   VistaBloque,
 } from "../types.ts";
@@ -154,11 +155,48 @@ function resolverBloque(resultado: unknown, b: VistaBloque): Bloque {
   }
 }
 
+// Títulos que delatan un bucket de excepciones. Solo se usa cuando el bloque NO trae `seccion`:
+// las vistas construidas antes de que existiera el esqueleto no la tienen, y esas automatizaciones
+// ya están entregadas y cobradas — no se pueden re-planear sin gastar un build.
+const TITULO_REVISAR = /revisar|excepci|pendient|no cuadr|sin concili|descuadr|rechaz/i;
+
+/** Sección de un bloque. Si el agente no la declaró, se deduce por tipo y título. */
+function seccionDe(b: VistaBloque): Seccion {
+  if (b.seccion) return b.seccion;
+  switch (b.tipo) {
+    // Lo que el dueño ve primero: números grandes y el veredicto.
+    case "metricas":
+    case "resumen":
+    case "callout":
+    case "comparacion":
+      return "resumen";
+    case "tabla":
+      return b.titulo && TITULO_REVISAR.test(b.titulo) ? "revisar" : "detalle";
+    default:
+      return "detalle";
+  }
+}
+
 /**
  * Aterriza una vista sobre un resultado. Lanza VistaError si alguna referencia
  * no existe o el tipo no cuadra (la puerta de calidad de docs/09 §4).
+ *
+ * Además IMPONE el esqueleto: cada bloque sale con su sección, y la sección `revisar` existe
+ * SIEMPRE. Que el agente pueda omitirla es justo lo que no queremos: sin bucket de excepciones,
+ * un dato que no se pudo leer desaparece sin dejar rastro y el cliente cree que el reporte está
+ * completo. Vacío se dice de frente — "no hubo nada que revisar" — porque eso es información,
+ * no una pantalla en blanco.
  */
 export function resolverVista(vista: Vista, resultado: unknown): Resultado {
-  const bloques = vista.bloques.map((b) => resolverBloque(resultado, b));
+  const bloques: Bloque[] = vista.bloques.map((b) => ({ ...resolverBloque(resultado, b), seccion: seccionDe(b) }));
+  if (!bloques.some((b) => b.seccion === "revisar")) {
+    bloques.push({
+      seccion: "revisar",
+      tipo: "callout",
+      tono: "ok",
+      titulo: "No hubo nada que revisar",
+      texto: "Todos los datos del archivo se pudieron leer y clasificar. Nada quedó fuera del reporte.",
+    });
+  }
   return { bloques, archivoSalida: vista.archivoSalida };
 }

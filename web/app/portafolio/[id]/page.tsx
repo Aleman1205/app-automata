@@ -24,7 +24,6 @@ import {
   ejecutarArchivo,
   congelarAutomatizacion,
 } from "@/lib/automata/lectura";
-import { aCsv } from "automata-core/salida/csv";
 import { Volver } from "../_componentes/volver";
 import { TablaHistorial } from "../_componentes/tabla-historial";
 import { TimelineCambios } from "../_componentes/timeline-cambios";
@@ -355,23 +354,6 @@ export default function PaginaDetalle({
     avisar("Descargado (demo)");
   };
 
-  // La TABLA como .csv, que es lo que una PyME de verdad va a abrir (en Excel). Y es justo por eso
-  // que se exporta con `aCsv` del core y no con un join a mano: los datos vienen del archivo que
-  // subió el cliente, así que una celda como `=cmd|'/c calc'!A1` viajaría intacta hasta su Excel,
-  // que no la mostraría — la EJECUTARÍA. `aCsv` la neutraliza (ver core/src/salida/csv.ts).
-  const tabla = resultadoMostrar?.bloques.find((b) => b.tipo === "tabla");
-  const descargarCsv = () => {
-    if (!tabla || tabla.tipo !== "tabla") return;
-    const csv = aCsv(tabla.columnas.map((c) => ({ campo: c.campo, etiqueta: c.etiqueta })), tabla.filas);
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const enlace = document.createElement("a");
-    enlace.href = url;
-    enlace.download = nombreDescarga(resultadoMostrar?.archivoSalida).replace(/\.json$/, ".csv");
-    enlace.click();
-    URL.revokeObjectURL(url);
-  };
-
   return (
     <div className="mx-auto max-w-5xl px-6 pb-24 pt-36 md:pb-32 md:pt-44">
       <Reveal desenfoque={false} y={10}>
@@ -578,12 +560,10 @@ export default function PaginaDetalle({
               >
                 {`Descargar ${esReal ? nombreDescarga(resultadoMostrar.archivoSalida) : resultadoMostrar.archivoSalida}`}
               </Boton>
-              {/* Solo si hay tabla que exportar: un botón que baja un CSV vacío es peor que no tenerlo. */}
-              {esReal && tabla && (
-                <Boton variante="fantasma" icono="descarga" onClick={descargarCsv}>
-                  Descargar tabla (.csv)
-                </Boton>
-              )}
+              {/* El .csv ya NO se baja desde aquí: cada tabla trae el suyo, junto a la tabla. Este
+                  botón exportaba solo la PRIMERA, y en una conciliación —conciliados, en-banco-no-
+                  en-registro, en-registro-no-en-banco, diferencias— el cliente se llevaba una de
+                  cuatro sin enterarse de que faltaban tres. Ver components/ui/resultado.tsx. */}
             </div>
           </Reveal>
         </section>

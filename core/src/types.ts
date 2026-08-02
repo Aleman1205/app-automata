@@ -30,7 +30,23 @@ export interface ColumnaDemo {
 
 export type FilaDemo = Record<string, string | number>;
 
-export type Bloque =
+/**
+ * Las CUATRO secciones fijas de todo entregable. El esqueleto NO lo elige el agente: es la
+ * plataforma. Un cliente que ya vio un reporte nuestro reconoce el siguiente sin volver a
+ * aprender dónde está cada cosa, y eso es lo que lo hace vendible.
+ *
+ *   resumen     lo primero que ve el dueño: métricas grandes y el semáforo.
+ *   detalle     las tablas del trabajo, una por categoría o estatus.
+ *   revisar     el bucket de excepciones. SIEMPRE existe, aunque venga vacío — vacío significa
+ *               "todo se pudo leer", que es información buena, no una pantalla en blanco. Es la
+ *               prueba visible de que aquí NUNCA se inventan datos.
+ *   parametros  qué capturó el intake (mapeo de columnas, tolerancias, reglas). Para auditar y
+ *               para que la corrida sea reproducible. Lo llena la plataforma desde el spec, no
+ *               el agente: es metadato nuestro, no resultado del script.
+ */
+export type Seccion = "resumen" | "detalle" | "revisar" | "parametros";
+
+export type Bloque = { seccion?: Seccion } & (
   | { tipo: "resumen"; texto: string }
   | { tipo: "metricas"; items: MetricaDemo[] }
   | { tipo: "callout"; tono: "info" | "ok" | "alerta"; titulo: string; texto?: string }
@@ -42,7 +58,8 @@ export type Bloque =
       tipo: "comparacion";
       titulo: string;
       pasos: { etiqueta: string; valor: number; tono?: "ok" | "alerta" | "neutro" }[];
-    };
+    }
+);
 
 /** Lo que el resolver emite: exactamente lo que el front consume. */
 export interface Resultado {
@@ -66,7 +83,9 @@ export interface VistaMetrica {
   tendencia?: Ref | string;
 }
 
-export type VistaBloque =
+// `seccion` la declara el agente por bloque. Si la omite, el resolver la deduce (ver
+// `seccionDe` en vista/resolver.ts) para no romper las vistas ya construidas y entregadas.
+export type VistaBloque = { seccion?: Seccion } & (
   | { tipo: "resumen"; texto: Ref | string }
   | { tipo: "metricas"; items: VistaMetrica[] }
   | { tipo: "callout"; tono: "info" | "ok" | "alerta"; titulo: Ref | string; texto?: Ref | string }
@@ -90,7 +109,8 @@ export type VistaBloque =
       tipo: "comparacion";
       titulo: string;
       pasos: { etiqueta: string; valor: Ref | number; tono?: "ok" | "alerta" | "neutro" }[];
-    };
+    }
+);
 
 export interface Vista {
   version_vista: number;

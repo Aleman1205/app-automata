@@ -73,6 +73,21 @@ check(
     { campos: [...contrato.campos, { ruta: "periodo", tipo: "texto", descripcion: "mes" }] },
   ).ok,
 );
+// Una seccion inventada NO se puede dejar pasar: el front solo pinta las cuatro del esqueleto, así
+// que el bloque se iría a una pestaña que no existe y desaparecería de la pantalla sin un solo
+// error. Omitirla sí se permite (el resolver la deduce) — eso mantiene entregables las vistas
+// construidas antes del esqueleto, que ya están pagadas.
+check(
+  "seccion inventada se rechaza",
+  !validarCoherencia(
+    { ...vistaOk, bloques: [{ tipo: "resumen", texto: "x", seccion: "anexos" } as never] },
+    contrato,
+  ).ok,
+);
+check(
+  "seccion omitida se acepta (el resolver la deduce)",
+  validarCoherencia({ ...vistaOk, bloques: [{ tipo: "resumen", texto: "x" }] }, contrato).ok,
+);
 check(
   "bloque tabla sin 'columnas' NO crashea y falla",
   !validarCoherencia({ ...vistaOk, bloques: [{ tipo: "tabla", fuente: "@resultado.familias" } as any] }, contrato).ok,
@@ -84,7 +99,18 @@ const resultadoDatos = {
   familias: [{ familia: "Cocina", ingreso: 92400 }, { familia: "Barra", ingreso: 68200 }],
 };
 const resultado = resolverVista(vistaOk, resultadoDatos);
-check("resuelve el número de bloques", resultado.bloques.length === 3);
+// 3 bloques declarados + 1 que AGREGA el resolver: la sección 'revisar' existe siempre, aunque la
+// vista no la traiga. Sin ese bucket, un dato que no se pudo leer desaparece sin dejar rastro y el
+// cliente cree que el reporte está completo.
+check("resuelve los 3 bloques declarados + el de 'revisar' que impone el esqueleto", resultado.bloques.length === 4);
+check("cada bloque sale con su seccion", resultado.bloques.every((b) => typeof b.seccion === "string"));
+const revisar = resultado.bloques.filter((b) => b.seccion === "revisar");
+check("la sección 'revisar' existe aunque la vista no la declare", revisar.length === 1 && revisar[0]!.tipo === "callout");
+// Se deduce por TIPO cuando el agente no la declara: métricas y gráficas no viven en la misma
+// pestaña, y mandarlas a la equivocada es lo que hace ilegible el entregable.
+check("sin 'seccion' declarada, metricas cae en 'resumen' y la gráfica en 'detalle'",
+  resultado.bloques.find((b) => b.tipo === "metricas")?.seccion === "resumen" &&
+  resultado.bloques.find((b) => b.tipo === "barras")?.seccion === "detalle");
 const met = resultado.bloques.find((b) => b.tipo === "metricas");
 check("la métrica quedó enlazada al valor real", met?.tipo === "metricas" && met.items[0]?.valor === 186440);
 const bar = resultado.bloques.find((b) => b.tipo === "barras");

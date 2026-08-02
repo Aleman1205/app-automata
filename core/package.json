@@ -33,7 +33,9 @@
     "./billing/pasarela": "./src/billing/pasarela.ts",
     "./ops/killswitch": "./src/ops/killswitch.ts",
     "./salida/csv": "./src/salida/csv.ts",
-    "./marca": "./src/marca.ts"
+    "./marca": "./src/marca.ts",
+    "./types": "./src/types.ts",
+    "./vista/formato": "./src/vista/formato.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -79,7 +81,8 @@
     "verify:pasarela:pg": "tsx scripts/verify-pasarela-pg.ts",
     "verify:csv": "tsx scripts/verify-csv.ts",
     "verify:reverificacion": "tsx scripts/verify-reverificacion.ts",
-    "verify:contenedor": "tsx scripts/verify-contenedor.ts"
+    "verify:contenedor": "tsx scripts/verify-contenedor.ts",
+    "verify:formato": "tsx scripts/verify-formato.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",

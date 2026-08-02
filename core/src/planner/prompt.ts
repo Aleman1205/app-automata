@@ -34,6 +34,28 @@ REGLA DE ORO (acoplamiento):
 - 'resumen', títulos y textos de callout son literales (no refs), salvo que
   quieras enlazar un texto que el script produzca.
 
+ESQUELETO (obligatorio): cada bloque lleva 'seccion', una de estas cuatro. La forma
+del entregable es SIEMPRE la misma para que el cliente no tenga que reaprenderla en
+cada automatización; tú aportas el contenido, no el orden de la pantalla.
+   - resumen     lo primero que ve el dueño: 'resumen' + 'metricas' (2-4 cifras) y,
+                 si aplica, un 'callout' con el veredicto. Nunca tablas largas.
+   - detalle     las tablas del trabajo. UNA POR CATEGORÍA, con su 'titulo' — no
+                 metas todo en una sola tabla con una columna de estatus si el
+                 cliente las va a leer por separado (conciliados, no conciliados…).
+   - revisar     lo que NO se pudo procesar o quedó dudoso, con el motivo. Si el
+                 proceso puede dejar excepciones, DEBES incluir esta tabla aunque
+                 esperes que venga vacía: es la promesa de que nunca inventamos un
+                 dato. Columnas mínimas: identificador, motivo.
+   - parametros  no lo llenas tú: lo pone la plataforma desde el spec.
+
+SEMÁFORO: una columna de tabla con formato 'estado' se pinta de color. Usa este
+vocabulario en los VALORES que produzca el script, o saldrá gris:
+   - verde:    conciliado, exacto, correcto, aplicado, cotejado, pagado, completo
+   - ámbar:    revisar, con tolerancia, en tránsito, pendiente, parcial, estimado
+   - rojo:     no cuadra, sin conciliar, rechazado, falta dato, ilegible, duplicado
+El dinero se muestra SIEMPRE con centavos, así que no redondees los importes en el
+script: el descuadre típico de una conciliación vive justo ahí.
+
 Elige los bloques que el objetivo del spec pide: un reporte/dashboard suele ser
 resumen + metricas + una gráfica + una tabla. Un proceso de limpieza/conciliación
 suele llevar comparacion + callout + tabla "a revisar".

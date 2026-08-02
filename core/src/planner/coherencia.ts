@@ -50,8 +50,17 @@ export function validarCoherencia(vista: Vista, contrato: ResultadoContrato): Co
     }
   };
 
+  const SECCIONES = ["resumen", "detalle", "revisar", "parametros"];
   for (const [i, b] of (vista?.bloques ?? ([] as VistaBloque[])).entries()) {
     const ctx = `bloque #${i + 1} (${b?.tipo ?? "?"})`;
+    // `seccion` es OPCIONAL a propósito: si falta, el resolver la deduce (seccionDe) y la vista
+    // sigue siendo entregable. Las automatizaciones construidas antes del esqueleto no la traen y
+    // ya están pagadas — rechazarlas aquí las volvería inservibles sin que el cliente hiciera nada.
+    // Lo que SÍ se rechaza es una sección inventada: eso mandaría el bloque a una pestaña que no
+    // existe y desaparecería de la pantalla sin error.
+    if (b?.seccion !== undefined && !SECCIONES.includes(b.seccion)) {
+      e.push(`${ctx}: seccion '${b.seccion}' no existe (usa ${SECCIONES.join(" | ")}).`);
+    }
     switch (b?.tipo) {
       case "resumen":
         if (esRef(b.texto)) escalar(b.texto, ctx, "texto");

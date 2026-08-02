@@ -48,6 +48,11 @@ const BLOQUE_SCHEMA = {
   type: "object",
   properties: {
     tipo: { type: "string", enum: ["resumen", "metricas", "callout", "barras", "linea", "ranking", "tabla", "comparacion"] },
+    seccion: {
+      type: "string",
+      enum: ["resumen", "detalle", "revisar", "parametros"],
+      description: "En qué pestaña del entregable va este bloque. El esqueleto es fijo y lo impone la plataforma.",
+    },
     titulo: { type: "string" },
     texto: REF,
     tono: { type: "string", enum: ["info", "ok", "alerta"] },

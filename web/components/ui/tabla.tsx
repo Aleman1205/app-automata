@@ -1,7 +1,8 @@
 "use client";
 
-import { motion } from "motion/react";
+
 import { Insignia } from "@/components/ui/insignia";
+import { moneda, porcentaje, entero } from "automata-core/vista/formato";
 
 export interface Columna {
   campo: string;
@@ -10,8 +11,13 @@ export interface Columna {
   formato?: "moneda" | "entero" | "texto" | "porcentaje" | "estado";
 }
 
-// Tabla del sistema: encabezado mono, filas que entran en cascada al hacer
-// scroll (animshelf: Stagger Grid) y hover por fila.
+// Tabla del sistema: encabezado mono, hover por fila.
+//
+// Las filas YA NO entran en cascada. Tenían `delay: i * 0.05`, así que una tabla de 500 renglones
+// —tamaño normal de una conciliación mensual— tardaba 25 segundos en terminar de aparecer, y
+// mientras tanto no se podía leer ni buscar con Cmd+F. Una hoja de cálculo no se anima: aquí el
+// dato es el producto, y hacerlo esperar por una entrada bonita es cobrarle al cliente en tiempo
+// lo que se le da en estética. El hover se queda (ayuda a seguir el renglón).
 export function Tabla({
   columnas,
   filas,
@@ -19,18 +25,16 @@ export function Tabla({
   columnas: Columna[];
   filas: Record<string, string | number>[];
 }) {
+  // Los formatos vienen de `core/src/vista/formato.ts` (probados en `verify:formato`), no de una
+  // copia local. El de moneda SIEMPRE lleva centavos: estaba redondeando a pesos enteros, y en un
+  // producto que existe para cuadrar cuentas eso no es estética, es un dato falso — $43,200.00 en
+  // libros contra $43,199.63 en banco se veía como diferencia $0.
   const fmt = (v: string | number, formato?: string) => {
     if (formato === "estado") return <Insignia texto={String(v)} />;
     if (typeof v !== "number") return v;
-    if (formato === "moneda")
-      return new Intl.NumberFormat("es-MX", {
-        style: "currency",
-        currency: "MXN",
-        maximumFractionDigits: 0,
-      }).format(v);
-    if (formato === "porcentaje")
-      return `${new Intl.NumberFormat("es-MX", { maximumFractionDigits: 1 }).format(v)}%`;
-    return new Intl.NumberFormat("es-MX").format(v);
+    if (formato === "moneda") return moneda(v);
+    if (formato === "porcentaje") return porcentaje(v);
+    return entero(v);
   };
 
   return (
@@ -52,17 +56,9 @@ export function Tabla({
         </thead>
         <tbody>
           {filas.map((fila, i) => (
-            <motion.tr
+            <tr
               key={i}
               className="border-b border-linea/60 transition-colors duration-200 hover:bg-papel"
-              initial={{ opacity: 0, y: 10 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, margin: "-20px" }}
-              transition={{
-                duration: 0.4,
-                delay: i * 0.05,
-                ease: [0.22, 1, 0.36, 1],
-              }}
             >
               {columnas.map((c) => (
                 <td
@@ -76,7 +72,7 @@ export function Tabla({
                   {fmt(fila[c.campo], c.formato)}
                 </td>
               ))}
-            </motion.tr>
+            </tr>
           ))}
         </tbody>
       </table>
