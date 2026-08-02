@@ -30,6 +30,10 @@ const IMAGEN = process.env.IMAGEN_PRUEBA ?? "python:3.11-slim";
 // runtime normal: lo que se prueba aquí son montajes, permisos, argumentos, sin-red, solo-lectura,
 // timeout y cotas — todo menos la jaula. Con `runsc` los MISMOS 7 checks ejercen la jaula real.
 const RUNTIME = process.env.RUNTIME_PRUEBA ?? "runc";
+// El binario también: `podman` acepta las mismas banderas que `docker` y NO necesita demonio, lo
+// que permite correr este test con gVisor DENTRO de un contenedor —sin dockerd anidado, que es
+// justo lo que no levanta sobre la VM de Docker Desktop.
+const BINARIO = process.env.BINARIO_PRUEBA ?? "docker";
 
 let ok = true;
 const check = (n: string, p: boolean) => { console.log(`  ${p ? "✓" : "✗"} ${n}`); ok = ok && p; };
@@ -40,14 +44,14 @@ const arte = (py: string): Artefacto => ({
 });
 // runtime: el normal en la Mac, "runsc" (gVisor) donde exista.
 const ex = (o: Record<string, unknown> = {}) =>
-  new ContainerRunExecutor({ imagen: IMAGEN, runtime: RUNTIME, timeoutMs: 60_000, ...o });
+  new ContainerRunExecutor({ imagen: IMAGEN, runtime: RUNTIME, binario: BINARIO, timeoutMs: 60_000, ...o });
 
-const docker = (...a: string[]) => spawnSync("docker", a, { encoding: "utf8", timeout: 120_000 });
+const docker = (...a: string[]) => spawnSync(BINARIO, a, { encoding: "utf8", timeout: 120_000 });
 
 async function main() {
-  console.log(`· runtime: ${RUNTIME}${RUNTIME === "runsc" ? "  (gVisor: la jaula REAL)" : "  (sin jaula: gVisor solo existe en Linux)"}\n`);
+  console.log(`· ${BINARIO} · runtime: ${RUNTIME}${RUNTIME === "runsc" ? "  (gVisor: la jaula REAL)" : "  (sin jaula: gVisor solo existe en Linux)"}\n`);
   if (docker("info").status !== 0) {
-    console.error("✗ Docker no responde. Arranca Docker Desktop y vuelve a correrlo.");
+    console.error(`✗ ${BINARIO} no responde. Arranca el motor de contenedores y vuelve a correrlo.`);
     process.exit(2);
   }
   if (docker("image", "inspect", IMAGEN).status !== 0) {
