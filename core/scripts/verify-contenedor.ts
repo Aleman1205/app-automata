@@ -25,6 +25,11 @@ import type { Artefacto } from "../src/types.ts";
 
 // Imagen mínima con python. No lleva pandas/openpyxl: aquí se prueba el RUNNER, no las deps.
 const IMAGEN = process.env.IMAGEN_PRUEBA ?? "python:3.11-slim";
+// El runtime se elige por env para poder correr ESTE MISMO test bajo gVisor en un host Linux
+// (RUNTIME_PRUEBA=runsc) sin tocar una línea. En la Mac no existe runsc, así que el default es el
+// runtime normal: lo que se prueba aquí son montajes, permisos, argumentos, sin-red, solo-lectura,
+// timeout y cotas — todo menos la jaula. Con `runsc` los MISMOS 7 checks ejercen la jaula real.
+const RUNTIME = process.env.RUNTIME_PRUEBA ?? "runc";
 
 let ok = true;
 const check = (n: string, p: boolean) => { console.log(`  ${p ? "✓" : "✗"} ${n}`); ok = ok && p; };
@@ -33,13 +38,14 @@ const arte = (py: string): Artefacto => ({
   manifiesto: { entradas: [] },
   vista: { bloques: [] } as unknown as Artefacto["vista"],
 });
-// runtime "runc" = el normal. En el host de producción será "runsc".
+// runtime: el normal en la Mac, "runsc" (gVisor) donde exista.
 const ex = (o: Record<string, unknown> = {}) =>
-  new ContainerRunExecutor({ imagen: IMAGEN, runtime: "runc", timeoutMs: 60_000, ...o });
+  new ContainerRunExecutor({ imagen: IMAGEN, runtime: RUNTIME, timeoutMs: 60_000, ...o });
 
 const docker = (...a: string[]) => spawnSync("docker", a, { encoding: "utf8", timeout: 120_000 });
 
 async function main() {
+  console.log(`· runtime: ${RUNTIME}${RUNTIME === "runsc" ? "  (gVisor: la jaula REAL)" : "  (sin jaula: gVisor solo existe en Linux)"}\n`);
   if (docker("info").status !== 0) {
     console.error("✗ Docker no responde. Arranca Docker Desktop y vuelve a correrlo.");
     process.exit(2);

@@ -1,0 +1,75 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# La JAULA de verdad: corre verify:contenedor bajo gVisor (runsc).
+#
+# Es lo único del runner que no se puede probar en la Mac — runsc es un kernel de usuario para
+# Linux y no existe en macOS. El resto (montajes, permisos, paso de argumentos, sin-red,
+# solo-lectura, timeout, cotas) ya se prueba en local con el runtime normal; aquí los MISMOS siete
+# checks se ejecutan con la jaula puesta, que es lo que en producción separa el código generado por
+# IA del host.
+#
+# NO necesita ninguna credencial: ni llaves del producto, ni cuenta de nube, ni tarjeta. Un runner
+# de Ubuntu, gVisor instalado desde el repo oficial de Google, y listo. Para un repo público es
+# gratis.
+#
+# Se dispara a mano (workflow_dispatch) y cuando cambia el runner o su test — no en cada push:
+# levantar contenedores en cada commit gastaría minutos sin decir nada nuevo.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Jaula gVisor
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "core/src/run/container-executor.ts"
+      - "core/scripts/verify-contenedor.ts"
+      - ".github/workflows/gvisor.yml"
+
+jobs:
+  jaula:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Instalar gVisor (runsc)
+        run: |
+          set -euo pipefail
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
+            | sudo tee /etc/apt/sources.list.d/gvisor.list > /dev/null
+          sudo apt-get update && sudo apt-get install -y runsc
+          runsc --version
+
+      - name: Registrar runsc como runtime de Docker
+        run: |
+          set -euo pipefail
+          sudo runsc install
+          sudo systemctl reload docker || sudo systemctl restart docker
+          # Si runsc no quedó registrado, `docker run --runtime=runsc` fallaría con un error de
+          # runtime desconocido y el test lo reportaría como "el artefacto falló" — un rojo que
+          # culparía al producto de un problema de la máquina. Mejor romper aquí, explícito.
+          docker info --format '{{json .Runtimes}}' | grep -q runsc
+
+      - name: Instalar core
+        working-directory: core
+        run: npm ci || npm install
+
+      - name: verify:contenedor CON la jaula
+        working-directory: core
+        env:
+          RUNTIME_PRUEBA: runsc
+        run: npm run verify:contenedor
+
+      - name: Comprobación de humo — el aislamiento es de gVisor, no de Docker
+        run: |
+          set -euo pipefail
+          # gVisor intercepta las syscalls con su propio kernel en espacio de usuario, así que el
+          # kernel que ve el contenedor NO es el del host. Si esto imprimiera el mismo `uname -r`
+          # que la máquina, estaríamos corriendo sobre runc y el test de arriba habría dado un
+          # falso verde: los 7 checks pasan igual sin jaula (por eso existe esta comprobación).
+          echo "kernel del host:       $(uname -r)"
+          echo "kernel en la jaula:    $(docker run --rm --runtime=runsc alpine uname -r)"
+          test "$(docker run --rm --runtime=runsc alpine uname -r)" != "$(uname -r)"
