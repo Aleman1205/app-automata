@@ -10,7 +10,11 @@
 export interface MetricaDemo {
   etiqueta: string;
   valor: number;
-  formato: "moneda" | "entero";
+  // 'porcentaje' se agregó al construir el .xlsx: los KPI de portada que pide el negocio son cosas
+  // como "% de cumplimiento vs objetivo" o "% conciliado", y sin este formato había que mandarlos
+  // como entero — el cliente leía "98" donde quería leer "98.4%". Las GRÁFICAS no lo llevan: un eje
+  // de barras en porcentaje necesita su propia escala y eso es otro trabajo.
+  formato: "moneda" | "entero" | "porcentaje";
   sufijo?: string;
   nota?: string;
   tendencia?: string;
@@ -77,7 +81,7 @@ export type Ref = string; // "@resultado.metricas.ingreso_total"
 export interface VistaMetrica {
   etiqueta: string;
   valor: Ref | number;
-  formato: "moneda" | "entero";
+  formato: "moneda" | "entero" | "porcentaje";
   sufijo?: Ref | string;
   nota?: Ref | string;
   tendencia?: Ref | string;

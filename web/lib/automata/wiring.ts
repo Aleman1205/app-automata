@@ -26,6 +26,8 @@ import { type Deps, type Endpoint } from "automata-core/http/pipeline";
 import { type Sesion, type RateLimiter, type Solicitud, type Respuesta } from "automata-core/http/tipos";
 import { plantillaCorreo, type Notificador, type EventoCorreo, type Correo } from "automata-core/ops/notificaciones";
 import { MARCA } from "automata-core/marca";
+import { aXlsx } from "automata-core/salida/xlsx";
+import type { Resultado } from "automata-core/types";
 import { orgsDeUsuario, provisionarUsuario } from "automata-core/ops/onboarding";
 import { recibir, type Evento } from "automata-core/webhooks/receptor";
 import { aplicarDowngrade } from "automata-core/billing/plan";
@@ -749,12 +751,45 @@ export async function descargarResultado(req: Request, orgId: string): Promise<R
     const key = q.rows[0]?.resultado_key;
     if (q.rows.length === 0) return { status: 404, cuerpo: { error: "no_encontrada" } };
     if (!key) return { status: 404, cuerpo: { error: "sin_resultado" } }; // corrida fallida o anterior a que se guardaran
+    let resultado: Resultado;
     try {
-      return { status: 200, cuerpo: JSON.parse(await almacen().getText(key)) as unknown };
+      resultado = JSON.parse(await almacen().getText(key)) as Resultado;
     } catch {
       // El puntero existe pero el objeto no se pudo leer: no se finge un resultado vacío.
       return { status: 502, cuerpo: { error: "resultado_no_disponible" } };
     }
+    if (new URL(r.url).searchParams.get("formato") !== "xlsx") return { status: 200, cuerpo: resultado };
+
+    // ── El ENTREGABLE .xlsx ──
+    // Se genera al vuelo desde el mismo resultado que ve la pantalla, no se guarda: el .json ya
+    // está en storage y el workbook es una PROYECCIÓN de él, así que persistirlo sería un segundo
+    // original que puede quedar desincronizado en el primer cambio de formato.
+    const meta = await cliente.query<{ nombre: string; creada: string }>(
+      `SELECT a.nombre, e.creada::text AS creada
+         FROM ejecuciones e JOIN versiones v ON v.id = e.version_id
+         JOIN automatizaciones a ON a.id = v.automatizacion_id
+        WHERE e.id = $1`,
+      [id],
+    );
+    const nombre = meta.rows[0]?.nombre ?? "Resultado";
+    const xlsx = await aXlsx(resultado, {
+      titulo: nombre,
+      cuando: meta.rows[0]?.creada ? `Ejecutada el ${new Date(meta.rows[0].creada).toLocaleString("es-MX")}` : undefined,
+    });
+    const archivo = `${nombre.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "resultado"}.xlsx`;
+    return {
+      status: 200,
+      cuerpo: new Response(new Uint8Array(xlsx), {
+        status: 200,
+        headers: {
+          "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "content-disposition": `attachment; filename="${archivo}"`,
+          // Sin esto un proxy podría servirle el .xlsx de un cliente a otro: es el mismo path
+          // para todos y solo el contexto de sesión los distingue.
+          "cache-control": "private, no-store",
+        },
+      }) as unknown as Record<string, unknown>,
+    };
   });
   return handler(req, orgId);
 }

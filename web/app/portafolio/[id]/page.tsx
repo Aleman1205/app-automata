@@ -23,6 +23,7 @@ import {
   verAutomatizacion,
   ejecutarArchivo,
   congelarAutomatizacion,
+  orgActualVista,
 } from "@/lib/automata/lectura";
 import { Volver } from "../_componentes/volver";
 import { TablaHistorial } from "../_componentes/tabla-historial";
@@ -200,6 +201,10 @@ export default function PaginaDetalle({
   // Estado del Run REAL (archivo subido → resultado resuelto del backend).
   const [archivoReal, setArchivoReal] = useState<File | null>(null);
   const [resultadoReal, setResultadoReal] = useState<ResultadoDemo | null>(null);
+  // Id de la corrida recién hecha: con él se pide el ENTREGABLE .xlsx al servidor, que es donde
+  // vive el generador (ExcelJS pesa ~21 MB; meterlo al bundle del navegador por un botón sería
+  // hacerle pagar ese peso a cada visita, incluso a quien nunca descarga nada).
+  const [ejecucionId, setEjecucionId] = useState<string | null>(null);
   const [errorRun, setErrorRun] = useState<string | null>(null);
 
   // Archivos y selecciones del formulario de ejecución (demo)
@@ -294,8 +299,9 @@ export default function PaginaDetalle({
       setFase("corriendo");
       setPaso(1); // avanza los pasos visibles mientras corre (el Run es de milisegundos)
       try {
-        const { resultado } = await ejecutarArchivo(a.id, archivoReal);
+        const { resultado, ejecucionId } = await ejecutarArchivo(a.id, archivoReal);
         setResultadoReal(resultado);
+        setEjecucionId(ejecucionId ?? null);
         setPaso(PASOS_EJECUCION.length);
         setFase("hecha");
         irAlResultado();
@@ -340,6 +346,14 @@ export default function PaginaDetalle({
   // archivoSalida tal cual (p.ej. "dashboard.xlsx"), así que el cliente bajaba un .xlsx que era
   // JSON adentro y Excel se lo rechazaba como archivo corrupto. El .xlsx de verdad lo escribe el
   // script en el runner y hoy no se conserva — hasta que se conserve, no se puede ofrecer.
+  // Se abre la URL en vez de hacer fetch+blob: el navegador ya sabe bajar un attachment con su
+  // nombre, y así no se carga el archivo entero en memoria del cliente.
+  const descargarExcel = async () => {
+    const org = (await orgActualVista())?.id;
+    if (!org || !ejecucionId) return;
+    window.location.href = `/api/orgs/${org}/resultado?ejecucionId=${ejecucionId}&formato=xlsx`;
+  };
+
   const descargar = () => {
     if (esReal && resultadoMostrar) {
       const blob = new Blob([JSON.stringify(resultadoMostrar, null, 2)], { type: "application/json" });
@@ -560,6 +574,13 @@ export default function PaginaDetalle({
               >
                 {`Descargar ${esReal ? nombreDescarga(resultadoMostrar.archivoSalida) : resultadoMostrar.archivoSalida}`}
               </Boton>
+              {/* EL ENTREGABLE: es lo que el contador re-importa a CONTPAQi/Aspel y lo que se
+                  archiva. Va como acción principal frente al .json, que casi nadie abre. */}
+              {esReal && ejecucionId && (
+                <Boton variante="acento" icono="descarga" onClick={descargarExcel}>
+                  Descargar Excel
+                </Boton>
+              )}
               {/* El .csv ya NO se baja desde aquí: cada tabla trae el suyo, junto a la tabla. Este
                   botón exportaba solo la PRIMERA, y en una conciliación —conciliados, en-banco-no-
                   en-registro, en-registro-no-en-banco, diferencias— el cliente se llevaba una de

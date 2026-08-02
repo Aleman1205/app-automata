@@ -128,6 +128,12 @@ export function adaptarUpload(
         cuerpo: undefined, // el cuerpo es el ARCHIVO; lo lee `procesar`, no aquí
       };
       const r = await autorizar(s, deps, meta, (c) => procesar(req, orgId as string, c));
+      // Un handler puede devolver una Response propia cuando el cuerpo NO es JSON: el entregable
+      // .xlsx son bytes, y meterlos en un campo JSON (base64) los infla un tercio y obliga al
+      // navegador a rearmar el archivo a mano. La alternativa —una ruta binaria por fuera del
+      // adaptador— dejaría ese camino sin las 8 capas, que es exactamente lo que `verify:rutas`
+      // existe para impedir. Sigue pasando por `autorizar`; solo cambia cómo se serializa.
+      if (r.cuerpo instanceof Response) return r.cuerpo;
       return jsonResponse(r.status, r.cuerpo);
     } catch {
       return jsonResponse(500, { error: "error_interno" });

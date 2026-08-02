@@ -68,7 +68,7 @@ const BLOQUE_SCHEMA = {
         properties: {
           etiqueta: { type: "string" },
           valor: REF,
-          formato: { type: "string", enum: ["moneda", "entero"] },
+          formato: { type: "string", enum: ["moneda", "entero", "porcentaje"] },
           sufijo: { type: "string" },
           nota: { type: "string" },
           tendencia: { type: "string" },

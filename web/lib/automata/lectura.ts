@@ -293,7 +293,10 @@ export async function verAutomatizacion(id: string): Promise<Automatizacion | nu
 }
 
 /** Ejecuta la automatización subiendo un archivo real → devuelve el Resultado resuelto. */
-export async function ejecutarArchivo(automatizacionId: string, file: File): Promise<{ resultado: ResultadoDemo; ms: number }> {
+// Devuelve tambien el `ejecucionId`: es lo que permite pedir el ENTREGABLE .xlsx de esta corrida
+// (GET /resultado?ejecucionId=…&formato=xlsx). Sin el, el cliente acaba de generar su reporte y no
+// hay forma de bajarlo en el formato que de verdad usa.
+export async function ejecutarArchivo(automatizacionId: string, file: File): Promise<{ resultado: ResultadoDemo; ms: number; ejecucionId?: string }> {
   const org = await orgActual();
   if (!org) throw new Error("No hay backend configurado.");
   const form = new FormData();
@@ -310,8 +313,8 @@ export async function ejecutarArchivo(automatizacionId: string, file: File): Pro
       : "No se pudo ejecutar. Revisa que el archivo tenga las columnas correctas.";
     throw new Error(msg);
   }
-  const d = (await r.json()) as { resultado: ResultadoDemo; ms: number };
-  return { resultado: d.resultado, ms: d.ms };
+  const d = (await r.json()) as { resultado: ResultadoDemo; ms: number; ejecucionId?: string };
+  return { resultado: d.resultado, ms: d.ms, ejecucionId: d.ejecucionId };
 }
 
 /** Historial real de corridas de una automatización → filas para la TablaHistorial. El backend

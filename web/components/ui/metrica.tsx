@@ -12,7 +12,7 @@ export function Metrica({
 }: {
   etiqueta: string;
   valor: number;
-  formato?: "moneda" | "entero";
+  formato?: "moneda" | "entero" | "porcentaje";
   sufijo?: string;
   nota?: string;
   tendencia?: string;
